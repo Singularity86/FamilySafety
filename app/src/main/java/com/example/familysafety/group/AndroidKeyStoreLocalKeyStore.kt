@@ -1,0 +1,252 @@
+package com.example.familysafety.group
+
+import android.content.Context
+import android.content.SharedPreferences
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
+import com.goterl.lazysodium.LazySodiumAndroid
+import com.goterl.lazysodium.SodiumAndroid
+import com.goterl.lazysodium.interfaces.Sign
+import java.security.KeyStore
+
+/**
+ * Android Keystore-backed implementation of LocalKeyStore.
+ *
+ * Security model:
+ * - Encryption key for stored keys resides in Android Keystore (hardware-backed when available)
+ * - Derived Ed25519/X25519 keys are encrypted and stored in EncryptedSharedPreferences
+ * - Keys never leave the device in plaintext
+ *
+ * IMPORTANT: Ed25519 key storage
+ * - We store the 32-byte SEED, not the 64-byte secret key
+ * - The 64-byte secret key is derived on-demand from the seed
+ * - This matches SLIP-10 semantics and Lazysodium expectations
+ */
+class AndroidKeyStoreLocalKeyStore(
+    private val context: Context
+) : Slip10CryptoProvider.LocalKeyStore {
+
+    companion object {
+        private const val PREFS_NAME = "familysafe_keys"
+        private const val KEYSTORE_ALIAS = "familysafe_key_encryption_key"
+
+        // SharedPreferences keys - storing SEEDS not full keys
+        private const val KEY_ED25519_SEED = "ed25519_seed"
+        private const val KEY_ED25519_PUBLIC = "ed25519_public"
+        private const val KEY_X25519_PRIVATE = "x25519_private"
+        private const val KEY_X25519_PUBLIC = "x25519_public"
+        private const val KEY_INITIALIZED = "initialized"
+        private const val KEY_ACCOUNT_INDEX = "account_index"
+    }
+
+    private val sodium = LazySodiumAndroid(SodiumAndroid())
+
+    private val encryptedPrefs: SharedPreferences by lazy {
+        val masterKey = MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+
+        EncryptedSharedPreferences.create(
+            context,
+            PREFS_NAME,
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    }
+
+    // Cached keys (loaded once from encrypted storage)
+    private var cachedEd25519Seed: ByteArray? = null
+    private var cachedEd25519Public: ByteArray? = null
+    private var cachedX25519Private: ByteArray? = null
+    private var cachedX25519Public: ByteArray? = null
+
+    // =========================================================================
+    // LocalKeyStore Interface Implementation
+    // =========================================================================
+
+    override fun isInitialized(): Boolean {
+        return encryptedPrefs.getBoolean(KEY_INITIALIZED, false)
+    }
+
+    override fun initializeFromSeed(seed: ByteArray, accountIndex: Int) {
+        require(seed.size == 64) { "Seed must be 64 bytes" }
+
+        val derivation = FamilySafeKeyDerivation(seed)
+        val keys = derivation.deriveKeysForAccount(accountIndex)
+
+        // Store Ed25519 SEED (32 bytes), not the full 64-byte secret key
+        storeKey(KEY_ED25519_SEED, keys.signingKeyPair.privateKey)
+        storeKey(KEY_ED25519_PUBLIC, keys.signingKeyPair.publicKey)
+        storeKey(KEY_X25519_PRIVATE, keys.encryptionKeyPair.privateKey)
+        storeKey(KEY_X25519_PUBLIC, keys.encryptionKeyPair.publicKey)
+
+        encryptedPrefs.edit()
+            .putBoolean(KEY_INITIALIZED, true)
+            .putInt(KEY_ACCOUNT_INDEX, accountIndex)
+            .apply()
+
+        // Update cache
+        cachedEd25519Seed = keys.signingKeyPair.privateKey.copyOf()
+        cachedEd25519Public = keys.signingKeyPair.publicKey.copyOf()
+        cachedX25519Private = keys.encryptionKeyPair.privateKey.copyOf()
+        cachedX25519Public = keys.encryptionKeyPair.publicKey.copyOf()
+
+        // Securely zero the seed (best effort in JVM)
+        seed.fill(0)
+    }
+
+    override fun getEd25519PrivateKey(): ByteArray {
+        ensureInitialized()
+
+        // Get the 32-byte seed
+        val seed = cachedEd25519Seed?.copyOf()
+            ?: loadKey(KEY_ED25519_SEED).also { cachedEd25519Seed = it.copyOf() }
+
+        // Derive the full 64-byte secret key from the seed
+        // This is what Lazysodium needs for signing operations
+        return LazysodiumEd25519.getSecretKeyFromSeed(seed)
+    }
+
+    override fun getEd25519PublicKey(): ByteArray {
+        ensureInitialized()
+        return cachedEd25519Public?.copyOf()
+            ?: loadKey(KEY_ED25519_PUBLIC).also { cachedEd25519Public = it.copyOf() }
+    }
+
+    override fun getX25519PrivateKey(): ByteArray {
+        ensureInitialized()
+        return cachedX25519Private?.copyOf()
+            ?: loadKey(KEY_X25519_PRIVATE).also { cachedX25519Private = it.copyOf() }
+    }
+
+    override fun getX25519PublicKey(): ByteArray {
+        ensureInitialized()
+        return cachedX25519Public?.copyOf()
+            ?: loadKey(KEY_X25519_PUBLIC).also { cachedX25519Public = it.copyOf() }
+    }
+
+    // =========================================================================
+    // Key Storage Helpers
+    // =========================================================================
+
+    private fun ensureInitialized() {
+        check(isInitialized()) {
+            "KeyStore not initialized. Call initializeFromSeed() first."
+        }
+    }
+
+    private fun storeKey(name: String, key: ByteArray) {
+        // Keys are stored as hex in EncryptedSharedPreferences
+        // EncryptedSharedPreferences handles the encryption automatically
+        encryptedPrefs.edit()
+            .putString(name, key.toHexString())
+            .apply()
+    }
+
+    private fun loadKey(name: String): ByteArray {
+        val hex = encryptedPrefs.getString(name, null)
+            ?: throw IllegalStateException("Key $name not found in storage")
+        return hex.hexToByteArray()
+    }
+
+    // =========================================================================
+    // Key Destruction
+    // =========================================================================
+
+    /**
+     * Securely destroy all stored keys.
+     * Used when leaving a family group or wiping device.
+     */
+    fun destroyKeys() {
+        // Clear cached keys
+        cachedEd25519Seed?.fill(0)
+        cachedEd25519Public?.fill(0)
+        cachedX25519Private?.fill(0)
+        cachedX25519Public?.fill(0)
+
+        cachedEd25519Seed = null
+        cachedEd25519Public = null
+        cachedX25519Private = null
+        cachedX25519Public = null
+
+        // Clear stored keys
+        encryptedPrefs.edit().clear().apply()
+    }
+
+    /**
+     * Delete the Android Keystore encryption key.
+     * WARNING: This will make all stored keys unrecoverable.
+     */
+    private fun deleteKeystoreKey() {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore")
+        keyStore.load(null)
+        if (keyStore.containsAlias(KEYSTORE_ALIAS)) {
+            keyStore.deleteEntry(KEYSTORE_ALIAS)
+        }
+    }
+}
+/**
+ * BIP-39 mnemonic utilities.
+ */
+object Bip39 {
+
+    private const val PBKDF2_ITERATIONS = 2048
+    private const val SEED_LENGTH = 64
+
+    /**
+     * Convert BIP-39 mnemonic to 64-byte seed.
+     *
+     * @param mnemonic Space-separated mnemonic words
+     * @param passphrase Optional passphrase (BIP-39 calls this "salt")
+     * @return 64-byte seed
+     */
+    fun mnemonicToSeed(mnemonic: String, passphrase: String = ""): ByteArray {
+        val normalizedMnemonic = mnemonic.trim().lowercase()
+            .split("\\s+".toRegex())
+            .joinToString(" ")
+
+        val salt = "mnemonic$passphrase"
+
+        return pbkdf2Sha512(
+            password = normalizedMnemonic.toCharArray(),
+            salt = salt.toByteArray(Charsets.UTF_8),
+            iterations = PBKDF2_ITERATIONS,
+            keyLength = SEED_LENGTH
+        )
+    }
+
+    /**
+     * PBKDF2-HMAC-SHA512 key derivation.
+     */
+    private fun pbkdf2Sha512(
+        password: CharArray,
+        salt: ByteArray,
+        iterations: Int,
+        keyLength: Int
+    ): ByteArray {
+        val spec = javax.crypto.spec.PBEKeySpec(password, salt, iterations, keyLength * 8)
+
+        // Use BouncyCastle provider (already in dependencies)
+        val factory = javax.crypto.SecretKeyFactory.getInstance(
+            "PBKDF2WithHmacSHA512",
+            org.bouncycastle.jce.provider.BouncyCastleProvider()
+        )
+
+        val key = factory.generateSecret(spec)
+        return key.encoded
+    }
+
+    /**
+     * Validate a BIP-39 mnemonic.
+     *
+     * @param mnemonic Space-separated mnemonic words
+     * @return true if valid (correct word count)
+     */
+    fun validateMnemonic(mnemonic: String): Boolean {
+        val words = mnemonic.trim().lowercase().split("\\s+".toRegex())
+
+        // BIP-39 valid word counts: 12, 15, 18, 21, 24
+        return words.size in listOf(12, 15, 18, 21, 24)
+    }
+}

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Exclude cryptographic keys and sensitive data from backup -->
+    <exclude domain="sharedpref" path="familysafety_encrypted_prefs"/>
+    <exclude domain="database" path="familysafety.db"/>
+</full-backup-content>

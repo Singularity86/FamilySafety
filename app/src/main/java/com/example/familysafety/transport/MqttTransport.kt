@@ -1,0 +1,607 @@
+package com.example.familysafety.transport
+
+import android.content.Context
+import com.example.familysafety.core.*
+import com.example.familysafety.crypto.E2EEManager
+import com.example.familysafety.crypto.RecipientKeys
+import com.example.familysafety.group.AndroidKeyStoreLocalKeyStore
+import com.example.familysafety.group.FamilyMember
+import com.example.familysafety.group.LazysodiumCryptoProvider
+import com.example.familysafety.location.LocationRepository
+import com.example.familysafety.location.MemberLocation
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import org.eclipse.paho.android.service.MqttAndroidClient
+import org.eclipse.paho.client.mqttv3.*
+import timber.log.Timber
+import java.util.concurrent.ConcurrentLinkedQueue
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class MqttTransport @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val locationRepository: LocationRepository,
+    private val e2eeManager: E2EEManager,
+    private val networkMonitor: NetworkMonitor
+) {
+    private var mqttClient: MqttAndroidClient? = null
+    private var memberId: String? = null
+    private var cryptoProvider: LazysodiumCryptoProvider? = null
+    
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    
+    private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
+    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
+    
+    private val familyMemberKeys = mutableMapOf<String, RecipientKeys>()
+    private val pendingMessages = ConcurrentLinkedQueue<PendingMessage>()
+    
+    private var reconnectJob: Job? = null
+    private var reconnectAttempts = 0
+    private val maxReconnectAttempts = 10
+
+    sealed class ConnectionState {
+        data object Disconnected : ConnectionState()
+        data object Connecting : ConnectionState()
+        data object Connected : ConnectionState()
+        data class Error(val message: String, val canRetry: Boolean = true) : ConnectionState()
+    }
+    
+    private data class PendingMessage(
+        val topic: String,
+        val payload: ByteArray,
+        val qos: Int,
+        val timestamp: Long = System.currentTimeMillis()
+    )
+
+    init {
+        scope.launch {
+            networkMonitor.isNetworkAvailable.collect { isAvailable ->
+                if (isAvailable && _connectionState.value is ConnectionState.Disconnected) {
+                    Timber.i("Network available, attempting reconnect")
+                    reconnect()
+                } else if (!isAvailable) {
+                    Timber.w("Network unavailable")
+                    _connectionState.value = ConnectionState.Error(
+                        "No network connection",
+                        canRetry = false
+                    )
+                }
+            }
+        }
+    }
+
+    suspend fun initialize(
+        memberIdParam: String,
+        familyMembers: List<FamilyMember>
+    ) {
+        ErrorHandler.withRetry(
+            maxAttempts = 3,
+            initialDelayMs = 2000,
+            onError = { e, attempt ->
+                Timber.w(e, "Initialization attempt $attempt failed")
+                _connectionState.value = ConnectionState.Error(
+                    "Initializing... (attempt $attempt)",
+                    canRetry = true
+                )
+            }
+        ) {
+            initializeInternal(memberIdParam, familyMembers)
+        }.onFailure { e ->
+            Timber.e(e, "Failed to initialize after retries")
+            _connectionState.value = ConnectionState.Error(
+                "Initialization failed: ${e.message}",
+                canRetry = true
+            )
+        }
+    }
+
+    private suspend fun initializeInternal(
+        memberIdParam: String,
+        familyMembers: List<FamilyMember>
+    ) {
+        withContext(Dispatchers.IO) {
+            memberId = memberIdParam
+            
+            val keyStore = AndroidKeyStoreLocalKeyStore(context)
+            cryptoProvider = LazysodiumCryptoProvider(keyStore)
+            
+            familyMembers.forEach { member ->
+                if (member.memberId != memberIdParam) {
+                    familyMemberKeys[member.memberId] = RecipientKeys(
+                        x25519PublicKey = member.x25519PublicKey,
+                        ed25519PublicKey = member.ed25519PublicKey
+                    )
+                }
+            }
+            
+            val clientId = MqttConfig.generateClientId(memberIdParam)
+            mqttClient = MqttAndroidClient(
+                context,
+                MqttConfig.BROKER_URL,
+                clientId
+            )
+            
+            setupCallbacks()
+            connect(familyMembers.map { it.memberId })
+        }
+    }
+
+    private fun setupCallbacks() {
+        mqttClient?.setCallback(object : MqttCallback {
+            override fun connectionLost(cause: Throwable?) {
+                Timber.w(cause, "Connection lost")
+                _connectionState.value = ConnectionState.Disconnected
+                scheduleReconnect()
+            }
+
+            override fun messageArrived(topic: String?, message: MqttMessage?) {
+                message?.let {
+                    scope.launch {
+                        ErrorHandler.safely(
+                            tag = "MqttTransport",
+                            operation = "message handling",
+                            fallback = Unit
+                        ) {
+                            handleIncomingMessage(topic ?: "", String(it.payload))
+                        }
+                    }
+                }
+            }
+
+            override fun deliveryComplete(token: IMqttDeliveryToken?) {
+                Timber.d("Message delivered")
+            }
+        })
+    }
+
+    private suspend fun connect(familyMemberIds: List<String>) {
+        withContext(Dispatchers.IO) {
+            try {
+                if (!networkMonitor.isCurrentlyConnected()) {
+                    throw NetworkException.NoConnection()
+                }
+                
+                _connectionState.value = ConnectionState.Connecting
+                
+                val options = MqttConnectOptions().apply {
+                    isCleanSession = false
+                    connectionTimeout = MqttConfig.CONNECTION_TIMEOUT
+                    keepAliveInterval = MqttConfig.KEEP_ALIVE_INTERVAL
+                    isAutomaticReconnect = false
+                    
+                    val willMessage = memberId?.let {
+                        MqttMessage(
+                            createOfflineWillMessage(it).toByteArray()
+                        ).apply {
+                            qos = MqttConfig.DEFAULT_QOS
+                            isRetained = true
+                        }
+                    }
+                    
+                    willMessage?.let { will ->
+                        setWill(
+                            MqttConfig.getPresenceTopic(memberId!!),
+                            will.payload,
+                            will.qos,
+                            will.isRetained
+                        )
+                    }
+                }
+
+                val connectResult = ErrorHandler.withTimeout(
+                    timeoutMs = 30_000,
+                    onTimeout = {
+                        Timber.e("Connection timeout")
+                        _connectionState.value = ConnectionState.Error(
+                            "Connection timeout",
+                            canRetry = true
+                        )
+                    }
+                ) {
+                    suspendCancellableCoroutine { continuation ->
+                        mqttClient?.connect(options, null, object : IMqttActionListener {
+                            override fun onSuccess(asyncActionToken: IMqttToken?) {
+                                continuation.resume(Unit) {}
+                            }
+
+                            override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                                continuation.resume(Unit) {}
+                                throw exception ?: Exception("Connection failed")
+                            }
+                        })
+                    }
+                }
+
+                if (connectResult.isSuccess) {
+                    Timber.i("Connected to MQTT broker")
+                    _connectionState.value = ConnectionState.Connected
+                    reconnectAttempts = 0
+                    
+                    subscribeToFamilyMembers(familyMemberIds)
+                    processPendingMessages()
+                } else {
+                    throw connectResult.exceptionOrNull() ?: Exception("Unknown connection error")
+                }
+                
+            } catch (e: Exception) {
+                Timber.e(e, "Connection failed")
+                val errorMessage = when (e) {
+                    is NetworkException.NoConnection -> "No network connection"
+                    is NetworkException.Timeout -> "Connection timeout"
+                    is TimeoutException -> "Connection timeout"
+                    else -> "Connection failed: ${e.message}"
+                }
+                _connectionState.value = ConnectionState.Error(errorMessage, canRetry = true)
+                throw e
+            }
+        }
+    }
+
+    private fun scheduleReconnect() {
+        reconnectJob?.cancel()
+        
+        if (reconnectAttempts >= maxReconnectAttempts) {
+            Timber.e("Max reconnection attempts reached")
+            _connectionState.value = ConnectionState.Error(
+                "Connection failed after $maxReconnectAttempts attempts",
+                canRetry = false
+            )
+            return
+        }
+        
+        reconnectJob = scope.launch {
+            val delay = calculateBackoff(reconnectAttempts)
+            Timber.i("Scheduling reconnect in ${delay}ms (attempt ${reconnectAttempts + 1})")
+            
+            delay(delay)
+            reconnect()
+        }
+    }
+
+    private fun calculateBackoff(attempt: Int): Long {
+        val baseDelay = MqttConfig.RECONNECT_DELAY_MS
+        val maxDelay = 60_000L
+        val delay = (baseDelay * Math.pow(2.0, attempt.toDouble())).toLong()
+        return delay.coerceAtMost(maxDelay)
+    }
+
+    private suspend fun reconnect() {
+        val currentMemberId = memberId ?: return
+        val currentMembers = familyMemberKeys.keys.toList() + currentMemberId
+        
+        reconnectAttempts++
+        
+        ErrorHandler.withRetry(
+            maxAttempts = 1,
+            onError = { e, _ ->
+                Timber.w(e, "Reconnect failed")
+            }
+        ) {
+            connect(currentMembers)
+        }.onFailure {
+            scheduleReconnect()
+        }
+    }
+
+    private suspend fun subscribeToFamilyMembers(memberIds: List<String>) {
+        memberIds.forEach { otherMemberId ->
+            if (otherMemberId != memberId) {
+                ErrorHandler.safely(
+                    tag = "MqttTransport",
+                    operation = "subscribing to $otherMemberId"
+                ) {
+                    subscribeToMember(otherMemberId)
+                }
+            }
+        }
+    }
+
+    private suspend fun subscribeToMember(otherMemberId: String) {
+        withContext(Dispatchers.IO) {
+            val locationTopic = MqttConfig.getLocationTopic(otherMemberId)
+            val presenceTopic = MqttConfig.getPresenceTopic(otherMemberId)
+            
+            mqttClient?.subscribe(
+                arrayOf(locationTopic, presenceTopic),
+                intArrayOf(MqttConfig.DEFAULT_QOS, MqttConfig.DEFAULT_QOS),
+                null,
+                object : IMqttActionListener {
+                    override fun onSuccess(asyncActionToken: IMqttToken?) {
+                        Timber.i("Subscribed to member: $otherMemberId")
+                    }
+
+                    override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                        Timber.e(exception, "Failed to subscribe to member: $otherMemberId")
+                        scope.launch {
+                            delay(5000)
+                            ErrorHandler.safely("MqttTransport", "retry subscribe") {
+                                subscribeToMember(otherMemberId)
+                            }
+                        }
+                    }
+                }
+            )
+        }
+    }
+
+    suspend fun publishLocation(location: MemberLocation) {
+        ErrorHandler.safely(
+            tag = "MqttTransport",
+            operation = "publishing location"
+        ) {
+            publishLocationInternal(location)
+        }
+    }
+
+    private suspend fun publishLocationInternal(location: MemberLocation) {
+        withContext(Dispatchers.IO) {
+            val currentMemberId = memberId ?: throw GroupStateException.NotInitialized()
+            val topic = MqttConfig.getLocationTopic(currentMemberId)
+            
+            val messageJson = MessageProtocol.encodeLocationUpdate(location)
+            
+            val encryptedMessage = try {
+                val firstRecipient = familyMemberKeys.entries.firstOrNull()
+                if (firstRecipient != null) {
+                    e2eeManager.encryptMessage(
+                        plaintext = messageJson,
+                        recipientMemberId = firstRecipient.key,
+                        recipientX25519PublicKey = firstRecipient.value.x25519PublicKey
+                    )
+                } else {
+                    messageJson
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Encryption failed")
+                throw CryptoException.EncryptionFailed(e.message ?: "Unknown error")
+            }
+            
+            val payload = encryptedMessage.toByteArray()
+            
+            if (_connectionState.value != ConnectionState.Connected) {
+                Timber.w("Not connected, queueing message")
+                queueMessage(topic, payload, MqttConfig.DEFAULT_QOS)
+                return@withContext
+            }
+            
+            val publishResult = ErrorHandler.withRetry(
+                maxAttempts = 3,
+                initialDelayMs = 500,
+                onError = { e, attempt ->
+                    Timber.w(e, "Publish attempt $attempt failed")
+                }
+            ) {
+                suspendCancellableCoroutine { continuation ->
+                    val message = MqttMessage(payload).apply {
+                        qos = MqttConfig.DEFAULT_QOS
+                        isRetained = false
+                    }
+                    
+                    mqttClient?.publish(topic, message, null, object : IMqttActionListener {
+                        override fun onSuccess(asyncActionToken: IMqttToken?) {
+                            Timber.d("Published encrypted location update")
+                            continuation.resume(Unit) {}
+                        }
+
+                        override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                            val error = exception ?: Exception("Publish failed")
+                            continuation.resumeWithException(error)
+                        }
+                    })
+                }
+            }
+            
+            if (publishResult.isFailure) {
+                Timber.w("Publish failed after retries, queueing")
+                queueMessage(topic, payload, MqttConfig.DEFAULT_QOS)
+            }
+        }
+    }
+
+    private fun queueMessage(topic: String, payload: ByteArray, qos: Int) {
+        val message = PendingMessage(topic, payload, qos)
+        pendingMessages.offer(message)
+        
+        while (pendingMessages.size > 100) {
+            pendingMessages.poll()
+        }
+        
+        Timber.i("Queued message, pending: ${pendingMessages.size}")
+    }
+
+    private suspend fun processPendingMessages() {
+        withContext(Dispatchers.IO) {
+            Timber.i("Processing ${pendingMessages.size} pending messages")
+            
+            var processed = 0
+            var failed = 0
+            
+            while (pendingMessages.isNotEmpty()) {
+                val message = pendingMessages.poll() ?: break
+                
+                if (System.currentTimeMillis() - message.timestamp > 3600_000) {
+                    Timber.w("Discarding stale message")
+                    continue
+                }
+                
+                try {
+                    val mqttMessage = MqttMessage(message.payload).apply {
+                        qos = message.qos
+                    }
+                    
+                    suspendCancellableCoroutine { continuation ->
+                        mqttClient?.publish(message.topic, mqttMessage, null, object : IMqttActionListener {
+                            override fun onSuccess(asyncActionToken: IMqttToken?) {
+                                processed++
+                                continuation.resume(Unit) {}
+                            }
+
+                            override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                                failed++
+                                Timber.w(exception, "Failed to send pending message")
+                                pendingMessages.offer(message)
+                                continuation.resume(Unit) {}
+                            }
+                        })
+                    }
+                    
+                    delay(100)
+                    
+                } catch (e: Exception) {
+                    Timber.e(e, "Error processing pending message")
+                    failed++
+                }
+            }
+            
+            Timber.i("Processed pending messages: $processed sent, $failed failed")
+        }
+    }
+
+    suspend fun publishPresence(isOnline: Boolean) {
+        ErrorHandler.safely(
+            tag = "MqttTransport",
+            operation = "publishing presence"
+        ) {
+            publishPresenceInternal(isOnline)
+        }
+    }
+
+    private suspend fun publishPresenceInternal(isOnline: Boolean) {
+        withContext(Dispatchers.IO) {
+            val currentMemberId = memberId ?: return@withContext
+            val topic = MqttConfig.getPresenceTopic(currentMemberId)
+            
+            val messageJson = MessageProtocol.encodePresenceUpdate(currentMemberId, isOnline)
+            
+            val encryptedMessage = try {
+                val firstRecipient = familyMemberKeys.entries.firstOrNull()
+                if (firstRecipient != null) {
+                    e2eeManager.encryptMessage(
+                        plaintext = messageJson,
+                        recipientMemberId = firstRecipient.key,
+                        recipientX25519PublicKey = firstRecipient.value.x25519PublicKey
+                    )
+                } else {
+                    messageJson
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Presence encryption failed")
+                return@withContext
+            }
+            
+            val message = MqttMessage(encryptedMessage.toByteArray()).apply {
+                qos = MqttConfig.DEFAULT_QOS
+                isRetained = true
+            }
+            
+            mqttClient?.publish(topic, message)
+        }
+    }
+
+    private suspend fun handleIncomingMessage(topic: String, encryptedPayload: String) {
+        try {
+            val senderId = topic.split("/").getOrNull(1) ?: run {
+                Timber.w("Could not extract sender ID from topic: $topic")
+                return
+            }
+            
+            val senderKeys = familyMemberKeys[senderId] ?: run {
+                Timber.w("Unknown sender: $senderId")
+                return
+            }
+            
+            val decryptResult = ErrorHandler.withRetry(
+                maxAttempts = 2,
+                initialDelayMs = 100
+            ) {
+                e2eeManager.decryptMessage(
+                    encryptedMessageJson = encryptedPayload,
+                    senderX25519PublicKey = senderKeys.x25519PublicKey,
+                    senderEd25519PublicKey = senderKeys.ed25519PublicKey
+                )
+            }
+            
+            val decryptedPayload = decryptResult.getOrElse {
+                Timber.e(it, "Failed to decrypt message from $senderId")
+                return
+            }
+            
+            val envelope = MessageProtocol.decodeEnvelope(decryptedPayload)
+            
+            when (envelope.type) {
+                "location_update" -> {
+                    val locationUpdate = MessageProtocol.decodeLocationUpdate(envelope.payload)
+                    val memberLocation = MessageProtocol.locationUpdateToMemberLocation(locationUpdate)
+                    locationRepository.updateMemberLocation(memberLocation)
+                    Timber.d("Received encrypted location update for ${locationUpdate.memberId}")
+                }
+                "presence_update" -> {
+                    val presenceUpdate = MessageProtocol.decodePresenceUpdate(envelope.payload)
+                    Timber.d("Received encrypted presence update: ${presenceUpdate.memberId} is ${if (presenceUpdate.isOnline) "online" else "offline"}")
+                }
+                else -> {
+                    Timber.w("Unknown message type: ${envelope.type}")
+                }
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to handle incoming message")
+        }
+    }
+
+    private fun createOfflineWillMessage(memberId: String): String {
+        return MessageProtocol.encodePresenceUpdate(memberId, isOnline = false)
+    }
+
+    fun updateFamilyMembers(members: List<FamilyMember>) {
+        scope.launch {
+            ErrorHandler.safely("MqttTransport", "updating family members") {
+                updateFamilyMembersInternal(members)
+            }
+        }
+    }
+
+    private suspend fun updateFamilyMembersInternal(members: List<FamilyMember>) {
+        val currentMemberId = memberId ?: return
+        
+        familyMemberKeys.clear()
+        e2eeManager.clearSharedSecretCache()
+        
+        members.forEach { member ->
+            if (member.memberId != currentMemberId) {
+                familyMemberKeys[member.memberId] = RecipientKeys(
+                    x25519PublicKey = member.x25519PublicKey,
+                    ed25519PublicKey = member.ed25519PublicKey
+                )
+            }
+        }
+        
+        if (_connectionState.value == ConnectionState.Connected) {
+            subscribeToFamilyMembers(members.map { it.memberId })
+        }
+    }
+
+    fun disconnect() {
+        scope.launch {
+            ErrorHandler.safely("MqttTransport", "disconnecting") {
+                disconnectInternal()
+            }
+        }
+    }
+
+    private suspend fun disconnectInternal() {
+        reconnectJob?.cancel()
+        publishPresence(false)
+        mqttClient?.disconnect()
+        _connectionState.value = ConnectionState.Disconnected
+    }
+
+    fun cleanup() {
+        disconnect()
+        scope.cancel()
+        e2eeManager.clearSharedSecretCache()
+        pendingMessages.clear()
+    }
+}

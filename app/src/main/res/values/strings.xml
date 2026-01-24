@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">FamilySafety</string>
+    
+    <!-- Onboarding -->
+    <string name="welcome_title">Welcome to FamilySafety</string>
+    <string name="welcome_subtitle">Stay connected with your family\nPrivacy-first location sharing</string>
+    <string name="create_new_family">Create New Family</string>
+    <string name="restore_account">I Have a Recovery Phrase</string>
+    <string name="join_family">Join Existing Family</string>
+    
+    <!-- Recovery Phrase -->
+    <string name="recovery_phrase_title">Recovery Phrase</string>
+    <string name="recovery_phrase_subtitle">Write down these 12 words in order</string>
+    <string name="recovery_phrase_warning">Never share your recovery phrase. Anyone with these words can access your account.</string>
+    <string name="confirm_saved">I\'ve Written This Down</string>
+    
+    <!-- Location Service -->
+    <string name="location_service_title">FamilySafety</string>
+    <string name="location_service_text">Sharing location with family</string>
+    
+    <!-- Permissions -->
+    <string name="location_permission_rationale">Location permission is required to share your location with family members</string>
+    <string name="background_location_rationale">Background location access allows the app to share your location even when not in use</string>
+    <string name="camera_permission_rationale">Camera permission is required to scan QR codes</string>
+</resources>
