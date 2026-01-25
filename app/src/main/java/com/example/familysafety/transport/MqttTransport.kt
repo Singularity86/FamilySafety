@@ -1,6 +1,7 @@
 package com.example.familysafety.transport
 
 import android.content.Context
+import com.example.familysafety.chat.ChatRepository
 import com.example.familysafety.core.*
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.crypto.RecipientKeys
@@ -9,6 +10,7 @@ import com.example.familysafety.group.FamilyMember
 import com.example.familysafety.group.LazysodiumCryptoProvider
 import com.example.familysafety.location.LocationRepository
 import com.example.familysafety.location.MemberLocation
+import com.example.familysafety.replication.ReplicationManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -28,13 +30,18 @@ class MqttTransport @Inject constructor(
 ) {
     private var mqttClient: MqttAndroidClient? = null
     private var memberId: String? = null
+    private var groupId: String? = null
     private var cryptoProvider: LazysodiumCryptoProvider? = null
-    
+
+    // Late-initialized to avoid circular dependency
+    private var replicationManager: ReplicationManager? = null
+    private var chatRepository: ChatRepository? = null
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    
+
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
-    
+
     private val familyMemberKeys = mutableMapOf<String, RecipientKeys>()
     private val pendingMessages = ConcurrentLinkedQueue<PendingMessage>()
     
@@ -73,9 +80,36 @@ class MqttTransport @Inject constructor(
         }
     }
 
+    /**
+     * Wire up ReplicationManager for handling replication messages.
+     * Must be called after construction to avoid circular dependency.
+     */
+    fun setReplicationManager(manager: ReplicationManager) {
+        replicationManager = manager
+        // Provide publisher callback to ReplicationManager
+        manager.setMqttPublisher { topic, payload, qos ->
+            publishRaw(topic, payload, qos)
+        }
+        Timber.d("ReplicationManager wired up to MqttTransport")
+    }
+
+    /**
+     * Wire up ChatRepository for handling chat messages.
+     * Must be called after construction to avoid circular dependency.
+     */
+    fun setChatRepository(repository: ChatRepository) {
+        chatRepository = repository
+        // Provide publisher callback to ChatRepository
+        repository.setMqttPublisher { topic, payload, qos ->
+            publishRaw(topic, payload, qos)
+        }
+        Timber.d("ChatRepository wired up to MqttTransport")
+    }
+
     suspend fun initialize(
         memberIdParam: String,
-        familyMembers: List<FamilyMember>
+        familyMembers: List<FamilyMember>,
+        groupIdParam: String? = null
     ) {
         ErrorHandler.withRetry(
             maxAttempts = 3,
@@ -88,7 +122,7 @@ class MqttTransport @Inject constructor(
                 )
             }
         ) {
-            initializeInternal(memberIdParam, familyMembers)
+            initializeInternal(memberIdParam, familyMembers, groupIdParam)
         }.onFailure { e ->
             Timber.e(e, "Failed to initialize after retries")
             _connectionState.value = ConnectionState.Error(
@@ -100,14 +134,16 @@ class MqttTransport @Inject constructor(
 
     private suspend fun initializeInternal(
         memberIdParam: String,
-        familyMembers: List<FamilyMember>
+        familyMembers: List<FamilyMember>,
+        groupIdParam: String? = null
     ) {
         withContext(Dispatchers.IO) {
             memberId = memberIdParam
-            
+            groupId = groupIdParam
+
             val keyStore = AndroidKeyStoreLocalKeyStore(context)
             cryptoProvider = LazysodiumCryptoProvider(keyStore)
-            
+
             familyMembers.forEach { member ->
                 if (member.memberId != memberIdParam) {
                     familyMemberKeys[member.memberId] = RecipientKeys(
@@ -116,14 +152,14 @@ class MqttTransport @Inject constructor(
                     )
                 }
             }
-            
+
             val clientId = MqttConfig.generateClientId(memberIdParam)
             mqttClient = MqttAndroidClient(
                 context,
                 MqttConfig.BROKER_URL,
                 clientId
             )
-            
+
             setupCallbacks()
             connect(familyMembers.map { it.memberId })
         }
@@ -219,9 +255,18 @@ class MqttTransport @Inject constructor(
                     Timber.i("Connected to MQTT broker")
                     _connectionState.value = ConnectionState.Connected
                     reconnectAttempts = 0
-                    
+
+                    // Subscribe to own topics for receiving chat and replication data
+                    subscribeToOwnTopics()
+
                     subscribeToFamilyMembers(familyMemberIds)
                     processPendingMessages()
+
+                    // Trigger full sync after connection
+                    scope.launch {
+                        delay(2000) // Wait for subscriptions to complete
+                        replicationManager?.requestFullSync()
+                    }
                 } else {
                     throw connectResult.exceptionOrNull() ?: Exception("Unknown connection error")
                 }
@@ -299,6 +344,66 @@ class MqttTransport @Inject constructor(
         }
     }
 
+    /**
+     * Subscribe to topics where this device receives messages directly.
+     * Includes chat, replication requests, and replication data.
+     */
+    private suspend fun subscribeToOwnTopics() {
+        val currentMemberId = memberId ?: return
+        val currentGroupId = groupId
+
+        withContext(Dispatchers.IO) {
+            val topics = mutableListOf<String>()
+            val qosLevels = mutableListOf<Int>()
+
+            // Chat topics - messages sent directly to us
+            topics.add(MqttConfig.getChatTopic(currentMemberId))
+            qosLevels.add(MqttConfig.DEFAULT_QOS)
+
+            // Chat receipt topics
+            topics.add(MqttConfig.getChatReceiptTopic(currentMemberId))
+            qosLevels.add(MqttConfig.DEFAULT_QOS)
+
+            // Chat read topics
+            topics.add(MqttConfig.getChatReadTopic(currentMemberId))
+            qosLevels.add(MqttConfig.DEFAULT_QOS)
+
+            // Replication request topic - peers asking us for data
+            topics.add(MqttConfig.getReplicationRequestTopic(currentMemberId))
+            qosLevels.add(MqttConfig.DEFAULT_QOS)
+
+            // Replication data topic - peers sending us data
+            topics.add(MqttConfig.getReplicationDataTopic(currentMemberId))
+            qosLevels.add(MqttConfig.DEFAULT_QOS)
+
+            // Group-level replication announcement topic
+            if (currentGroupId != null) {
+                topics.add(MqttConfig.getReplicationAnnounceTopic(currentGroupId))
+                qosLevels.add(MqttConfig.QOS_AT_MOST_ONCE)
+            }
+
+            mqttClient?.subscribe(
+                topics.toTypedArray(),
+                qosLevels.toIntArray(),
+                null,
+                object : IMqttActionListener {
+                    override fun onSuccess(asyncActionToken: IMqttToken?) {
+                        Timber.i("Subscribed to own topics: ${topics.size} topics")
+                    }
+
+                    override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                        Timber.e(exception, "Failed to subscribe to own topics")
+                        // Retry after delay
+                        scope.launch {
+                            delay(5000)
+                            subscribeToOwnTopics()
+                        }
+                    }
+                }
+            )
+        }
+    }
+
     private suspend fun subscribeToMember(otherMemberId: String) {
         withContext(Dispatchers.IO) {
             val locationTopic = MqttConfig.getLocationTopic(otherMemberId)
@@ -349,7 +454,7 @@ class MqttTransport @Inject constructor(
                     e2eeManager.encryptMessage(
                         plaintext = messageJson,
                         recipientMemberId = firstRecipient.key,
-                        recipientX25519PublicKey = firstRecipient.value.x25519PublicKey
+                        recipientX25519PublicKey = firstRecipient.value.x25519PublicKeyBytes()
                     )
                 } else {
                     messageJson
@@ -482,7 +587,7 @@ class MqttTransport @Inject constructor(
                     e2eeManager.encryptMessage(
                         plaintext = messageJson,
                         recipientMemberId = firstRecipient.key,
-                        recipientX25519PublicKey = firstRecipient.value.x25519PublicKey
+                        recipientX25519PublicKey = firstRecipient.value.x25519PublicKeyBytes()
                     )
                 } else {
                     messageJson
@@ -501,53 +606,146 @@ class MqttTransport @Inject constructor(
         }
     }
 
-    private suspend fun handleIncomingMessage(topic: String, encryptedPayload: String) {
+    private suspend fun handleIncomingMessage(topic: String, payload: String) {
         try {
-            val senderId = topic.split("/").getOrNull(1) ?: run {
-                Timber.w("Could not extract sender ID from topic: $topic")
-                return
-            }
-            
-            val senderKeys = familyMemberKeys[senderId] ?: run {
-                Timber.w("Unknown sender: $senderId")
-                return
-            }
-            
-            val decryptResult = ErrorHandler.withRetry(
-                maxAttempts = 2,
-                initialDelayMs = 100
-            ) {
-                e2eeManager.decryptMessage(
-                    encryptedMessageJson = encryptedPayload,
-                    senderX25519PublicKey = senderKeys.x25519PublicKey,
-                    senderEd25519PublicKey = senderKeys.ed25519PublicKey
-                )
-            }
-            
-            val decryptedPayload = decryptResult.getOrElse {
-                Timber.e(it, "Failed to decrypt message from $senderId")
-                return
-            }
-            
-            val envelope = MessageProtocol.decodeEnvelope(decryptedPayload)
-            
-            when (envelope.type) {
-                "location_update" -> {
-                    val locationUpdate = MessageProtocol.decodeLocationUpdate(envelope.payload)
-                    val memberLocation = MessageProtocol.locationUpdateToMemberLocation(locationUpdate)
-                    locationRepository.updateMemberLocation(memberLocation)
-                    Timber.d("Received encrypted location update for ${locationUpdate.memberId}")
+            val topicParts = topic.split("/")
+            Timber.d("Received message on topic: $topic")
+
+            // Route based on topic structure
+            when {
+                // Chat messages: familysafe/{memberId}/chat
+                topic.endsWith("/chat") -> {
+                    val senderId = extractSenderFromTopic(topic)
+                    if (senderId != null) {
+                        chatRepository?.handleIncomingMessage(payload, senderId)
+                    }
                 }
-                "presence_update" -> {
-                    val presenceUpdate = MessageProtocol.decodePresenceUpdate(envelope.payload)
-                    Timber.d("Received encrypted presence update: ${presenceUpdate.memberId} is ${if (presenceUpdate.isOnline) "online" else "offline"}")
+
+                // Chat receipts: familysafe/{memberId}/chat/receipt
+                topic.endsWith("/chat/receipt") -> {
+                    chatRepository?.handleDeliveryReceipt(payload)
                 }
+
+                // Chat read receipts: familysafe/{memberId}/chat/read
+                topic.endsWith("/chat/read") -> {
+                    chatRepository?.handleDeliveryReceipt(payload)
+                }
+
+                // Replication requests: familysafe/{memberId}/replication/request
+                topic.endsWith("/replication/request") -> {
+                    val senderId = extractSenderFromTopic(topic)
+                    if (senderId != null) {
+                        replicationManager?.handleReplicationRequest(payload, senderId)
+                    }
+                }
+
+                // Replication data: familysafe/{memberId}/replication/data
+                topic.endsWith("/replication/data") -> {
+                    val senderId = extractSenderFromTopic(topic)
+                    if (senderId != null) {
+                        replicationManager?.handleReplicationResponse(payload, senderId)
+                    }
+                }
+
+                // Replication announcements: familysafe/group/{groupId}/replication/announce
+                topic.contains("/replication/announce") -> {
+                    val senderId = extractSenderFromAnnounceTopic(payload)
+                    if (senderId != null) {
+                        replicationManager?.handleDataAvailabilityAnnouncement(payload, senderId)
+                    }
+                }
+
+                // Location updates: familysafe/{memberId}/location
+                topic.endsWith("/location") -> {
+                    handleEncryptedLocationOrPresence(topic, payload)
+                }
+
+                // Presence updates: familysafe/{memberId}/presence
+                topic.endsWith("/presence") -> {
+                    handleEncryptedLocationOrPresence(topic, payload)
+                }
+
                 else -> {
-                    Timber.w("Unknown message type: ${envelope.type}")
+                    Timber.w("Unknown topic pattern: $topic")
                 }
             }
         } catch (e: Exception) {
-            Timber.e(e, "Failed to handle incoming message")
+            Timber.e(e, "Failed to handle incoming message on topic: $topic")
+        }
+    }
+
+    /**
+     * Handle encrypted location and presence messages (original functionality).
+     */
+    private suspend fun handleEncryptedLocationOrPresence(topic: String, encryptedPayload: String) {
+        val senderId = topic.split("/").getOrNull(1) ?: run {
+            Timber.w("Could not extract sender ID from topic: $topic")
+            return
+        }
+
+        val senderKeys = familyMemberKeys[senderId] ?: run {
+            Timber.w("Unknown sender: $senderId")
+            return
+        }
+
+        val decryptResult = ErrorHandler.withRetry(
+            maxAttempts = 2,
+            initialDelayMs = 100
+        ) {
+            e2eeManager.decryptMessage(
+                encryptedMessageJson = encryptedPayload,
+                senderX25519PublicKey = senderKeys.x25519PublicKeyBytes(),
+                senderEd25519PublicKey = senderKeys.ed25519PublicKeyBytes()
+            )
+        }
+
+        val decryptedPayload = decryptResult.getOrElse {
+            Timber.e(it, "Failed to decrypt message from $senderId")
+            return
+        }
+
+        val envelope = MessageProtocol.decodeEnvelope(decryptedPayload)
+
+        when (envelope.type) {
+            "location_update" -> {
+                val locationUpdate = MessageProtocol.decodeLocationUpdate(envelope.payload)
+                val memberLocation = MessageProtocol.locationUpdateToMemberLocation(locationUpdate)
+                locationRepository.updateMemberLocation(memberLocation)
+                Timber.d("Received encrypted location update for ${locationUpdate.memberId}")
+
+                // Replicate to peers for backup
+                replicationManager?.replicateLocation(memberLocation)
+            }
+            "presence_update" -> {
+                val presenceUpdate = MessageProtocol.decodePresenceUpdate(envelope.payload)
+                Timber.d("Received encrypted presence update: ${presenceUpdate.memberId} is ${if (presenceUpdate.isOnline) "online" else "offline"}")
+            }
+            else -> {
+                Timber.w("Unknown message type: ${envelope.type}")
+            }
+        }
+    }
+
+    /**
+     * Extract sender member ID from topic like familysafe/{memberId}/...
+     */
+    private fun extractSenderFromTopic(topic: String): String? {
+        val parts = topic.split("/")
+        return if (parts.size >= 2 && parts[0] == "familysafe") {
+            parts[1]
+        } else null
+    }
+
+    /**
+     * Extract sender from announcement payload (JSON contains announcerId).
+     */
+    private fun extractSenderFromAnnounceTopic(payload: String): String? {
+        return try {
+            // Simple extraction - look for "announcerId":"xxx"
+            val regex = """"announcerId"\s*:\s*"([^"]+)"""".toRegex()
+            regex.find(payload)?.groupValues?.getOrNull(1)
+        } catch (e: Exception) {
+            null
         }
     }
 
@@ -603,5 +801,65 @@ class MqttTransport @Inject constructor(
         scope.cancel()
         e2eeManager.clearSharedSecretCache()
         pendingMessages.clear()
+    }
+
+    // =========================================================================
+    // RAW PUBLISH FOR REPLICATION AND CHAT
+    // =========================================================================
+
+    /**
+     * Publish raw message to a topic.
+     * Used by ReplicationManager and ChatRepository for their specific messages.
+     * Returns true if publish succeeded.
+     */
+    suspend fun publishRaw(topic: String, payload: ByteArray, qos: Int): Boolean {
+        return withContext(Dispatchers.IO) {
+            if (_connectionState.value != ConnectionState.Connected) {
+                Timber.w("Not connected, queueing raw message")
+                queueMessage(topic, payload, qos)
+                return@withContext false
+            }
+
+            try {
+                suspendCancellableCoroutine { continuation ->
+                    val message = MqttMessage(payload).apply {
+                        this.qos = qos
+                        isRetained = false
+                    }
+
+                    mqttClient?.publish(topic, message, null, object : IMqttActionListener {
+                        override fun onSuccess(asyncActionToken: IMqttToken?) {
+                            Timber.d("Published raw message to $topic")
+                            continuation.resume(true) {}
+                        }
+
+                        override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                            Timber.w(exception, "Failed to publish raw message to $topic")
+                            queueMessage(topic, payload, qos)
+                            continuation.resume(false) {}
+                        }
+                    })
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Error publishing raw message")
+                queueMessage(topic, payload, qos)
+                false
+            }
+        }
+    }
+
+    /**
+     * Update the group ID (for group-level topic subscriptions).
+     */
+    fun setGroupId(newGroupId: String) {
+        val oldGroupId = groupId
+        groupId = newGroupId
+
+        // Resubscribe to group topics if connected
+        if (_connectionState.value == ConnectionState.Connected && oldGroupId != newGroupId) {
+            scope.launch {
+                subscribeToOwnTopics()
+            }
+        }
     }
 }

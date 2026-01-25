@@ -19,6 +19,7 @@ import com.example.familysafety.ui.onboarding.OnboardingNavigation
 import com.example.familysafety.ui.main.MainScreen
 import com.example.familysafety.ui.theme.FamilySafetyTheme
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 /**
  * Main entry point for the application
@@ -27,12 +28,15 @@ import dagger.hilt.android.AndroidEntryPoint
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
+    @Inject
+    lateinit var appInitializer: AppInitializer
+
     private val locationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val fineLocationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
         val coarseLocationGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-        
+
         if (fineLocationGranted || coarseLocationGranted) {
             startLocationService()
         }
@@ -50,22 +54,32 @@ class MainActivity : ComponentActivity() {
                     var isOnboarded by remember { mutableStateOf(checkIfOnboarded()) }
 
                     if (isOnboarded) {
-                        MainScreen()
-                        
-                        // Start location service if permissions granted
+                        // Initialize app components when showing main screen
                         LaunchedEffect(Unit) {
+                            appInitializer.initialize()
                             checkAndRequestLocationPermissions()
                         }
+
+                        MainScreen()
                     } else {
                         OnboardingNavigation(
                             onOnboardingComplete = {
                                 isOnboarded = true
+                                // Initialize after onboarding completes
+                                appInitializer.initialize()
                                 checkAndRequestLocationPermissions()
                             }
                         )
                     }
                 }
             }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (isFinishing) {
+            appInitializer.cleanup()
         }
     }
 

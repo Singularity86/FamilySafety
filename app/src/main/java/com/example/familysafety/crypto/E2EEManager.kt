@@ -153,24 +153,21 @@ class E2EEManager @Inject constructor(
         chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }
 
+/**
+ * Holds public keys for a family member.
+ * Keys are stored as hex-encoded strings (matching FamilyMember).
+ */
 data class RecipientKeys(
-    val x25519PublicKey: ByteArray,
-    val ed25519PublicKey: ByteArray
+    val x25519PublicKey: String,
+    val ed25519PublicKey: String
 ) {
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (javaClass != other?.javaClass) return false
-        other as RecipientKeys
-        if (!x25519PublicKey.contentEquals(other.x25519PublicKey)) return false
-        if (!ed25519PublicKey.contentEquals(other.ed25519PublicKey)) return false
-        return true
-    }
+    /** Convert x25519 key to ByteArray for crypto operations */
+    fun x25519PublicKeyBytes(): ByteArray =
+        x25519PublicKey.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
-    override fun hashCode(): Int {
-        var result = x25519PublicKey.contentHashCode()
-        result = 31 * result + ed25519PublicKey.contentHashCode()
-        return result
-    }
+    /** Convert ed25519 key to ByteArray for crypto operations */
+    fun ed25519PublicKeyBytes(): ByteArray =
+        ed25519PublicKey.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }
 
 class EncryptionException(message: String) : Exception(message)
