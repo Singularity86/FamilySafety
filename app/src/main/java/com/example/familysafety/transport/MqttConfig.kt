@@ -45,4 +45,57 @@ object MqttConfig {
     fun getJoinResponseTopic(inviterMemberId: String, requestId: String): String {
         return "familysafe/$inviterMemberId/join_response/$requestId"
     }
+
+    // =========================================================================
+    // REPLICATION TOPICS
+    // =========================================================================
+
+    /**
+     * Topic for requesting data sync from a specific peer.
+     * Message contains what data we need (timestamp ranges, etc.)
+     */
+    fun getReplicationRequestTopic(memberId: String): String {
+        return "familysafe/$memberId/replication/request"
+    }
+
+    /**
+     * Topic for sending replicated data to a specific peer.
+     * Message contains the actual location/chat data.
+     */
+    fun getReplicationDataTopic(memberId: String): String {
+        return "familysafe/$memberId/replication/data"
+    }
+
+    /**
+     * Topic for broadcasting data availability to all group members.
+     * "I have data for memberX from timestamp Y to Z"
+     */
+    fun getReplicationAnnounceTopic(groupId: String): String {
+        return "familysafe/group/$groupId/replication/announce"
+    }
+
+    // =========================================================================
+    // CHAT TOPICS
+    // =========================================================================
+
+    /**
+     * Topic for sending chat messages to a specific member.
+     */
+    fun getChatTopic(memberId: String): String {
+        return "familysafe/$memberId/chat"
+    }
+
+    /**
+     * Topic for chat delivery receipts.
+     */
+    fun getChatReceiptTopic(memberId: String): String {
+        return "familysafe/$memberId/chat/receipt"
+    }
+
+    /**
+     * Topic for chat read receipts.
+     */
+    fun getChatReadTopic(memberId: String): String {
+        return "familysafe/$memberId/chat/read"
+    }
 }
