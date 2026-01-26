@@ -34,6 +34,7 @@ class OnboardingViewModel @Inject constructor(
         viewModelScope.launch {
             _isLoading.value = true
             try {
+                Bip39.initialize(context)
                 val words = Bip39.generate12WordMnemonic()
                 _mnemonic.value = words
             } catch (e: Exception) {
