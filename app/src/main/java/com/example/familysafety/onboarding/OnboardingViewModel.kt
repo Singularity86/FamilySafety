@@ -59,15 +59,14 @@ class OnboardingViewModel @Inject constructor(
     suspend fun initializeKeys(): Boolean {
         return try {
             _isLoading.value = true
-            
+
             val mnemonicString = _mnemonic.value.joinToString(" ")
             val seed = Bip39.mnemonicToSeed(mnemonicString)
-            
+
             val keyStore = AndroidKeyStoreLocalKeyStore(context)
-            val derivation = FamilySafeKeyDerivation()
-            
-            derivation.deriveAndStoreKeys(seed, keyStore)
-            
+            // Use the keyStore's initializeFromSeed method which handles key derivation
+            keyStore.initializeFromSeed(seed, accountIndex = 0)
+
             true
         } catch (e: Exception) {
             false
@@ -79,40 +78,46 @@ class OnboardingViewModel @Inject constructor(
     suspend fun createFamily(): Boolean {
         return try {
             _isLoading.value = true
-            
+
             val keyStore = AndroidKeyStoreLocalKeyStore(context)
             val cryptoProvider = LazysodiumCryptoProvider(keyStore)
-            
+
             val memberId = cryptoProvider.getMemberId()
-            
-            val groupDef = GroupDefinition(
-                groupId = UUID.randomUUID().toString(),
-                groupName = _familyName.value,
-                members = listOf(
-                    FamilyMember(
-                        memberId = memberId,
-                        displayName = _displayName.value,
-                        ed25519PublicKey = cryptoProvider.getEd25519PublicKey(),
-                        x25519PublicKey = cryptoProvider.getX25519PublicKey(),
-                        addedAtEpochMs = System.currentTimeMillis()
-                    )
-                ),
-                version = 1,
-                creatorMemberId = memberId
-            )
-            
-            val persistence = EncryptedGroupStatePersistence(context, cryptoProvider)
-            val groupStateManager = GroupStateManager(
+
+            // Create the local member first
+            // Use getLocal*PublicKey() methods which return hex-encoded Strings
+            val localMember = FamilyMember(
                 memberId = memberId,
+                displayName = _displayName.value,
+                ed25519PublicKey = cryptoProvider.getLocalEd25519PublicKey(),
+                x25519PublicKey = cryptoProvider.getLocalX25519PublicKey(),
+                addedAtEpochMs = System.currentTimeMillis()
+            )
+
+            // Get persistence singleton
+            val persistence = EncryptedGroupStatePersistence.getInstance(context)
+
+            val groupStateManager = GroupStateManager(
+                localMemberId = memberId,
                 persistence = persistence,
                 cryptoProvider = cryptoProvider
             )
-            
-            groupStateManager.createGroup(groupDef)
-            
-            saveOnboardingComplete()
-            
-            true
+
+            // Use the correct createGroup method signature
+            val result = groupStateManager.createGroup(
+                groupName = _familyName.value,
+                localMember = localMember
+            )
+
+            when (result) {
+                is GroupOperationResult.Success -> {
+                    saveOnboardingComplete()
+                    true
+                }
+                is GroupOperationResult.Failure -> {
+                    false
+                }
+            }
         } catch (e: Exception) {
             false
         } finally {
