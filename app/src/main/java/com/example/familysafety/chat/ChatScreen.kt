@@ -45,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -299,16 +300,22 @@ private fun LocationMessageContent(
                 color = textColor
             )
 
-            // Try to parse and display coordinates
-            try {
-                val location = Json.decodeFromString<LocationShareContent>(content)
+            // Parse location outside composable context
+            val locationText = remember(content) {
+                try {
+                    val location = Json.decodeFromString<LocationShareContent>(content)
+                    "%.4f, %.4f".format(location.latitude, location.longitude)
+                } catch (e: Exception) {
+                    null
+                }
+            }
+
+            locationText?.let { coords ->
                 Text(
-                    text = "%.4f, %.4f".format(location.latitude, location.longitude),
+                    text = coords,
                     style = MaterialTheme.typography.bodySmall,
                     color = textColor.copy(alpha = 0.7f)
                 )
-            } catch (e: Exception) {
-                // Ignore parsing errors
             }
         }
     }
