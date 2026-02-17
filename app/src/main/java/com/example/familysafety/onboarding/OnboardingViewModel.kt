@@ -1,4 +1,4 @@
-package com.example.familysafety.ui.onboarding
+package com.example.familysafety.onboarding
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
@@ -143,7 +143,7 @@ class OnboardingViewModel @Inject constructor(
     }
 
     private fun saveOnboardingComplete() {
-        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)
         prefs.edit().putBoolean("onboarding_complete", true).apply()
     }
 }

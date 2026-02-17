@@ -78,6 +78,6 @@ class NetworkMonitor @Inject constructor(
      * Check if on metered connection
      */
     fun isMeteredConnection(): Boolean {
-        return !connectivityManager.isActiveNetworkMetered
+        return connectivityManager.isActiveNetworkMetered
     }
 }

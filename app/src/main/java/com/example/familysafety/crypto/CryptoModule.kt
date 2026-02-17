@@ -31,11 +31,5 @@ object CryptoModule {
         return LazysodiumCryptoProvider(keyStore)
     }
 
-    @Provides
-    @Singleton
-    fun provideE2EEManager(
-        cryptoProvider: LazysodiumCryptoProvider
-    ): E2EEManager {
-        return E2EEManager(cryptoProvider)
-    }
+    // E2EEManager is provided via its @Inject constructor — do not duplicate here.
 }

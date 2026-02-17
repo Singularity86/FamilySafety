@@ -20,26 +20,15 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object GroupStateModule {
 
-    /**
-     * Provide the local key store backed by Android Keystore.
-     */
-    @Provides
-    @Singleton
-    fun provideLocalKeyStore(
-        @ApplicationContext context: Context
-    ): Slip10CryptoProvider.LocalKeyStore {
-        return AndroidKeyStoreLocalKeyStore(context)
-    }
-
-    /**
-     * Provide the crypto provider for signature/encryption operations.
+/**
+     * Bind the CryptoProvider interface to the existing LazysodiumCryptoProvider singleton.
      */
     @Provides
     @Singleton
     fun provideCryptoProvider(
-        keyStore: Slip10CryptoProvider.LocalKeyStore
+        impl: LazysodiumCryptoProvider
     ): CryptoProvider {
-        return LazysodiumCryptoProvider(keyStore)
+        return impl
     }
 
     /**
@@ -209,3 +198,4 @@ object GroupStateManagerFactory {
         }
     }
 }
+

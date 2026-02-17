@@ -244,8 +244,9 @@ class MqttTransport @Inject constructor(
                             }
 
                             override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
-                                continuation.resume(Unit) {}
-                                throw exception ?: Exception("Connection failed")
+                                continuation.resumeWith(
+                                    Result.failure(exception ?: Exception("Connection failed"))
+                                )
                             }
                         })
                     }
@@ -493,7 +494,7 @@ class MqttTransport @Inject constructor(
 
                         override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
                             val error = exception ?: Exception("Publish failed")
-                            continuation.resumeWithException(error)
+                            continuation.resumeWith(Result.failure(error))
                         }
                     })
                 }

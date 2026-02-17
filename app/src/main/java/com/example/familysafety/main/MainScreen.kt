@@ -1,4 +1,4 @@
-package com.example.familysafety.ui.main
+package com.example.familysafety.main
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
@@ -22,7 +22,6 @@ import androidx.navigation.navArgument
 import com.example.familysafety.chat.ChatScreen
 import com.example.familysafety.chat.ChatViewModel
 import com.example.familysafety.chat.ConversationListScreen
-import com.example.familysafety.sync.GroupSyncManager
 import androidx.compose.ui.unit.dp
 
 sealed class MainRoute(val route: String, val label: String, val icon: ImageVector) {
@@ -51,9 +50,9 @@ private val bottomNavItems = listOf(
 @Composable
 fun MainScreen(
     viewModel: MainViewModel = hiltViewModel(),
-    syncManager: GroupSyncManager = hiltViewModel(),
     chatViewModel: ChatViewModel = hiltViewModel()
 ) {
+    val syncManager = viewModel.groupSyncManager
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination

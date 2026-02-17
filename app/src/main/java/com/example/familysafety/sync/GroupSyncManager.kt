@@ -81,7 +81,7 @@ class GroupSyncManager @Inject constructor(
 
                         override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
                             Timber.e(exception, "Failed to subscribe to group sync")
-                            continuation.resumeWithException(exception ?: Exception("Subscribe failed"))
+                            continuation.resumeWith(Result.failure(exception ?: Exception("Subscribe failed")))
                         }
                     })
                 }
@@ -102,15 +102,13 @@ class GroupSyncManager @Inject constructor(
     }
 
     private fun setupSyncMessageHandler() {
-        val originalCallback = mqttClient?.callback
-        
         mqttClient?.setCallback(object : MqttCallback {
             override fun connectionLost(cause: Throwable?) {
-                originalCallback?.connectionLost(cause)
+                Timber.w(cause, "MQTT connection lost in GroupSyncManager")
             }
 
             override fun deliveryComplete(token: IMqttDeliveryToken?) {
-                originalCallback?.deliveryComplete(token)
+                // Delivery complete
             }
 
             override fun messageArrived(topic: String?, message: MqttMessage?) {
@@ -122,8 +120,6 @@ class GroupSyncManager @Inject constructor(
                         }
                     }
                 }
-                
-                originalCallback?.messageArrived(topic, message)
             }
         })
     }
@@ -160,7 +156,7 @@ class GroupSyncManager @Inject constructor(
                 
                 val syncMessage = GroupSyncMessage(
                     groupId = groupDefinition.groupId,
-                    version = groupDefinition.version,
+                    version = groupDefinition.version.toInt(),
                     groupDefinition = groupDefinition,
                     updaterMemberId = myMemberId,
                     changeType = changeType,
@@ -195,15 +191,15 @@ class GroupSyncManager @Inject constructor(
 
                             override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
                                 Timber.e(exception, "Failed to broadcast group update")
-                                continuation.resumeWithException(exception ?: Exception("Publish failed"))
+                                continuation.resumeWith(Result.failure(exception ?: Exception("Publish failed")))
                             }
                         })
                     }
                 }
                 
                 if (publishResult.isSuccess) {
-                    _syncState.value = SyncState.Synced(groupDefinition.version)
-                    waitForAcknowledgments(groupDefinition.version, groupDefinition.members.size)
+                    _syncState.value = SyncState.Synced(groupDefinition.version.toInt())
+                    waitForAcknowledgments(groupDefinition.version.toInt(), groupDefinition.members.size)
                 } else {
                     _syncState.value = SyncState.Error("Failed to broadcast update")
                 }
@@ -253,19 +249,19 @@ class GroupSyncManager @Inject constructor(
                 broadcastGroupUpdate(currentGroup, ChangeType.VERSION_SYNC)
             }
             
-            syncMessage.version == currentGroup.version -> {
+            syncMessage.version == currentGroup.version.toInt() -> {
                 Timber.d("Received same version")
                 sendAcknowledgment(syncMessage.groupId, syncMessage.version)
             }
             
-            syncMessage.version == currentGroup.version + 1 -> {
+            syncMessage.version == currentGroup.version.toInt() + 1 -> {
                 Timber.i("Applying group update")
                 applyGroupUpdate(syncMessage)
             }
             
-            syncMessage.version > currentGroup.version + 1 -> {
+            syncMessage.version > currentGroup.version.toInt() + 1 -> {
                 Timber.w("Version jump detected")
-                _syncState.value = SyncState.Conflict(currentGroup.version, syncMessage.version)
+                _syncState.value = SyncState.Conflict(currentGroup.version.toInt(), syncMessage.version)
                 applyGroupUpdate(syncMessage)
             }
         }
@@ -276,7 +272,12 @@ class GroupSyncManager @Inject constructor(
             try {
                 val manager = groupStateManager ?: return@withContext
                 
-                manager.updateGroupDefinition(syncMessage.groupDefinition)
+                // Apply the remote group state - signature already verified
+                manager.applyRemoteGroupState(
+                    syncMessage.groupDefinition,
+                    syncMessage.signature.hexToByteArray(),
+                    syncMessage.updaterMemberId
+                )
                 sendAcknowledgment(syncMessage.groupId, syncMessage.version)
                 
                 _syncState.value = SyncState.Synced(syncMessage.version)
@@ -351,7 +352,7 @@ class GroupSyncManager @Inject constructor(
             cryptoProvider.verifySignature(
                 message = payload.toByteArray(),
                 signature = signature,
-                publicKey = updater.ed25519PublicKey
+                publicKey = updater.ed25519PublicKey.hexToByteArray()
             )
         } catch (e: Exception) {
             Timber.e(e, "Signature verification failed")

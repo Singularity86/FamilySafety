@@ -20,8 +20,7 @@ object DataValidator {
     private const val MAX_NAME_LENGTH = 50
     private const val MAX_GROUP_NAME_LENGTH = 100
     private const val MAX_MEMBERS_PER_GROUP = 50
-    private const val MIN_PUBLIC_KEY_LENGTH = 32
-    private const val MAX_PUBLIC_KEY_LENGTH = 64
+    private const val EXPECTED_PUBLIC_KEY_HEX_LENGTH = 64  // 32 bytes = 64 hex chars
     private const val MAX_TIMESTAMP_DRIFT_MS = 5 * 60 * 1000L
     
     /**
@@ -91,14 +90,12 @@ object DataValidator {
             errors.add("Display name contains invalid characters")
         }
         
-        if (member.ed25519PublicKey.length < MIN_PUBLIC_KEY_LENGTH ||
-            member.ed25519PublicKey.length > MAX_PUBLIC_KEY_LENGTH) {
-            errors.add("Invalid Ed25519 public key length: ${member.ed25519PublicKey.length}")
+        if (member.ed25519PublicKey.length != EXPECTED_PUBLIC_KEY_HEX_LENGTH) {
+            errors.add("Invalid Ed25519 public key length: ${member.ed25519PublicKey.length} (expected $EXPECTED_PUBLIC_KEY_HEX_LENGTH hex chars)")
         }
-        
-        if (member.x25519PublicKey.length < MIN_PUBLIC_KEY_LENGTH ||
-            member.x25519PublicKey.length > MAX_PUBLIC_KEY_LENGTH) {
-            errors.add("Invalid X25519 public key length: ${member.x25519PublicKey.length}")
+
+        if (member.x25519PublicKey.length != EXPECTED_PUBLIC_KEY_HEX_LENGTH) {
+            errors.add("Invalid X25519 public key length: ${member.x25519PublicKey.length} (expected $EXPECTED_PUBLIC_KEY_HEX_LENGTH hex chars)")
         }
         
         val now = System.currentTimeMillis()

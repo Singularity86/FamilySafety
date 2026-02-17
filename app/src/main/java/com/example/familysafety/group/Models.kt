@@ -1,5 +1,6 @@
 package com.example.familysafety.group
 
+import java.security.MessageDigest
 import kotlinx.serialization.Serializable
 
 /**
@@ -72,8 +73,9 @@ data class FamilyMember(
          * Uses full SHA-256 hash to prevent correlation attacks.
          */
         fun computeTopicHash(publicKeyHex: String): String {
-            // Implementation will use actual SHA-256; placeholder shows intent
-            return "sha256_of_$publicKeyHex"  // Replace with real crypto in CryptoModule
+            val digest = MessageDigest.getInstance("SHA-256")
+            return digest.digest(publicKeyHex.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
         }
     }
 }
@@ -117,9 +119,29 @@ data class GroupDefinition(
      * Members sign this hash to approve group membership changes.
      */
     fun computeStateHash(): String {
-        // Canonical serialization → SHA-256
-        // Implementation in CryptoModule
-        return "hash_placeholder"
+        val canonical = buildString {
+            append(groupId)
+            append("|")
+            append(groupName)
+            append("|")
+            append(createdAtEpochMs)
+            append("|")
+            append(creatorMemberId)
+            append("|")
+            append(version)
+            append("|")
+            members.sortedBy { it.memberId }.forEach { member ->
+                append(member.memberId)
+                append(",")
+                append(member.ed25519PublicKey)
+                append(",")
+                append(member.x25519PublicKey)
+                append(";")
+            }
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+        return digest.digest(canonical.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
     }
 
     fun findMemberById(memberId: String): FamilyMember? =
