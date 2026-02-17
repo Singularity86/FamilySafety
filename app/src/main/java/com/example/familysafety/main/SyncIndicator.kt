@@ -1,4 +1,4 @@
-package com.example.familysafety.ui.main
+package com.example.familysafety.main
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*

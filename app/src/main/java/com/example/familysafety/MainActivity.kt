@@ -15,8 +15,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.example.familysafety.location.LocationService
-import com.example.familysafety.ui.onboarding.OnboardingNavigation
-import com.example.familysafety.ui.main.MainScreen
+import com.example.familysafety.onboarding.OnboardingNavigation
+import com.example.familysafety.main.MainScreen
 import com.example.familysafety.ui.theme.FamilySafetyTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject

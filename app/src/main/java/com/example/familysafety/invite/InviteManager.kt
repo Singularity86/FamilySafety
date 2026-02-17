@@ -103,8 +103,8 @@ class InviteManager @Inject constructor(
             
             // Verify the request is for our current group
             // NOTE: Adjust this based on your GroupStateManager's actual API
-            val currentGroup = groupStateManager?.state?.value
-            if (currentGroup?.groupDefinition?.groupId != joinRequest.groupId) {
+            val currentGroup = groupStateManager?.groupDefinition?.value
+            if (currentGroup?.groupId != joinRequest.groupId) {
                 Timber.w("Join request for different group: ${joinRequest.groupId}")
                 return
             }
@@ -130,10 +130,8 @@ class InviteManager @Inject constructor(
     suspend fun generateInviteCode(): Result<String> {
         return try {
             // NOTE: Adjust this based on your GroupStateManager's actual API
-            val state = groupStateManager?.state?.value
+            val groupDef = groupStateManager?.groupDefinition?.value
                 ?: return Result.failure(IllegalStateException("No group state available"))
-            
-            val groupDef = state.groupDefinition
             
             // Create invite payload with group info
             val inviteData = mapOf(
@@ -208,13 +206,16 @@ class InviteManager @Inject constructor(
             val newMember = FamilyMember(
                 memberId = request.requesterId,
                 displayName = request.displayName,
-                ed25519PublicKey = request.ed25519PublicKey,
-                x25519PublicKey = request.x25519PublicKey,
+                ed25519PublicKey = request.ed25519PublicKey.toHexString(),
+                x25519PublicKey = request.x25519PublicKey.toHexString(),
                 addedAtEpochMs = System.currentTimeMillis()
             )
             
             // Add member to group
-            stateManager.addMember(newMember)
+            // For now, use a placeholder signature - in production this should be properly signed
+            val inviterMemberId = currentMemberId ?: return Result.failure(IllegalStateException("No current member ID"))
+            val placeholderSignature = ByteArray(64) // TODO: Implement proper signing
+            stateManager.addMember(newMember, placeholderSignature, inviterMemberId)
             
             // Remove from pending requests
             _pendingJoinRequests.update { current ->
@@ -222,7 +223,10 @@ class InviteManager @Inject constructor(
             }
             
             // Notify via sync manager
-            groupSyncManager?.broadcastChange(ChangeType.MEMBER_ADDED)
+            val groupDef = stateManager.groupDefinition.value
+            if (groupDef != null) {
+                groupSyncManager?.broadcastGroupUpdate(groupDef, ChangeType.MEMBER_ADDED, newMember.memberId)
+            }
             
             Timber.i("Approved join request from ${request.displayName}")
             Result.success(Unit)

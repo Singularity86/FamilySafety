@@ -1,4 +1,4 @@
-package com.example.familysafety.ui.onboarding
+package com.example.familysafety.onboarding
 
 sealed class OnboardingRoute(val route: String) {
     data object Welcome : OnboardingRoute("welcome")

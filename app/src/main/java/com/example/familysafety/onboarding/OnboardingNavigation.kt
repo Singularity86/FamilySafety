@@ -1,4 +1,4 @@
-package com.example.familysafety.ui.onboarding
+package com.example.familysafety.onboarding
 
 import androidx.compose.runtime.Composable
 import androidx.hilt.navigation.compose.hiltViewModel
