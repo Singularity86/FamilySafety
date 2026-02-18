@@ -1,12 +1,13 @@
 package com.example.familysafety.main
 
-import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import com.google.android.gms.maps.model.CameraPosition
-import com.google.android.gms.maps.model.LatLng
-import com.google.maps.android.compose.*
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
 
 @Composable
 fun MapScreen(
@@ -17,36 +18,52 @@ fun MapScreen(
     val myLocation by viewModel.myLocation.collectAsState()
     val familyMembers by viewModel.familyMembers.collectAsState()
 
-    val mapCenter = myLocation?.let {
-        LatLng(it.latitude, it.longitude)
-    } ?: LatLng(37.7749, -122.4194)
+    val context = LocalContext.current
 
-    val cameraPositionState = rememberCameraPositionState {
-        position = CameraPosition.fromLatLngZoom(mapCenter, 12f)
+    val mapView = remember {
+        MapView(context).apply {
+            setTileSource(TileSourceFactory.MAPNIK)
+            setMultiTouchControls(true)
+            controller.setZoom(12.0)
+            controller.setCenter(GeoPoint(37.7749, -122.4194))
+        }
     }
 
+    // Honour the OSM tile library's lifecycle requirements.
+    DisposableEffect(Unit) {
+        mapView.onResume()
+        onDispose {
+            mapView.onPause()
+            mapView.onDetach()
+        }
+    }
+
+    // Pan to the user's location when it becomes available.
     LaunchedEffect(myLocation) {
         myLocation?.let {
-            cameraPositionState.position = CameraPosition.fromLatLngZoom(
-                LatLng(it.latitude, it.longitude),
-                15f
-            )
+            mapView.controller.animateTo(GeoPoint(it.latitude, it.longitude))
+            mapView.controller.setZoom(15.0)
         }
     }
 
-    GoogleMap(
-        modifier = modifier.fillMaxSize(),
-        cameraPositionState = cameraPositionState,
-        properties = MapProperties(isMyLocationEnabled = false)
-    ) {
+    // Rebuild markers whenever location data or member list changes.
+    LaunchedEffect(memberLocations, familyMembers) {
+        mapView.overlays.clear()
         memberLocations.forEach { (memberId, location) ->
             val member = familyMembers.find { it.memberId == memberId }
-            
-            Marker(
-                state = MarkerState(position = LatLng(location.latitude, location.longitude)),
-                title = member?.displayName ?: memberId,
+            val marker = Marker(mapView).apply {
+                position = GeoPoint(location.latitude, location.longitude)
+                title = member?.displayName ?: memberId
                 snippet = "Accuracy: ${location.accuracy}m"
-            )
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+            }
+            mapView.overlays.add(marker)
         }
+        mapView.invalidate()
     }
+
+    AndroidView(
+        factory = { mapView },
+        modifier = modifier
+    )
 }

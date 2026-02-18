@@ -3,6 +3,7 @@
 
     <!-- Permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
@@ -20,13 +21,6 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.FamilySafety">
         
-        <!-- Google Maps SDK requires this meta-data. Replace with a real key from
-             https://console.cloud.google.com/ before release. An empty/placeholder
-             value prevents the "API key not found" crash during development. -->
-        <meta-data
-            android:name="com.google.android.geo.API_KEY"
-            android:value="AIzaSyD-PLACEHOLDER-REPLACE-WITH-REAL-KEY" />
-
         <activity
             android:name=".MainActivity"
             android:exported="true"

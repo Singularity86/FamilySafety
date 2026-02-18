@@ -92,8 +92,9 @@ dependencies {
     
     // Location Services
     implementation("com.google.android.gms:play-services-location:21.0.1")
-    implementation("com.google.android.gms:play-services-maps:18.2.0")
-    implementation("com.google.maps.android:maps-compose:4.3.0")
+
+    // Map - OpenStreetMap via osmdroid (no API key required)
+    implementation("org.osmdroid:osmdroid-android:6.1.18")
     
     // MQTT - core client only; the Android service wrapper (org.eclipse.paho.android.service)
     // is incompatible with Android 12+ (AlarmPingSender uses PendingIntent without

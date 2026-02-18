@@ -40,6 +40,7 @@ class AndroidKeyStoreLocalKeyStore(
         private const val KEY_X25519_PUBLIC = "x25519_public"
         private const val KEY_INITIALIZED = "initialized"
         private const val KEY_ACCOUNT_INDEX = "account_index"
+        private const val KEY_MNEMONIC = "mnemonic"
     }
 
     private val sodium = LazySodiumAndroid(SodiumAndroid())
@@ -185,6 +186,31 @@ class AndroidKeyStoreLocalKeyStore(
         val hex = encryptedPrefs.getString(name, null)
             ?: throw IllegalStateException("Key $name not found in storage")
         return hex.hexToByteArray()
+    }
+
+    // =========================================================================
+    // Mnemonic Storage
+    // =========================================================================
+
+    /**
+     * Persist the BIP-39 recovery phrase alongside the derived keys so it can
+     * be shown to the user from the Settings screen.  The words are stored as a
+     * single space-separated string inside the same EncryptedSharedPreferences
+     * file that holds the signing and encryption keys.
+     */
+    fun storeMnemonic(words: List<String>) {
+        encryptedPrefs.edit()
+            .putString(KEY_MNEMONIC, words.joinToString(" "))
+            .apply()
+    }
+
+    /**
+     * Retrieve the previously stored recovery phrase, or null if it was never
+     * saved (e.g. the user set up the account before this feature was added).
+     */
+    fun getMnemonic(): List<String>? {
+        val raw = encryptedPrefs.getString(KEY_MNEMONIC, null) ?: return null
+        return raw.split(" ").filter { it.isNotBlank() }
     }
 
     // =========================================================================

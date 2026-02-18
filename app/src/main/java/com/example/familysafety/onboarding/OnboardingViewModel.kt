@@ -67,6 +67,8 @@ class OnboardingViewModel @Inject constructor(
             val keyStore = AndroidKeyStoreLocalKeyStore(context)
             // Use the keyStore's initializeFromSeed method which handles key derivation
             keyStore.initializeFromSeed(seed, accountIndex = 0)
+            // Persist the recovery phrase so it can be shown from Settings.
+            keyStore.storeMnemonic(_mnemonic.value)
 
             true
         } catch (e: Exception) {
