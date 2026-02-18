@@ -23,6 +23,13 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+        ndk {
+            // Include all ABIs shipped by lazysodium-android and JNA.
+            // arm64-v8a covers modern phones (S20 FE and most devices since ~2017).
+            // armeabi-v7a covers older 32-bit ARM phones.
+            // x86_64 covers emulators.
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     buildTypes {
