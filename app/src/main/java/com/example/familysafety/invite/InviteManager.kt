@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
-import org.eclipse.paho.android.service.MqttAndroidClient
 import org.eclipse.paho.client.mqttv3.*
 import timber.log.Timber
 import java.util.*
@@ -29,7 +28,7 @@ class InviteManager @Inject constructor(
     
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
-    private var mqttClient: MqttAndroidClient? = null
+    private var mqttClient: MqttAsyncClient? = null
     private var groupStateManager: GroupStateManager? = null
     private var groupSyncManager: GroupSyncManager? = null
     private var currentMemberId: String? = null
@@ -39,7 +38,7 @@ class InviteManager @Inject constructor(
     
     fun initialize(
         memberId: String,
-        mqttClient: MqttAndroidClient,
+        mqttClient: MqttAsyncClient,
         groupStateManager: GroupStateManager,
         groupSyncManager: GroupSyncManager
     ) {

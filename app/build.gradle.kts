@@ -95,10 +95,10 @@ dependencies {
     implementation("com.google.android.gms:play-services-maps:18.2.0")
     implementation("com.google.maps.android:maps-compose:4.3.0")
     
-    // MQTT
+    // MQTT - core client only; the Android service wrapper (org.eclipse.paho.android.service)
+    // is incompatible with Android 12+ (AlarmPingSender uses PendingIntent without
+    // FLAG_IMMUTABLE). MqttAsyncClient from the core library is used directly instead.
     implementation("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
-    implementation("org.eclipse.paho:org.eclipse.paho.android.service:1.1.1")
-    implementation("androidx.legacy:legacy-support-v4:1.0.0")
     
     // DataStore
     implementation("androidx.datastore:datastore-preferences:1.0.0")

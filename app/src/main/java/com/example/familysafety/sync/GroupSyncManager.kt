@@ -13,7 +13,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
-import org.eclipse.paho.android.service.MqttAndroidClient
 import org.eclipse.paho.client.mqttv3.*
 import timber.log.Timber
 import javax.inject.Inject
@@ -31,7 +30,7 @@ class GroupSyncManager @Inject constructor(
     
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
-    private var mqttClient: MqttAndroidClient? = null
+    private var mqttClient: MqttAsyncClient? = null
     private var groupStateManager: GroupStateManager? = null
     private var currentMemberId: String? = null
     
@@ -51,7 +50,7 @@ class GroupSyncManager @Inject constructor(
 
     fun initialize(
         memberId: String,
-        mqttClient: MqttAndroidClient,
+        mqttClient: MqttAsyncClient,
         groupStateManager: GroupStateManager
     ) {
         this.currentMemberId = memberId

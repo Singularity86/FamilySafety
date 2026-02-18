@@ -14,8 +14,8 @@ import com.example.familysafety.replication.ReplicationManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import org.eclipse.paho.android.service.MqttAndroidClient
 import org.eclipse.paho.client.mqttv3.*
+import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import timber.log.Timber
 import java.util.concurrent.ConcurrentLinkedQueue
 import javax.inject.Inject
@@ -28,7 +28,7 @@ class MqttTransport @Inject constructor(
     private val e2eeManager: E2EEManager,
     private val networkMonitor: NetworkMonitor
 ) {
-    private var mqttClient: MqttAndroidClient? = null
+    private var mqttClient: MqttAsyncClient? = null
     private var memberId: String? = null
     private var groupId: String? = null
     private var cryptoProvider: LazysodiumCryptoProvider? = null
@@ -154,10 +154,10 @@ class MqttTransport @Inject constructor(
             }
 
             val clientId = MqttConfig.generateClientId(memberIdParam)
-            mqttClient = MqttAndroidClient(
-                context,
+            mqttClient = MqttAsyncClient(
                 MqttConfig.BROKER_URL,
-                clientId
+                clientId,
+                MemoryPersistence()
             )
 
             setupCallbacks()

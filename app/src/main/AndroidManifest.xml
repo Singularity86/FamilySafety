@@ -43,9 +43,6 @@
             android:exported="false"
             android:foregroundServiceType="location" />
 
-        <service
-            android:name="org.eclipse.paho.android.service.MqttService"
-            android:exported="false" />
     </application>
 
 </manifest>
