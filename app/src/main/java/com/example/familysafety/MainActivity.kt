@@ -14,6 +14,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import com.example.familysafety.group.AndroidKeyStoreLocalKeyStore
 import com.example.familysafety.location.LocationService
 import com.example.familysafety.onboarding.OnboardingNavigation
 import com.example.familysafety.main.MainScreen
@@ -64,13 +65,21 @@ class MainActivity : ComponentActivity() {
                     } else {
                         OnboardingNavigation(
                             onOnboardingComplete = {
-                                // Restart the activity so Hilt rebuilds all singletons
-                                // (LocalMemberId, GroupStateManager, etc.) with the
-                                // now-initialized keys. Without a restart they would
-                                // retain the empty-string placeholder set at first launch.
-                                val intent = intent
-                                finish()
-                                startActivity(intent)
+                                // Force a full process restart so the Hilt SingletonComponent
+                                // is rebuilt from scratch with the now-initialized keys.
+                                // finish()+startActivity() is not enough — it reuses the
+                                // same process and the same stale singletons (LocalMemberId="",
+                                // GroupStateManager with empty member ID).
+                                val restartIntent = packageManager
+                                    .getLaunchIntentForPackage(packageName)!!
+                                    .apply {
+                                        addFlags(
+                                            Intent.FLAG_ACTIVITY_NEW_TASK or
+                                            Intent.FLAG_ACTIVITY_CLEAR_TASK
+                                        )
+                                    }
+                                startActivity(restartIntent)
+                                android.os.Process.killProcess(android.os.Process.myPid())
                             }
                         )
                     }
@@ -87,19 +96,23 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Check if user has completed onboarding by checking if keys exist
+     * Check if user has completed onboarding.
+     *
+     * Primary check: the "onboarding_complete" flag written by OnboardingViewModel
+     * after createFamily()/joinFamily() succeeds.
+     *
+     * Fallback: directly ask AndroidKeyStoreLocalKeyStore whether keys have been
+     * initialized, which handles the edge case where the pref was written but the
+     * app data was partially cleared.
      */
     private fun checkIfOnboarded(): Boolean {
         val prefs = getSharedPreferences("familysafety_prefs", MODE_PRIVATE)
-        return prefs.getBoolean("onboarding_complete", false) ||
-                // Check if keystore has keys
-                try {
-                    val keyStore = java.security.KeyStore.getInstance("AndroidKeyStore")
-                    keyStore.load(null)
-                    keyStore.containsAlias("familysafety_ed25519_private")
-                } catch (e: Exception) {
-                    false
-                }
+        if (prefs.getBoolean("onboarding_complete", false)) return true
+        return try {
+            AndroidKeyStoreLocalKeyStore(applicationContext).isInitialized()
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /**

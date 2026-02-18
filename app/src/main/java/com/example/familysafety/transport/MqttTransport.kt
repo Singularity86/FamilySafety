@@ -208,21 +208,20 @@ class MqttTransport @Inject constructor(
                     keepAliveInterval = MqttConfig.KEEP_ALIVE_INTERVAL
                     isAutomaticReconnect = false
                     
-                    val willMessage = memberId?.let {
-                        MqttMessage(
-                            createOfflineWillMessage(it).toByteArray()
+                    // Capture memberId as a local val so the compiler can smart-cast
+                    // it as non-null inside the lambda, eliminating the !! operator.
+                    memberId?.let { id ->
+                        val willMessage = MqttMessage(
+                            createOfflineWillMessage(id).toByteArray()
                         ).apply {
                             qos = MqttConfig.DEFAULT_QOS
                             isRetained = true
                         }
-                    }
-                    
-                    willMessage?.let { will ->
                         setWill(
-                            MqttConfig.getPresenceTopic(memberId!!),
-                            will.payload,
-                            will.qos,
-                            will.isRetained
+                            MqttConfig.getPresenceTopic(id),
+                            willMessage.payload,
+                            willMessage.qos,
+                            willMessage.isRetained
                         )
                     }
                 }

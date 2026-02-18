@@ -9,6 +9,7 @@ import com.example.familysafety.location.MemberLocation
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -49,10 +50,11 @@ class OfflineCache @Inject constructor(
 
     suspend fun getCachedGroupDefinition(): GroupDefinition? {
         return try {
-            val groupJson = context.offlineDataStore.data
-                .map { it[GROUP_DEFINITION_KEY] }
-                .first()
-            
+            val groupJson = withTimeoutOrNull(5_000) {
+                context.offlineDataStore.data
+                    .map { it[GROUP_DEFINITION_KEY] }
+                    .first()
+            }
             groupJson?.let { json.decodeFromString(it) }
         } catch (e: Exception) {
             Timber.e(e, "Failed to retrieve cached group definition")
@@ -74,10 +76,11 @@ class OfflineCache @Inject constructor(
 
     suspend fun getCachedLocations(): Map<String, MemberLocation> {
         return try {
-            val locationsJson = context.offlineDataStore.data
-                .map { it[LAST_LOCATIONS_KEY] }
-                .first()
-            
+            val locationsJson = withTimeoutOrNull(5_000) {
+                context.offlineDataStore.data
+                    .map { it[LAST_LOCATIONS_KEY] }
+                    .first()
+            }
             locationsJson?.let { json.decodeFromString(it) } ?: emptyMap()
         } catch (e: Exception) {
             Timber.e(e, "Failed to retrieve cached locations")
@@ -87,9 +90,11 @@ class OfflineCache @Inject constructor(
 
     suspend fun cachePendingAction(action: PendingAction) {
         try {
-            val actionsJson = context.offlineDataStore.data
-                .map { it[PENDING_ACTIONS_KEY] }
-                .first()
+            val actionsJson = withTimeoutOrNull(5_000) {
+                context.offlineDataStore.data
+                    .map { it[PENDING_ACTIONS_KEY] }
+                    .first()
+            }
             
             val actions = actionsJson?.let { 
                 json.decodeFromString<List<PendingAction>>(it)
@@ -110,9 +115,11 @@ class OfflineCache @Inject constructor(
 
     suspend fun getPendingActions(): List<PendingAction> {
         return try {
-            val actionsJson = context.offlineDataStore.data
-                .map { it[PENDING_ACTIONS_KEY] }
-                .first()
+            val actionsJson = withTimeoutOrNull(5_000) {
+                context.offlineDataStore.data
+                    .map { it[PENDING_ACTIONS_KEY] }
+                    .first()
+            }
             
             val actions = actionsJson?.let { 
                 json.decodeFromString<List<PendingAction>>(it)

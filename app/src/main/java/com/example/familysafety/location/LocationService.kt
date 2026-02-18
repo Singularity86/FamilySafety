@@ -89,6 +89,13 @@ class LocationService : Service() {
                 stopLocationUpdates()
                 stopSelf()
             }
+            else -> {
+                // Service was started via startForegroundService() without an explicit
+                // action (e.g. from MainActivity.startLocationService()). Android 8+
+                // requires startForeground() to be called within 5 seconds of
+                // startForegroundService(), or it throws ForegroundServiceDidNotStartInTimeException.
+                startForeground(NOTIFICATION_ID, createNotification())
+            }
         }
         return START_STICKY
     }

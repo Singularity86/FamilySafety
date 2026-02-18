@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -51,9 +52,11 @@ class AppInitializer @Inject constructor(
                 groupStateManager.initialize()
                 Timber.d("$TAG: GroupStateManager initialized")
 
-                // 2. Wait for group definition to be available
-                val groupDef = groupStateManager.groupDefinition.first { it != null }
-                    ?: throw IllegalStateException("No group definition after initialization")
+                // 2. Wait for group definition to be available (10 s timeout guards
+                //    against persistence failures leaving the coroutine hung forever)
+                val groupDef = withTimeoutOrNull(10_000) {
+                    groupStateManager.groupDefinition.first { it != null }
+                } ?: throw IllegalStateException("No group definition after initialization")
                 Timber.d("$TAG: Group loaded: ${groupDef.groupName}")
 
                 // 3. Initialize LocationRepository (loads history from database)
@@ -69,8 +72,9 @@ class AppInitializer @Inject constructor(
                 mqttTransport.setGroupId(groupDef.groupId)
 
                 // 6. Initialize MQTT connection
-                val localMember = groupStateManager.localMember.first { it != null }
-                    ?: throw IllegalStateException("No local member after initialization")
+                val localMember = withTimeoutOrNull(10_000) {
+                    groupStateManager.localMember.first { it != null }
+                } ?: throw IllegalStateException("No local member after initialization")
 
                 mqttTransport.initialize(
                     memberIdParam = localMember.memberId,

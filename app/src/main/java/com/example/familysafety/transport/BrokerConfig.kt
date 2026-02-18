@@ -35,7 +35,7 @@ object BrokerConfig {
     )
     
     fun getCurrentBroker(): BrokerSettings {
-        return brokers[currentEnvironment] ?: brokers[Environment.DEVELOPMENT]!!
+        return brokers[currentEnvironment] ?: brokers.values.first()
     }
     
     fun setEnvironment(env: Environment) {

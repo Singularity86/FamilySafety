@@ -325,15 +325,15 @@ class GroupSyncManager @Inject constructor(
             
             versionAcks[version] = mutableSetOf()
             
-            while (versionAcks[version]!!.size < memberCount - 1) {
+            while ((versionAcks[version]?.size ?: 0) < memberCount - 1) {
                 if (System.currentTimeMillis() - startTime > timeout) {
                     Timber.w("Timeout waiting for acks")
                     break
                 }
                 delay(500)
             }
-            
-            Timber.i("Received ${versionAcks[version]!!.size}/${memberCount - 1} acks")
+
+            Timber.i("Received ${versionAcks[version]?.size ?: 0}/${memberCount - 1} acks")
         }
     }
 
