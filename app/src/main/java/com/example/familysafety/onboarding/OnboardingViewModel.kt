@@ -144,6 +144,6 @@ class OnboardingViewModel @Inject constructor(
 
     private fun saveOnboardingComplete() {
         val prefs = context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putBoolean("onboarding_complete", true).apply()
+        prefs.edit().putBoolean("onboarding_complete", true).commit()
     }
 }
