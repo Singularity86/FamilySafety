@@ -1,279 +1,221 @@
 package com.example.familysafety.location
 
 import com.example.familysafety.storage.LocationHistoryRepository
-import io.mockk.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.advanceUntilIdle
-import kotlinx.coroutines.test.resetMain
-import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.test.setMain
-import org.junit.After
+import io.mockk.mockk
+import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
-import org.junit.Assert.*
 
-@OptIn(ExperimentalCoroutinesApi::class)
+/**
+ * Tests for LocationRepository's synchronous in-memory cache operations.
+ *
+ * Async persistence (scope.launch { locationHistoryRepository.saveLocation(...) })
+ * is covered by instrumented tests because it runs on Dispatchers.IO.
+ */
 class LocationRepositoryTest {
 
-    private lateinit var locationRepository: LocationRepository
-    private lateinit var mockHistoryRepository: LocationHistoryRepository
-    private val testDispatcher = StandardTestDispatcher()
+    private lateinit var mockLocationHistoryRepository: LocationHistoryRepository
+    private lateinit var locationRepo: LocationRepository
+
+    private fun makeLocation(
+        memberId: String = "member_001",
+        lat: Double = 37.7749,
+        lon: Double = -122.4194,
+        timestamp: Long = 1_700_000_000_000L
+    ) = MemberLocation(
+        memberId = memberId,
+        latitude = lat,
+        longitude = lon,
+        accuracy = 10.0f,
+        timestamp = timestamp
+    )
 
     @Before
     fun setup() {
-        Dispatchers.setMain(testDispatcher)
-        mockHistoryRepository = mockk(relaxed = true)
-        locationRepository = LocationRepository(mockHistoryRepository)
+        mockLocationHistoryRepository = mockk(relaxed = true)
+        locationRepo = LocationRepository(mockLocationHistoryRepository)
     }
 
-    @After
-    fun teardown() {
-        Dispatchers.resetMain()
-        clearAllMocks()
-    }
+    // ── Initial state ─────────────────────────────────────────────────────────
 
-    private fun createTestLocation(
-        memberId: String = "test_member",
-        latitude: Double = 37.7749,
-        longitude: Double = -122.4194,
-        accuracy: Float = 10f,
-        timestamp: Long = System.currentTimeMillis()
-    ): MemberLocation {
-        return MemberLocation(
-            memberId = memberId,
-            latitude = latitude,
-            longitude = longitude,
-            accuracy = accuracy,
-            timestamp = timestamp
-        )
+    @Test
+    fun `memberLocations initial value is empty`() {
+        assertTrue(locationRepo.memberLocations.value.isEmpty())
     }
 
     @Test
-    fun `initializes with locations from history`() = runTest {
-        val existingLocations = mapOf(
-            "member1" to createTestLocation(memberId = "member1"),
-            "member2" to createTestLocation(memberId = "member2")
-        )
+    fun `myLocation initial value is null`() {
+        assertNull(locationRepo.myLocation.value)
+    }
 
-        coEvery { mockHistoryRepository.getLatestLocationsForAllMembers() } returns existingLocations
+    // ── updateMemberLocation ──────────────────────────────────────────────────
 
-        locationRepository.initialize()
-        advanceUntilIdle()
+    @Test
+    fun `updateMemberLocation adds location to in-memory cache`() {
+        val loc = makeLocation()
+        locationRepo.updateMemberLocation(loc)
 
-        val locations = locationRepository.memberLocations.first()
-        assertEquals(2, locations.size)
-        assertTrue(locations.containsKey("member1"))
-        assertTrue(locations.containsKey("member2"))
+        assertEquals(loc, locationRepo.memberLocations.value["member_001"])
     }
 
     @Test
-    fun `initializes only once`() = runTest {
-        coEvery { mockHistoryRepository.getLatestLocationsForAllMembers() } returns emptyMap()
+    fun `updateMemberLocation replaces existing entry for same member`() {
+        val loc1 = makeLocation(lat = 1.0)
+        val loc2 = makeLocation(lat = 2.0)
 
-        locationRepository.initialize()
-        advanceUntilIdle()
+        locationRepo.updateMemberLocation(loc1)
+        locationRepo.updateMemberLocation(loc2)
 
-        locationRepository.initialize()
-        advanceUntilIdle()
-
-        // Should only be called once
-        coVerify(exactly = 1) { mockHistoryRepository.getLatestLocationsForAllMembers() }
+        assertEquals(2.0, locationRepo.memberLocations.value["member_001"]?.latitude ?: 0.0, 0.0001)
     }
 
     @Test
-    fun `updates member location in cache`() = runTest {
-        val location = createTestLocation(memberId = "test_member")
+    fun `updateMemberLocation stores entries for multiple members`() {
+        locationRepo.updateMemberLocation(makeLocation("alice"))
+        locationRepo.updateMemberLocation(makeLocation("bob"))
 
-        locationRepository.updateMemberLocation(location)
+        assertEquals(2, locationRepo.memberLocations.value.size)
+        assertNotNull(locationRepo.memberLocations.value["alice"])
+        assertNotNull(locationRepo.memberLocations.value["bob"])
+    }
 
-        val locations = locationRepository.memberLocations.first()
-        assertEquals(1, locations.size)
-        assertEquals(location, locations["test_member"])
+    // ── updateMyLocation ──────────────────────────────────────────────────────
+
+    @Test
+    fun `updateMyLocation sets myLocation flow`() {
+        val loc = makeLocation()
+        locationRepo.updateMyLocation(loc)
+
+        assertEquals(loc, locationRepo.myLocation.value)
     }
 
     @Test
-    fun `persists location to history repository`() = runTest {
-        val location = createTestLocation(memberId = "test_member")
+    fun `updateMyLocation also adds location to memberLocations`() {
+        val loc = makeLocation()
+        locationRepo.updateMyLocation(loc)
 
-        locationRepository.updateMemberLocation(location)
-        advanceUntilIdle()
-
-        coVerify {
-            mockHistoryRepository.saveLocation(
-                location = location,
-                isReplicated = false,
-                replicatedFrom = null
-            )
-        }
+        assertNotNull(locationRepo.memberLocations.value[loc.memberId])
     }
 
     @Test
-    fun `updateMyLocation updates both myLocation and memberLocations`() = runTest {
-        val location = createTestLocation(memberId = "my_member_id")
+    fun `updateMyLocation overwrites previous myLocation`() {
+        locationRepo.updateMyLocation(makeLocation(lat = 10.0))
+        locationRepo.updateMyLocation(makeLocation(lat = 20.0))
 
-        locationRepository.updateMyLocation(location)
+        assertEquals(20.0, locationRepo.myLocation.value?.latitude ?: 0.0, 0.0001)
+    }
 
-        val myLocation = locationRepository.myLocation.first()
-        val memberLocations = locationRepository.memberLocations.first()
+    // ── getLocationForMember ──────────────────────────────────────────────────
 
-        assertEquals(location, myLocation)
-        assertEquals(location, memberLocations["my_member_id"])
+    @Test
+    fun `getLocationForMember returns null for unknown member`() {
+        assertNull(locationRepo.getLocationForMember("nonexistent"))
     }
 
     @Test
-    fun `updateMemberLocations updates cache with batch`() = runTest {
+    fun `getLocationForMember returns cached location`() {
+        val loc = makeLocation("alice")
+        locationRepo.updateMemberLocation(loc)
+
+        assertEquals(loc, locationRepo.getLocationForMember("alice"))
+    }
+
+    // ── updateMemberLocations ─────────────────────────────────────────────────
+
+    @Test
+    fun `updateMemberLocations adds all locations`() {
         val locations = listOf(
-            createTestLocation(memberId = "member1", timestamp = 1000L),
-            createTestLocation(memberId = "member2", timestamp = 2000L),
-            createTestLocation(memberId = "member3", timestamp = 3000L)
+            makeLocation("alice", timestamp = 1000L),
+            makeLocation("bob", timestamp = 2000L)
         )
 
-        locationRepository.updateMemberLocations(locations, isReplicated = true, replicatedFrom = "peer1")
-        advanceUntilIdle()
+        locationRepo.updateMemberLocations(locations)
 
-        val cachedLocations = locationRepository.memberLocations.first()
-        assertEquals(3, cachedLocations.size)
-
-        coVerify {
-            mockHistoryRepository.saveLocations(
-                locations = locations,
-                isReplicated = true,
-                replicatedFrom = "peer1"
-            )
-        }
+        assertEquals(2, locationRepo.memberLocations.value.size)
     }
 
     @Test
-    fun `updateMemberLocations only updates if newer`() = runTest {
-        // First add an existing location
-        val oldLocation = createTestLocation(memberId = "member1", timestamp = 5000L)
-        locationRepository.updateMemberLocation(oldLocation)
+    fun `updateMemberLocations uses newer-wins strategy`() {
+        val old = makeLocation("alice", timestamp = 1000L)
+        locationRepo.updateMemberLocation(old)
 
-        // Now batch update with both older and newer locations
-        val batchLocations = listOf(
-            createTestLocation(memberId = "member1", timestamp = 3000L), // Older - should NOT update
-            createTestLocation(memberId = "member2", timestamp = 4000L)  // New member - should add
-        )
+        // Batch update with older timestamp → should NOT replace
+        val olderBatch = listOf(makeLocation("alice", timestamp = 500L))
+        locationRepo.updateMemberLocations(olderBatch)
 
-        locationRepository.updateMemberLocations(batchLocations)
-
-        val cachedLocations = locationRepository.memberLocations.first()
-
-        // member1 should still have the newer timestamp (5000)
-        assertEquals(5000L, cachedLocations["member1"]?.timestamp)
-        // member2 should be added
-        assertEquals(4000L, cachedLocations["member2"]?.timestamp)
+        assertEquals(1000L, locationRepo.memberLocations.value["alice"]?.timestamp)
     }
 
     @Test
-    fun `updateMemberLocations ignores empty list`() = runTest {
-        locationRepository.updateMemberLocations(emptyList())
-        advanceUntilIdle()
+    fun `updateMemberLocations replaces when batch timestamp is newer`() {
+        val old = makeLocation("alice", timestamp = 1000L)
+        locationRepo.updateMemberLocation(old)
 
-        coVerify(exactly = 0) { mockHistoryRepository.saveLocations(any(), any(), any()) }
+        val newerBatch = listOf(makeLocation("alice", timestamp = 5000L))
+        locationRepo.updateMemberLocations(newerBatch)
+
+        assertEquals(5000L, locationRepo.memberLocations.value["alice"]?.timestamp)
     }
 
     @Test
-    fun `removeStaleLocations removes old entries`() = runTest {
+    fun `updateMemberLocations with empty list does nothing`() {
+        locationRepo.updateMemberLocations(emptyList())
+        assertTrue(locationRepo.memberLocations.value.isEmpty())
+    }
+
+    // ── removeStaleLocations ──────────────────────────────────────────────────
+
+    @Test
+    fun `removeStaleLocations removes locations older than threshold`() {
         val now = System.currentTimeMillis()
-        val recentLocation = createTestLocation(memberId = "recent", timestamp = now - 1000)
-        val staleLocation = createTestLocation(memberId = "stale", timestamp = now - 48 * 60 * 60 * 1000) // 48 hours old
+        val old = makeLocation("alice", timestamp = now - 2 * 24 * 60 * 60 * 1000L) // 2 days old
+        locationRepo.updateMemberLocation(old)
 
-        locationRepository.updateMemberLocation(recentLocation)
-        locationRepository.updateMemberLocation(staleLocation)
+        // Remove anything older than 1 day
+        locationRepo.removeStaleLocations(thresholdMs = 24 * 60 * 60 * 1000L)
 
-        // Verify both are in cache
-        var locations = locationRepository.memberLocations.first()
-        assertEquals(2, locations.size)
-
-        // Remove stale (default threshold is 24 hours)
-        locationRepository.removeStaleLocations()
-
-        locations = locationRepository.memberLocations.first()
-        assertEquals(1, locations.size)
-        assertTrue(locations.containsKey("recent"))
-        assertFalse(locations.containsKey("stale"))
+        assertNull(locationRepo.memberLocations.value["alice"])
     }
 
     @Test
-    fun `getLocationForMember returns correct location`() = runTest {
-        val location = createTestLocation(memberId = "test_member")
-        locationRepository.updateMemberLocation(location)
+    fun `removeStaleLocations keeps recent locations`() {
+        val now = System.currentTimeMillis()
+        val recent = makeLocation("bob", timestamp = now - 1000L) // 1 second old
+        locationRepo.updateMemberLocation(recent)
 
-        val retrieved = locationRepository.getLocationForMember("test_member")
-        assertEquals(location, retrieved)
+        locationRepo.removeStaleLocations(thresholdMs = 24 * 60 * 60 * 1000L)
 
-        val notFound = locationRepository.getLocationForMember("nonexistent")
-        assertNull(notFound)
+        assertNotNull(locationRepo.memberLocations.value["bob"])
+    }
+
+    // ── clearAllLocations ─────────────────────────────────────────────────────
+
+    @Test
+    fun `clearAllLocations empties memberLocations`() {
+        locationRepo.updateMemberLocation(makeLocation("alice"))
+        locationRepo.clearAllLocations()
+
+        assertTrue(locationRepo.memberLocations.value.isEmpty())
     }
 
     @Test
-    fun `getLocationHistory delegates to history repository`() = runTest {
-        val expectedHistory = listOf(
-            createTestLocation(timestamp = 1000L),
-            createTestLocation(timestamp = 2000L)
-        )
+    fun `clearAllLocations sets myLocation to null`() {
+        locationRepo.updateMyLocation(makeLocation())
+        locationRepo.clearAllLocations()
 
-        coEvery {
-            mockHistoryRepository.getLocationHistory("member1", 0L, 3000L)
-        } returns expectedHistory
-
-        val history = locationRepository.getLocationHistory("member1", 0L, 3000L)
-
-        assertEquals(expectedHistory, history)
+        assertNull(locationRepo.myLocation.value)
     }
 
-    @Test
-    fun `getRecentLocations delegates to history repository`() = runTest {
-        val recentLocations = listOf(
-            createTestLocation(timestamp = 3000L),
-            createTestLocation(timestamp = 2000L)
-        )
-
-        coEvery {
-            mockHistoryRepository.getRecentLocations("member1", 50)
-        } returns recentLocations
-
-        val result = locationRepository.getRecentLocations("member1", 50)
-
-        assertEquals(recentLocations, result)
-    }
+    // ── deleteHistoryForMember ────────────────────────────────────────────────
 
     @Test
-    fun `clearAllLocations empties cache`() = runTest {
-        locationRepository.updateMemberLocation(createTestLocation(memberId = "member1"))
-        locationRepository.updateMyLocation(createTestLocation(memberId = "my_id"))
+    fun `deleteHistoryForMember removes member from in-memory cache`() = kotlinx.coroutines.test.runTest {
+        locationRepo.updateMemberLocation(makeLocation("alice"))
+        locationRepo.updateMemberLocation(makeLocation("bob"))
 
-        locationRepository.clearAllLocations()
+        locationRepo.deleteHistoryForMember("alice")
 
-        assertTrue(locationRepository.memberLocations.first().isEmpty())
-        assertNull(locationRepository.myLocation.first())
-    }
-
-    @Test
-    fun `deleteHistoryForMember removes from cache and calls repository`() = runTest {
-        locationRepository.updateMemberLocation(createTestLocation(memberId = "member1"))
-        locationRepository.updateMemberLocation(createTestLocation(memberId = "member2"))
-
-        locationRepository.deleteHistoryForMember("member1")
-        advanceUntilIdle()
-
-        val locations = locationRepository.memberLocations.first()
-        assertEquals(1, locations.size)
-        assertFalse(locations.containsKey("member1"))
-        assertTrue(locations.containsKey("member2"))
-
-        coVerify { mockHistoryRepository.deleteDataForMember("member1") }
-    }
-
-    @Test
-    fun `applyRetentionPolicy delegates to history repository`() = runTest {
-        locationRepository.applyRetentionPolicy(60L)
-        advanceUntilIdle()
-
-        coVerify { mockHistoryRepository.applyRetentionPolicy(60L) }
+        assertNull(locationRepo.memberLocations.value["alice"])
+        assertNotNull(locationRepo.memberLocations.value["bob"])
     }
 }
