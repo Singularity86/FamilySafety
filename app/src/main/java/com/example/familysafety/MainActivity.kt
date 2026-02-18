@@ -64,10 +64,13 @@ class MainActivity : ComponentActivity() {
                     } else {
                         OnboardingNavigation(
                             onOnboardingComplete = {
-                                isOnboarded = true
-                                // Initialize after onboarding completes
-                                appInitializer.initialize()
-                                checkAndRequestLocationPermissions()
+                                // Restart the activity so Hilt rebuilds all singletons
+                                // (LocalMemberId, GroupStateManager, etc.) with the
+                                // now-initialized keys. Without a restart they would
+                                // retain the empty-string placeholder set at first launch.
+                                val intent = intent
+                                finish()
+                                startActivity(intent)
                             }
                         )
                     }

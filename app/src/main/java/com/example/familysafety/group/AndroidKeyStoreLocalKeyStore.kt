@@ -8,6 +8,8 @@ import com.example.familysafety.R
 import com.goterl.lazysodium.LazySodiumAndroid
 import com.goterl.lazysodium.SodiumAndroid
 import com.goterl.lazysodium.interfaces.Sign
+import java.io.File
+import java.security.GeneralSecurityException
 import java.security.KeyStore
 
 /**
@@ -43,17 +45,51 @@ class AndroidKeyStoreLocalKeyStore(
     private val sodium = LazySodiumAndroid(SodiumAndroid())
 
     private val encryptedPrefs: SharedPreferences by lazy {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
+        createEncryptedPrefs()
+    }
 
-        EncryptedSharedPreferences.create(
-            context,
-            PREFS_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
+    private fun createEncryptedPrefs(): SharedPreferences {
+        return try {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            EncryptedSharedPreferences.create(
+                context,
+                PREFS_NAME,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (e: GeneralSecurityException) {
+            // Keyset is corrupted or encrypted with a key that no longer exists
+            // (common after reinstall with cloud-restored SharedPreferences, or key rotation).
+            // The stored keys are unrecoverable — wipe and start fresh so the app can launch.
+            clearCorruptedKeyStorage()
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            EncryptedSharedPreferences.create(
+                context,
+                PREFS_NAME,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        }
+    }
+
+    private fun clearCorruptedKeyStorage() {
+        // Clear the SharedPreferences XML file (holds the encrypted Tink keyset)
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().commit()
+        File(context.dataDir, "shared_prefs/$PREFS_NAME.xml").delete()
+
+        // Delete the Tink master key from AndroidKeyStore so a fresh one is generated
+        val keyStore = KeyStore.getInstance("AndroidKeyStore")
+        keyStore.load(null)
+        val tinkAlias = MasterKey.DEFAULT_MASTER_KEY_ALIAS
+        if (keyStore.containsAlias(tinkAlias)) {
+            keyStore.deleteEntry(tinkAlias)
+        }
     }
 
     // Cached keys (loaded once from encrypted storage)

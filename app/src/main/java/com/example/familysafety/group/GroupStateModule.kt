@@ -53,9 +53,16 @@ object GroupStateModule {
     fun provideLocalMemberId(
         cryptoProvider: CryptoProvider
     ): LocalMemberId {
-        val publicKey = cryptoProvider.getLocalEd25519PublicKey()
-        val memberId = cryptoProvider.deriveMemberId(publicKey)
-        return LocalMemberId(memberId)
+        return try {
+            val publicKey = cryptoProvider.getLocalEd25519PublicKey()
+            val memberId = cryptoProvider.deriveMemberId(publicKey)
+            LocalMemberId(memberId)
+        } catch (e: IllegalStateException) {
+            // Keys not yet initialized — user hasn't completed onboarding.
+            // The app will show onboarding; MainActivity restarts after completion
+            // so Hilt rebuilds this singleton with the real member ID.
+            LocalMemberId("")
+        }
     }
 
     /**
