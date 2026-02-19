@@ -47,8 +47,10 @@ fun MapScreen(
     }
 
     // Rebuild markers whenever location data or member list changes.
-    LaunchedEffect(memberLocations, familyMembers) {
+    LaunchedEffect(memberLocations, myLocation, familyMembers) {
         mapView.overlays.clear()
+
+        // Add other members' markers first (underneath "me")
         memberLocations.forEach { (memberId, location) ->
             val member = familyMembers.find { it.memberId == memberId }
             val marker = Marker(mapView).apply {
@@ -59,6 +61,18 @@ fun MapScreen(
             }
             mapView.overlays.add(marker)
         }
+
+        // Add a distinct "You" marker on top
+        myLocation?.let { loc ->
+            val meMarker = Marker(mapView).apply {
+                position = GeoPoint(loc.latitude, loc.longitude)
+                title = "You"
+                snippet = "Accuracy: ${loc.accuracy}m"
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+            }
+            mapView.overlays.add(meMarker)
+        }
+
         mapView.invalidate()
     }
 

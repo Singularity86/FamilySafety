@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.example.familysafety.group.AndroidKeyStoreLocalKeyStore
+import com.example.familysafety.group.LocalMemberId
 import com.example.familysafety.location.LocationService
 import com.example.familysafety.onboarding.OnboardingNavigation
 import com.example.familysafety.main.MainScreen
@@ -31,6 +32,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var appInitializer: AppInitializer
+
+    @Inject
+    lateinit var localMemberId: LocalMemberId
 
     private val locationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -141,14 +145,10 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Start the foreground location service
+     * Start the foreground location service with the local member ID so it
+     * can tag each location update correctly.
      */
     private fun startLocationService() {
-        val serviceIntent = Intent(this, LocationService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
+        LocationService.startTracking(this, localMemberId.value)
     }
 }
