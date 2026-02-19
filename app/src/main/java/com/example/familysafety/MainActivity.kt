@@ -3,7 +3,6 @@ package com.example.familysafety
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -120,25 +119,23 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Check and request location permissions
+     * Check and request foreground location permissions.
+     * Background location is NOT requested here — Android 11+ requires it to be
+     * requested separately after foreground is granted, and we don't need it for
+     * basic family location sharing.
      */
     private fun checkAndRequestLocationPermissions() {
-        val permissions = mutableListOf(
+        val permissions = arrayOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION
         )
-
-        // Add background location for Android 10+
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            permissions.add(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-        }
 
         val needsPermission = permissions.any {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
 
         if (needsPermission) {
-            locationPermissionLauncher.launch(permissions.toTypedArray())
+            locationPermissionLauncher.launch(permissions)
         } else {
             startLocationService()
         }

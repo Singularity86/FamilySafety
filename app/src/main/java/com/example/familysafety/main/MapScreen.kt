@@ -1,9 +1,24 @@
 package com.example.familysafety.main
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
@@ -17,11 +32,94 @@ fun MapScreen(
     viewModel: MainViewModel,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+
+    // --- Permission state ---
+    fun hasLocationPermission() =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+
+    var permissionGranted by remember { mutableStateOf(hasLocationPermission()) }
+    // Track whether the user has permanently denied (so we can send to Settings)
+    var permanentlyDenied by remember { mutableStateOf(false) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val granted = results[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                      results[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        permissionGranted = granted
+        if (!granted) {
+            permanentlyDenied = true
+        }
+    }
+
+    if (!permissionGranted) {
+        // Permission not granted — show explanation and request button
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.LocationOn,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Location Permission Required",
+                style = MaterialTheme.typography.titleLarge,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "FamilySafety needs access to your location to show you and your family members on the map.",
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            if (permanentlyDenied) {
+                Button(onClick = {
+                    // Send user to app settings so they can grant manually
+                    context.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", context.packageName, null)
+                        }
+                    )
+                }) {
+                    Text("Open App Settings")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(onClick = { permissionGranted = hasLocationPermission() }) {
+                    Text("I've granted it, refresh")
+                }
+            } else {
+                Button(onClick = {
+                    permissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        )
+                    )
+                }) {
+                    Text("Grant Location Permission")
+                }
+            }
+        }
+        return
+    }
+
+    // --- Map (permission granted) ---
     val memberLocations by viewModel.memberLocations.collectAsState()
     val familyMembers by viewModel.familyMembers.collectAsState()
     val focusedMemberId by viewModel.focusedMemberId.collectAsState()
-
-    val context = LocalContext.current
 
     val mapView = remember {
         MapView(context).apply {
@@ -32,12 +130,12 @@ fun MapScreen(
         }
     }
 
-    // osmdroid "my location" overlay — shows the standard blue dot + accuracy circle.
+    // Standard osmdroid "my location" overlay — blue dot + accuracy circle.
     val myLocationOverlay = remember {
         MyLocationNewOverlay(GpsMyLocationProvider(context), mapView)
     }
 
-    // Honour the OSM tile library's lifecycle requirements.
+    // Honour osmdroid lifecycle requirements.
     DisposableEffect(Unit) {
         mapView.overlays.add(myLocationOverlay)
         myLocationOverlay.enableMyLocation()
@@ -78,7 +176,6 @@ fun MapScreen(
 
     // Rebuild member markers whenever locations or member list changes.
     LaunchedEffect(memberLocations, familyMembers) {
-        // Remove old member markers but keep the MyLocationOverlay
         mapView.overlays.removeAll { it is Marker }
         memberLocations.forEach { (memberId, location) ->
             val member = familyMembers.find { it.memberId == memberId }
