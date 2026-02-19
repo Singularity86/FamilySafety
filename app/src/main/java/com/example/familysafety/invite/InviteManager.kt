@@ -210,11 +210,15 @@ class InviteManager @Inject constructor(
                 addedAtEpochMs = System.currentTimeMillis()
             )
             
-            // Add member to group
-            // For now, use a placeholder signature - in production this should be properly signed
+            // Add member to group — build the exact approval message GroupStateManager expects
+            // and sign it with the local Ed25519 key.
             val inviterMemberId = currentMemberId ?: return Result.failure(IllegalStateException("No current member ID"))
-            val placeholderSignature = ByteArray(64) // TODO: Implement proper signing
-            stateManager.addMember(newMember, placeholderSignature, inviterMemberId)
+            val currentGroup = stateManager.groupDefinition.value
+                ?: return Result.failure(IllegalStateException("No group definition"))
+            val approvalMessage = "ADD:${currentGroup.groupId}:${currentGroup.version}:${newMember.ed25519PublicKey}"
+                .toByteArray(Charsets.UTF_8)
+            val signature = cryptoProvider.signMessage(approvalMessage)
+            stateManager.addMember(newMember, signature, inviterMemberId)
             
             // Remove from pending requests
             _pendingJoinRequests.update { current ->

@@ -5,6 +5,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.familysafety.group.AndroidKeyStoreLocalKeyStore
 import com.example.familysafety.group.GroupStateManager
+import com.example.familysafety.group.LocalMemberId
+import com.example.familysafety.invite.InviteManager
+import com.example.familysafety.invite.JoinRequest
 import com.example.familysafety.location.LocationRepository
 import com.example.familysafety.location.MemberLocation
 import com.example.familysafety.group.FamilyMember
@@ -22,6 +25,8 @@ class MainViewModel @Inject constructor(
     private val groupStateManager: GroupStateManager,
     private val locationRepository: LocationRepository,
     val groupSyncManager: GroupSyncManager,
+    private val inviteManager: InviteManager,
+    private val localMemberId: LocalMemberId,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -57,6 +62,12 @@ class MainViewModel @Inject constructor(
             initialValue = ""
         )
 
+    // The local device's member ID — used by the UI to label "You"
+    val myMemberId: String get() = localMemberId.value
+
+    // Pending join requests from other users wanting to join this family
+    val pendingJoinRequests: StateFlow<List<JoinRequest>> = inviteManager.pendingJoinRequests
+
     init {
         viewModelScope.launch {
             locationRepository.removeStaleLocations()
@@ -68,6 +79,22 @@ class MainViewModel @Inject constructor(
             AndroidKeyStoreLocalKeyStore(context).getMnemonic() ?: emptyList()
         } catch (e: Exception) {
             emptyList()
+        }
+    }
+
+    suspend fun generateInviteCode(): Result<String> = withContext(Dispatchers.IO) {
+        inviteManager.generateInviteCode()
+    }
+
+    fun approveJoinRequest(request: JoinRequest) {
+        viewModelScope.launch {
+            inviteManager.approveJoinRequest(request)
+        }
+    }
+
+    fun rejectJoinRequest(request: JoinRequest) {
+        viewModelScope.launch {
+            inviteManager.rejectJoinRequest(request)
         }
     }
 }
