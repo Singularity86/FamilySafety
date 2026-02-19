@@ -127,7 +127,18 @@ fun MainScreen(
                 MapScreen(viewModel = viewModel)
             }
             composable(MainRoute.Members.route) {
-                MembersScreen(viewModel = viewModel)
+                MembersScreen(
+                    viewModel = viewModel,
+                    onNavigateToMap = {
+                        navController.navigate(MainRoute.Map.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                )
             }
             composable(MainRoute.Settings.route) {
                 SettingsScreen(viewModel = viewModel)

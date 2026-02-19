@@ -5,9 +5,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
+import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 
 @Composable
 fun MapScreen(
@@ -15,8 +18,8 @@ fun MapScreen(
     modifier: Modifier = Modifier
 ) {
     val memberLocations by viewModel.memberLocations.collectAsState()
-    val myLocation by viewModel.myLocation.collectAsState()
     val familyMembers by viewModel.familyMembers.collectAsState()
+    val focusedMemberId by viewModel.focusedMemberId.collectAsState()
 
     val context = LocalContext.current
 
@@ -29,50 +32,64 @@ fun MapScreen(
         }
     }
 
+    // osmdroid "my location" overlay — shows the standard blue dot + accuracy circle.
+    val myLocationOverlay = remember {
+        MyLocationNewOverlay(GpsMyLocationProvider(context), mapView)
+    }
+
     // Honour the OSM tile library's lifecycle requirements.
     DisposableEffect(Unit) {
+        mapView.overlays.add(myLocationOverlay)
+        myLocationOverlay.enableMyLocation()
         mapView.onResume()
         onDispose {
+            myLocationOverlay.disableMyLocation()
             mapView.onPause()
             mapView.onDetach()
         }
     }
 
-    // Pan to the user's location when it becomes available.
-    LaunchedEffect(myLocation) {
-        myLocation?.let {
-            mapView.controller.animateTo(GeoPoint(it.latitude, it.longitude))
-            mapView.controller.setZoom(15.0)
+    // Auto-center on the group the first time we have locations.
+    val hasCentered = remember { mutableStateOf(false) }
+    LaunchedEffect(memberLocations) {
+        if (hasCentered.value || memberLocations.isEmpty()) return@LaunchedEffect
+        val points = memberLocations.values.map { GeoPoint(it.latitude, it.longitude) }
+        when {
+            points.size == 1 -> {
+                mapView.controller.animateTo(points.first())
+                mapView.controller.setZoom(15.0)
+            }
+            points.size > 1 -> {
+                val box = BoundingBox.fromGeoPoints(points)
+                mapView.zoomToBoundingBox(box, true, 150)
+            }
         }
+        hasCentered.value = true
     }
 
-    // Rebuild markers whenever location data or member list changes.
-    LaunchedEffect(memberLocations, myLocation, familyMembers) {
-        mapView.overlays.clear()
+    // Pan to a specific member when selected from the Members tab.
+    LaunchedEffect(focusedMemberId) {
+        val id = focusedMemberId ?: return@LaunchedEffect
+        val loc = memberLocations[id] ?: return@LaunchedEffect
+        mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
+        mapView.controller.setZoom(16.0)
+        viewModel.clearFocus()
+    }
 
-        // Add other members' markers first (underneath "me")
+    // Rebuild member markers whenever locations or member list changes.
+    LaunchedEffect(memberLocations, familyMembers) {
+        // Remove old member markers but keep the MyLocationOverlay
+        mapView.overlays.removeAll { it is Marker }
         memberLocations.forEach { (memberId, location) ->
             val member = familyMembers.find { it.memberId == memberId }
             val marker = Marker(mapView).apply {
                 position = GeoPoint(location.latitude, location.longitude)
                 title = member?.displayName ?: memberId
-                snippet = "Accuracy: ${location.accuracy}m"
+                snippet = "Updated ${getTimeAgo(location.timestamp)} · ±${location.accuracy.toInt()}m"
                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
             }
             mapView.overlays.add(marker)
         }
-
-        // Add a distinct "You" marker on top
-        myLocation?.let { loc ->
-            val meMarker = Marker(mapView).apply {
-                position = GeoPoint(loc.latitude, loc.longitude)
-                title = "You"
-                snippet = "Accuracy: ${loc.accuracy}m"
-                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-            }
-            mapView.overlays.add(meMarker)
-        }
-
         mapView.invalidate()
     }
 
@@ -80,4 +97,14 @@ fun MapScreen(
         factory = { mapView },
         modifier = modifier
     )
+}
+
+private fun getTimeAgo(timestamp: Long): String {
+    val diff = System.currentTimeMillis() - timestamp
+    return when {
+        diff < 60_000 -> "just now"
+        diff < 3_600_000 -> "${diff / 60_000}m ago"
+        diff < 86_400_000 -> "${diff / 3_600_000}h ago"
+        else -> "${diff / 86_400_000}d ago"
+    }
 }

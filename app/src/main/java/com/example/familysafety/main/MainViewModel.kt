@@ -68,6 +68,18 @@ class MainViewModel @Inject constructor(
     // Pending join requests from other users wanting to join this family
     val pendingJoinRequests: StateFlow<List<JoinRequest>> = inviteManager.pendingJoinRequests
 
+    // Member the user wants to locate on the map (set from Members tab)
+    private val _focusedMemberId = MutableStateFlow<String?>(null)
+    val focusedMemberId: StateFlow<String?> = _focusedMemberId.asStateFlow()
+
+    fun focusOnMember(memberId: String) {
+        _focusedMemberId.value = memberId
+    }
+
+    fun clearFocus() {
+        _focusedMemberId.value = null
+    }
+
     init {
         viewModelScope.launch {
             locationRepository.removeStaleLocations()

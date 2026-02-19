@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun MembersScreen(
     viewModel: MainViewModel,
+    onNavigateToMap: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val familyMembers by viewModel.familyMembers.collectAsState()
@@ -110,7 +111,11 @@ fun MembersScreen(
                     MemberCard(
                         member = member,
                         location = memberLocations[member.memberId],
-                        isMe = member.memberId == myMemberId
+                        isMe = member.memberId == myMemberId,
+                        onShowOnMap = {
+                            viewModel.focusOnMember(member.memberId)
+                            onNavigateToMap()
+                        }
                     )
                 }
             }
@@ -218,10 +223,43 @@ private fun MemberCard(
     member: com.example.familysafety.group.FamilyMember,
     location: com.example.familysafety.location.MemberLocation?,
     isMe: Boolean,
+    onShowOnMap: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    var showDialog by remember { mutableStateOf(false) }
+
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(member.displayName) },
+            text = {
+                if (location != null) {
+                    Text("Last seen ${getTimeAgo(location.timestamp)}. Show their location on the map?")
+                } else {
+                    Text("No location available yet for ${member.displayName}.")
+                }
+            },
+            confirmButton = {
+                if (location != null) {
+                    TextButton(onClick = {
+                        showDialog = false
+                        onShowOnMap()
+                    }) {
+                        Text("Show on map")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) {
+                    Text("Close")
+                }
+            }
+        )
+    }
+
     Card(
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth(),
+        onClick = { showDialog = true }
     ) {
         Row(
             modifier = Modifier
