@@ -131,6 +131,7 @@ dependencies {
     // NanoHTTPD — lightweight embedded HTTP server for local avatar serving
     implementation("org.nanohttpd:nanohttpd:2.3.1")
 
+
     // Timber Logging
     implementation("com.jakewharton.timber:timber:5.0.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
