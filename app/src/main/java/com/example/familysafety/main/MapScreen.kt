@@ -151,18 +151,21 @@ fun MapScreen(
     val hasCentered = remember { mutableStateOf(false) }
     LaunchedEffect(memberLocations) {
         if (hasCentered.value || memberLocations.isEmpty()) return@LaunchedEffect
+        hasCentered.value = true
         val points = memberLocations.values.map { GeoPoint(it.latitude, it.longitude) }
-        when {
-            points.size == 1 -> {
-                mapView.controller.animateTo(points.first())
-                mapView.controller.setZoom(15.0)
-            }
-            points.size > 1 -> {
-                val box = BoundingBox.fromGeoPoints(points)
-                mapView.zoomToBoundingBox(box, true, 150)
+        // Use post() so the map is laid out (non-zero dimensions) before we try to center.
+        mapView.post {
+            when {
+                points.size == 1 -> {
+                    mapView.controller.animateTo(points.first())
+                    mapView.controller.setZoom(15.0)
+                }
+                points.size > 1 -> {
+                    val box = BoundingBox.fromGeoPoints(points)
+                    mapView.zoomToBoundingBox(box, true, 150)
+                }
             }
         }
-        hasCentered.value = true
     }
 
     // Pan to a specific member when selected from the Members tab.
