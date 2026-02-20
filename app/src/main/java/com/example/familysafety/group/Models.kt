@@ -59,7 +59,8 @@ data class FamilyMember(
     val ed25519PublicKey: String,
     val x25519PublicKey: String,
     val addedAtEpochMs: Long,
-    val addedByMemberId: String? = null
+    val addedByMemberId: String? = null,
+    val avatarHash: String? = null
 ) {
     /** MQTT topic for sending messages to this member: SHA-256(ed25519PubKey) */
 

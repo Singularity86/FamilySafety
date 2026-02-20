@@ -1,21 +1,28 @@
 package com.example.familysafety.main
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.familysafety.invite.JoinRequest
 import kotlinx.coroutines.launch
 
@@ -219,6 +226,40 @@ private fun JoinRequestCard(
 }
 
 @Composable
+private fun MemberAvatar(
+    displayName: String,
+    memberId: String,
+    size: Dp = 40.dp
+) {
+    val initials = displayName
+        .trim()
+        .split("\\s+".toRegex())
+        .filter { it.isNotEmpty() }
+        .take(2)
+        .joinToString("") { it.first().uppercaseChar().toString() }
+        .ifEmpty { "?" }
+
+    // Deterministic hue from memberId hash, full saturation/lightness for legibility.
+    val hue = (memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360
+    val bgColor = Color.hsl(hue.toFloat(), 0.55f, 0.45f)
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(bgColor)
+    ) {
+        Text(
+            text = initials,
+            color = Color.White,
+            fontSize = (size.value * 0.38f).sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+@Composable
 private fun MemberCard(
     member: com.example.familysafety.group.FamilyMember,
     location: com.example.familysafety.location.MemberLocation?,
@@ -272,10 +313,9 @@ private fun MemberCard(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.Default.Person,
-                    contentDescription = null,
-                    modifier = Modifier.size(40.dp)
+                MemberAvatar(
+                    displayName = member.displayName,
+                    memberId = member.memberId
                 )
 
                 Column {
@@ -320,7 +360,7 @@ private fun MemberCard(
 
             if (location != null) {
                 Icon(
-                    imageVector = Icons.Default.Person,
+                    imageVector = Icons.Default.LocationOn,
                     contentDescription = "Location available",
                     tint = MaterialTheme.colorScheme.primary
                 )
