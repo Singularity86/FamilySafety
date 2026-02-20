@@ -6,7 +6,9 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
@@ -20,6 +22,7 @@ fun JoinFamilyScreen(
 ) {
     var inviteCode by remember { mutableStateOf("") }
     var showScanner by remember { mutableStateOf(false) }
+    var joinFailed by remember { mutableStateOf(false) }
     val isLoading by viewModel.isLoading.collectAsState()
     val scope = rememberCoroutineScope()
 
@@ -91,12 +94,46 @@ fun JoinFamilyScreen(
 
             Spacer(modifier = Modifier.weight(1f))
 
+            if (isLoading) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
+                ) {
+                    Text(
+                        text = "Waiting for approval…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = "The family member who shared the code needs to approve your request in the app.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+
+            if (joinFailed) {
+                Text(
+                    text = "Request timed out or was rejected. Check the invite code and try again.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
             Button(
                 onClick = {
+                    joinFailed = false
                     scope.launch {
                         val joined = viewModel.joinFamily(inviteCode)
                         if (joined) {
                             onComplete()
+                        } else {
+                            joinFailed = true
                         }
                     }
                 },

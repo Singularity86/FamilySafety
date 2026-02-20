@@ -46,6 +46,14 @@ object MqttConfig {
         return "familysafe/$inviterMemberId/join_response/$requestId"
     }
 
+    /**
+     * Topic the inviter publishes to after approving a join request.
+     * The joiner subscribes to this topic and receives the full GroupDefinition.
+     */
+    fun getJoinApprovalTopic(joinerMemberId: String): String {
+        return "familysafe/$joinerMemberId/join_approval"
+    }
+
     // =========================================================================
     // REPLICATION TOPICS
     // =========================================================================

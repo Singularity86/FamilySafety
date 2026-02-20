@@ -2,8 +2,10 @@ package com.example.familysafety
 
 import com.example.familysafety.chat.ChatRepository
 import com.example.familysafety.group.GroupStateManager
+import com.example.familysafety.invite.InviteManager
 import com.example.familysafety.location.LocationRepository
 import com.example.familysafety.replication.ReplicationManager
+import com.example.familysafety.sync.GroupSyncManager
 import com.example.familysafety.transport.MqttTransport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,7 +27,9 @@ class AppInitializer @Inject constructor(
     private val locationRepository: LocationRepository,
     private val mqttTransport: MqttTransport,
     private val replicationManager: ReplicationManager,
-    private val chatRepository: ChatRepository
+    private val chatRepository: ChatRepository,
+    private val inviteManager: InviteManager,
+    private val groupSyncManager: GroupSyncManager
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var isInitialized = false
@@ -63,9 +67,11 @@ class AppInitializer @Inject constructor(
                 locationRepository.initialize()
                 Timber.d("$TAG: LocationRepository initialized")
 
-                // 4. Wire up MqttTransport with ReplicationManager and ChatRepository
+                // 4. Wire up MqttTransport with all dependent managers
                 mqttTransport.setReplicationManager(replicationManager)
                 mqttTransport.setChatRepository(chatRepository)
+                mqttTransport.setInviteManager(inviteManager)
+                inviteManager.setMqttTransport(mqttTransport)
                 Timber.d("$TAG: MQTT transport wired up")
 
                 // 5. Set group ID for group-level subscriptions
@@ -83,7 +89,11 @@ class AppInitializer @Inject constructor(
                 )
                 Timber.d("$TAG: MQTT transport initialized")
 
-                // 7. Apply retention policies
+                // 7. Initialize InviteManager (needs member ID + state refs)
+                inviteManager.initialize(localMember.memberId, groupStateManager, groupSyncManager)
+                Timber.d("$TAG: InviteManager initialized")
+
+                // 9. Apply retention policies
                 scope.launch {
                     try {
                         locationRepository.applyRetentionPolicy(30) // 30 days for locations

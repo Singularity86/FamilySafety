@@ -2,6 +2,7 @@ package com.example.familysafety.transport
 
 import android.content.Context
 import com.example.familysafety.chat.ChatRepository
+import com.example.familysafety.invite.InviteManager
 import com.example.familysafety.core.*
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.crypto.RecipientKeys
@@ -36,6 +37,7 @@ class MqttTransport @Inject constructor(
     // Late-initialized to avoid circular dependency
     private var replicationManager: ReplicationManager? = null
     private var chatRepository: ChatRepository? = null
+    private var inviteManager: InviteManager? = null
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -91,6 +93,15 @@ class MqttTransport @Inject constructor(
             publishRaw(topic, payload, qos)
         }
         Timber.d("ReplicationManager wired up to MqttTransport")
+    }
+
+    /**
+     * Wire up InviteManager for handling join requests.
+     * Must be called after construction to avoid circular dependency.
+     */
+    fun setInviteManager(manager: InviteManager) {
+        inviteManager = manager
+        Timber.d("InviteManager wired up to MqttTransport")
     }
 
     /**
@@ -366,6 +377,10 @@ class MqttTransport @Inject constructor(
 
             // Chat read topics
             topics.add(MqttConfig.getChatReadTopic(currentMemberId))
+            qosLevels.add(MqttConfig.DEFAULT_QOS)
+
+            // Join request topic - other members asking to join the group
+            topics.add(MqttConfig.getJoinRequestTopic(currentMemberId))
             qosLevels.add(MqttConfig.DEFAULT_QOS)
 
             // Replication request topic - peers asking us for data
@@ -653,6 +668,11 @@ class MqttTransport @Inject constructor(
                     if (senderId != null) {
                         replicationManager?.handleDataAvailabilityAnnouncement(payload, senderId)
                     }
+                }
+
+                // Join requests: familysafe/{inviterMemberId}/join_request
+                topic.endsWith("/join_request") -> {
+                    inviteManager?.handleIncomingJoinRequest(payload)
                 }
 
                 // Location updates: familysafe/{memberId}/location

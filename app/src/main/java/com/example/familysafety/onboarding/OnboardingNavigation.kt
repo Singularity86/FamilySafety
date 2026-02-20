@@ -17,8 +17,9 @@ fun OnboardingNavigation(
     val navController = rememberNavController()
     val viewModel: OnboardingViewModel = hiltViewModel()
 
-    // Track whether the user is on the restore path so EnterName can route correctly.
+    // Track which onboarding path is active so EnterName can route correctly.
     var isRestorePath by remember { mutableStateOf(false) }
+    var isJoinPath by remember { mutableStateOf(false) }
 
     NavHost(
         navController = navController,
@@ -28,14 +29,18 @@ fun OnboardingNavigation(
             WelcomeScreen(
                 onCreateNew = {
                     isRestorePath = false
+                    isJoinPath = false
                     navController.navigate(OnboardingRoute.GenerateMnemonic.route)
                 },
                 onRestore = {
                     isRestorePath = true
+                    isJoinPath = false
                     navController.navigate(OnboardingRoute.RestoreMnemonic.route)
                 },
                 onJoinExisting = {
-                    navController.navigate(OnboardingRoute.JoinFamily.route)
+                    // Joining requires keys — route through mnemonic generation first.
+                    isJoinPath = true
+                    navController.navigate(OnboardingRoute.GenerateMnemonic.route)
                 }
             )
         }
@@ -80,12 +85,10 @@ fun OnboardingNavigation(
             EnterNameScreen(
                 viewModel = viewModel,
                 onNext = {
-                    // Restore path skips CreateFamily — keys are already derived
-                    // from the mnemonic, no new group should be created.
-                    if (isRestorePath) {
-                        navController.navigate(OnboardingRoute.RestoreComplete.route)
-                    } else {
-                        navController.navigate(OnboardingRoute.CreateFamily.route)
+                    when {
+                        isJoinPath -> navController.navigate(OnboardingRoute.JoinFamily.route)
+                        isRestorePath -> navController.navigate(OnboardingRoute.RestoreComplete.route)
+                        else -> navController.navigate(OnboardingRoute.CreateFamily.route)
                     }
                 },
                 onBack = {
