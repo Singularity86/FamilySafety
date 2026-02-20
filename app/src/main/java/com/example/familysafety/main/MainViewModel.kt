@@ -1,8 +1,11 @@
 package com.example.familysafety.main
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.familysafety.avatar.AvatarRepository
 import com.example.familysafety.group.AndroidKeyStoreLocalKeyStore
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.group.LocalMemberId
@@ -27,6 +30,7 @@ class MainViewModel @Inject constructor(
     val groupSyncManager: GroupSyncManager,
     private val inviteManager: InviteManager,
     private val localMemberId: LocalMemberId,
+    private val avatarRepository: AvatarRepository,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -67,6 +71,21 @@ class MainViewModel @Inject constructor(
 
     // Pending join requests from other users wanting to join this family
     val pendingJoinRequests: StateFlow<List<JoinRequest>> = inviteManager.pendingJoinRequests
+
+    // Avatar bitmaps keyed by memberId — null means no avatar set
+    val memberAvatars: StateFlow<Map<String, Bitmap?>> = avatarRepository.memberAvatars
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyMap()
+        )
+
+    /** Replace the current user's avatar with the image at [uri]. */
+    fun setMyAvatar(uri: Uri) {
+        viewModelScope.launch {
+            avatarRepository.setMyAvatar(uri)
+        }
+    }
 
     // Member the user wants to locate on the map (set from Members tab)
     private val _focusedMemberId = MutableStateFlow<String?>(null)

@@ -3,6 +3,7 @@ package com.example.familysafety
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -46,6 +47,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Nearby Wi-Fi Devices permission — required for mDNS (NSD) on Android 13+.
+    // Silently ignored if denied; avatar sync via NSD simply won't work on LAN.
+    private val nearbyWifiLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* no-op: NSD start already wrapped in try-catch for SecurityException */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -62,6 +69,7 @@ class MainActivity : ComponentActivity() {
                         LaunchedEffect(Unit) {
                             appInitializer.initialize()
                             checkAndRequestLocationPermissions()
+                            requestNearbyWifiPermissionIfNeeded()
                         }
 
                         MainScreen()
@@ -138,6 +146,19 @@ class MainActivity : ComponentActivity() {
             locationPermissionLauncher.launch(permissions)
         } else {
             startLocationService()
+        }
+    }
+
+    /**
+     * Request NEARBY_WIFI_DEVICES on Android 13+ for mDNS-based local avatar sync.
+     * This is a best-effort request; denial is handled gracefully in AvatarRepository.
+     */
+    private fun requestNearbyWifiPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val perm = Manifest.permission.NEARBY_WIFI_DEVICES
+            if (ContextCompat.checkSelfPermission(this, perm) != PackageManager.PERMISSION_GRANTED) {
+                nearbyWifiLauncher.launch(perm)
+            }
         }
     }
 

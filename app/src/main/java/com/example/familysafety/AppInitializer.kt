@@ -1,5 +1,6 @@
 package com.example.familysafety
 
+import com.example.familysafety.avatar.AvatarRepository
 import com.example.familysafety.chat.ChatRepository
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.invite.InviteManager
@@ -29,7 +30,8 @@ class AppInitializer @Inject constructor(
     private val replicationManager: ReplicationManager,
     private val chatRepository: ChatRepository,
     private val inviteManager: InviteManager,
-    private val groupSyncManager: GroupSyncManager
+    private val groupSyncManager: GroupSyncManager,
+    private val avatarRepository: AvatarRepository
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var isInitialized = false
@@ -93,6 +95,10 @@ class AppInitializer @Inject constructor(
                 inviteManager.initialize(localMember.memberId, groupStateManager, groupSyncManager)
                 Timber.d("$TAG: InviteManager initialized")
 
+                // 8. Initialize avatar sync (HTTP server + mDNS)
+                avatarRepository.initialize()
+                Timber.d("$TAG: AvatarRepository initialized")
+
                 // 9. Apply retention policies
                 scope.launch {
                     try {
@@ -137,6 +143,7 @@ class AppInitializer @Inject constructor(
      */
     fun cleanup() {
         mqttTransport.cleanup()
+        avatarRepository.cleanup()
         isInitialized = false
         Timber.d("$TAG: Cleanup complete")
     }

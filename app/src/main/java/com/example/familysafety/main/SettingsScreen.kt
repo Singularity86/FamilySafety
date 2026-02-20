@@ -1,7 +1,12 @@
 package com.example.familysafety.main
 
+import android.graphics.Bitmap
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -9,8 +14,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
@@ -20,7 +27,17 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val groupName by viewModel.groupName.collectAsState()
+    val memberAvatars by viewModel.memberAvatars.collectAsState()
+    val myAvatar: Bitmap? = memberAvatars[viewModel.myMemberId]
+    val myMemberId = viewModel.myMemberId
     val scope = rememberCoroutineScope()
+
+    // Gallery picker launcher
+    val galleryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let { viewModel.setMyAvatar(it) }
+    }
 
     // Recovery phrase dialog state
     var showWarningDialog by remember { mutableStateOf(false) }
@@ -37,6 +54,45 @@ fun SettingsScreen(
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.padding(bottom = 24.dp)
         )
+
+        // Avatar card
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .padding(16.dp)
+                    .fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Profile Photo",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = if (myAvatar != null) "Tap to change" else "Tap to set a photo",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                // Reuse MemberAvatar composable via a wrapper Box
+                val myDisplayName by remember {
+                    derivedStateOf {
+                        viewModel.familyMembers.value
+                            .find { it.memberId == myMemberId }?.displayName ?: "Me"
+                    }
+                }
+                MemberAvatarClickable(
+                    displayName = myDisplayName,
+                    memberId = myMemberId,
+                    bitmap = myAvatar,
+                    size = 56.dp,
+                    onClick = { galleryLauncher.launch("image/*") }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -246,4 +302,23 @@ fun SettingsScreen(
             }
         )
     }
+}
+
+@Composable
+private fun MemberAvatarClickable(
+    displayName: String,
+    memberId: String,
+    bitmap: Bitmap?,
+    size: Dp,
+    onClick: () -> Unit
+) {
+    MemberAvatar(
+        displayName = displayName,
+        memberId = memberId,
+        bitmap = bitmap,
+        size = size,
+        modifier = Modifier
+            .clip(CircleShape)
+            .clickable(onClick = onClick)
+    )
 }

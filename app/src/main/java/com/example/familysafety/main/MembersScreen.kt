@@ -1,5 +1,7 @@
 package com.example.familysafety.main
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,6 +18,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -35,6 +39,7 @@ fun MembersScreen(
     val familyMembers by viewModel.familyMembers.collectAsState()
     val memberLocations by viewModel.memberLocations.collectAsState()
     val pendingRequests by viewModel.pendingJoinRequests.collectAsState()
+    val memberAvatars by viewModel.memberAvatars.collectAsState()
     val myMemberId = viewModel.myMemberId
 
     val scope = rememberCoroutineScope()
@@ -118,6 +123,7 @@ fun MembersScreen(
                     MemberCard(
                         member = member,
                         location = memberLocations[member.memberId],
+                        avatar = memberAvatars[member.memberId],
                         isMe = member.memberId == myMemberId,
                         onShowOnMap = {
                             viewModel.focusOnMember(member.memberId)
@@ -226,11 +232,26 @@ private fun JoinRequestCard(
 }
 
 @Composable
-private fun MemberAvatar(
+internal fun MemberAvatar(
     displayName: String,
     memberId: String,
-    size: Dp = 40.dp
+    bitmap: Bitmap? = null,
+    size: Dp = 40.dp,
+    modifier: Modifier = Modifier
 ) {
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = displayName,
+            contentScale = ContentScale.Crop,
+            modifier = modifier
+                .size(size)
+                .clip(CircleShape)
+        )
+        return
+    }
+
+    // Initials fallback
     val initials = displayName
         .trim()
         .split("\\s+".toRegex())
@@ -239,13 +260,12 @@ private fun MemberAvatar(
         .joinToString("") { it.first().uppercaseChar().toString() }
         .ifEmpty { "?" }
 
-    // Deterministic hue from memberId hash, full saturation/lightness for legibility.
     val hue = (memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360
     val bgColor = Color.hsl(hue.toFloat(), 0.55f, 0.45f)
 
     Box(
         contentAlignment = Alignment.Center,
-        modifier = Modifier
+        modifier = modifier
             .size(size)
             .clip(CircleShape)
             .background(bgColor)
@@ -263,6 +283,7 @@ private fun MemberAvatar(
 private fun MemberCard(
     member: com.example.familysafety.group.FamilyMember,
     location: com.example.familysafety.location.MemberLocation?,
+    avatar: Bitmap? = null,
     isMe: Boolean,
     onShowOnMap: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -315,7 +336,8 @@ private fun MemberCard(
             ) {
                 MemberAvatar(
                     displayName = member.displayName,
-                    memberId = member.memberId
+                    memberId = member.memberId,
+                    bitmap = avatar
                 )
 
                 Column {
