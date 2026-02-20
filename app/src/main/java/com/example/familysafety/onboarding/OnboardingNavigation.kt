@@ -1,6 +1,10 @@
 package com.example.familysafety.onboarding
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -13,6 +17,9 @@ fun OnboardingNavigation(
     val navController = rememberNavController()
     val viewModel: OnboardingViewModel = hiltViewModel()
 
+    // Track whether the user is on the restore path so EnterName can route correctly.
+    var isRestorePath by remember { mutableStateOf(false) }
+
     NavHost(
         navController = navController,
         startDestination = OnboardingRoute.Welcome.route
@@ -20,9 +27,11 @@ fun OnboardingNavigation(
         composable(OnboardingRoute.Welcome.route) {
             WelcomeScreen(
                 onCreateNew = {
+                    isRestorePath = false
                     navController.navigate(OnboardingRoute.GenerateMnemonic.route)
                 },
                 onRestore = {
+                    isRestorePath = true
                     navController.navigate(OnboardingRoute.RestoreMnemonic.route)
                 },
                 onJoinExisting = {
@@ -71,11 +80,24 @@ fun OnboardingNavigation(
             EnterNameScreen(
                 viewModel = viewModel,
                 onNext = {
-                    navController.navigate(OnboardingRoute.CreateFamily.route)
+                    // Restore path skips CreateFamily — keys are already derived
+                    // from the mnemonic, no new group should be created.
+                    if (isRestorePath) {
+                        navController.navigate(OnboardingRoute.RestoreComplete.route)
+                    } else {
+                        navController.navigate(OnboardingRoute.CreateFamily.route)
+                    }
                 },
                 onBack = {
                     navController.popBackStack()
                 }
+            )
+        }
+
+        composable(OnboardingRoute.RestoreComplete.route) {
+            RestoreCompleteScreen(
+                viewModel = viewModel,
+                onComplete = onOnboardingComplete
             )
         }
 

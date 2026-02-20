@@ -144,6 +144,27 @@ class OnboardingViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Restore an existing account from a mnemonic phrase.
+     * Derives the same keys (and therefore the same member ID) as the original
+     * account. Does NOT create a new group — the group state will sync from
+     * other online family members via MQTT after the main screen loads.
+     */
+    suspend fun restoreAccount(): Boolean {
+        return try {
+            _isLoading.value = true
+            val success = initializeKeys()
+            if (success) {
+                saveOnboardingComplete()
+            }
+            success
+        } catch (e: Exception) {
+            false
+        } finally {
+            _isLoading.value = false
+        }
+    }
+
     private fun saveOnboardingComplete() {
         val prefs = context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)
         prefs.edit().putBoolean("onboarding_complete", true).commit()
