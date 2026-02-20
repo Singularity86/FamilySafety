@@ -3,6 +3,12 @@ package com.example.familysafety.main
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Typeface
+import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -19,6 +25,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
@@ -42,7 +49,6 @@ fun MapScreen(
                 PackageManager.PERMISSION_GRANTED
 
     var permissionGranted by remember { mutableStateOf(hasLocationPermission()) }
-    // Track whether the user has permanently denied (so we can send to Settings)
     var permanentlyDenied by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -57,7 +63,6 @@ fun MapScreen(
     }
 
     if (!permissionGranted) {
-        // Permission not granted — show explanation and request button
         Column(
             modifier = modifier
                 .fillMaxSize()
@@ -87,7 +92,6 @@ fun MapScreen(
             Spacer(modifier = Modifier.height(24.dp))
             if (permanentlyDenied) {
                 Button(onClick = {
-                    // Send user to app settings so they can grant manually
                     context.startActivity(
                         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                             data = Uri.fromParts("package", context.packageName, null)
@@ -120,6 +124,11 @@ fun MapScreen(
     val memberLocations by viewModel.memberLocations.collectAsState()
     val familyMembers by viewModel.familyMembers.collectAsState()
     val focusedMemberId by viewModel.focusedMemberId.collectAsState()
+    val memberAvatars by viewModel.memberAvatars.collectAsState()
+
+    val density = context.resources.displayMetrics.density
+    val markerSizePx = (44 * density).toInt()
+    val dotSizePx = (18 * density).toInt()
 
     val mapView = remember {
         MapView(context).apply {
@@ -130,12 +139,15 @@ fun MapScreen(
         }
     }
 
-    // Standard osmdroid "my location" overlay — blue dot + accuracy circle.
+    // Blue dot for own location — replaces the default person icon.
     val myLocationOverlay = remember {
-        MyLocationNewOverlay(GpsMyLocationProvider(context), mapView)
+        val dot = blueDotBitmap(dotSizePx)
+        MyLocationNewOverlay(GpsMyLocationProvider(context), mapView).apply {
+            setPersonIcon(dot)
+            setPersonHotspot(dot.width / 2f, dot.height / 2f)
+        }
     }
 
-    // Honour osmdroid lifecycle requirements.
     DisposableEffect(Unit) {
         mapView.overlays.add(myLocationOverlay)
         myLocationOverlay.enableMyLocation()
@@ -153,7 +165,6 @@ fun MapScreen(
         if (hasCentered.value || memberLocations.isEmpty()) return@LaunchedEffect
         hasCentered.value = true
         val points = memberLocations.values.map { GeoPoint(it.latitude, it.longitude) }
-        // Use post() so the map is laid out (non-zero dimensions) before we try to center.
         mapView.post {
             when {
                 points.size == 1 -> {
@@ -177,16 +188,24 @@ fun MapScreen(
         viewModel.clearFocus()
     }
 
-    // Rebuild member markers whenever locations or member list changes.
-    LaunchedEffect(memberLocations, familyMembers) {
+    // Rebuild member markers whenever locations, members, or avatars change.
+    LaunchedEffect(memberLocations, familyMembers, memberAvatars) {
         mapView.overlays.removeAll { it is Marker }
         memberLocations.forEach { (memberId, location) ->
             val member = familyMembers.find { it.memberId == memberId }
+            val avatar = memberAvatars[memberId]
+            val bmp = memberMarkerBitmap(
+                displayName = member?.displayName ?: "?",
+                memberId = memberId,
+                avatar = avatar,
+                sizePx = markerSizePx
+            )
             val marker = Marker(mapView).apply {
                 position = GeoPoint(location.latitude, location.longitude)
                 title = member?.displayName ?: memberId
                 snippet = "Updated ${getTimeAgo(location.timestamp)} · ±${location.accuracy.toInt()}m"
-                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                icon = BitmapDrawable(context.resources, bmp)
             }
             mapView.overlays.add(marker)
         }
@@ -197,6 +216,84 @@ fun MapScreen(
         factory = { mapView },
         modifier = modifier
     )
+}
+
+/** Small blue dot used for the device's own GPS location. */
+private fun blueDotBitmap(sizePx: Int): Bitmap {
+    val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    val r = sizePx / 2f
+    // White ring
+    paint.color = Color.WHITE
+    canvas.drawCircle(r, r, r, paint)
+    // Blue fill
+    paint.color = Color.parseColor("#4A8FE7")
+    canvas.drawCircle(r, r, r * 0.62f, paint)
+    return bmp
+}
+
+/**
+ * Circular marker bitmap matching the Members tab avatar style:
+ * photo if available, otherwise coloured initials circle.
+ */
+private fun memberMarkerBitmap(
+    displayName: String,
+    memberId: String,
+    avatar: Bitmap?,
+    sizePx: Int
+): Bitmap {
+    val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    val r = sizePx / 2f
+    val border = (sizePx * 0.09f).coerceAtLeast(3f)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    if (avatar != null) {
+        // White border
+        paint.color = Color.WHITE
+        canvas.drawCircle(r, r, r, paint)
+        // Scale avatar into inner circle
+        val inner = (r - border).toInt()
+        val scaled = Bitmap.createScaledBitmap(avatar, inner * 2, inner * 2, true)
+        val shader = android.graphics.BitmapShader(
+            scaled,
+            android.graphics.Shader.TileMode.CLAMP,
+            android.graphics.Shader.TileMode.CLAMP
+        )
+        paint.shader = shader
+        canvas.save()
+        canvas.translate(border, border)
+        canvas.drawCircle(inner.toFloat(), inner.toFloat(), inner.toFloat(), paint)
+        canvas.restore()
+        paint.shader = null
+    } else {
+        val initials = displayName.trim()
+            .split("\\s+".toRegex())
+            .filter { it.isNotEmpty() }
+            .take(2)
+            .joinToString("") { it.first().uppercaseChar().toString() }
+            .ifEmpty { "?" }
+
+        // Same colour logic as MemberAvatar composable
+        val hue = (memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360
+        val bgColor = ColorUtils.HSLToColor(floatArrayOf(hue.toFloat(), 0.55f, 0.45f))
+
+        // White border
+        paint.color = Color.WHITE
+        canvas.drawCircle(r, r, r, paint)
+        // Coloured fill
+        paint.color = bgColor
+        canvas.drawCircle(r, r, r - border, paint)
+        // Initials text
+        paint.color = Color.WHITE
+        paint.textSize = sizePx * 0.36f
+        paint.textAlign = Paint.Align.CENTER
+        paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        val textY = r - (paint.descent() + paint.ascent()) / 2f
+        canvas.drawText(initials, r, textY, paint)
+    }
+    return bmp
 }
 
 private fun getTimeAgo(timestamp: Long): String {
