@@ -127,8 +127,8 @@ class LocationService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("FamilySafety")
-            .setContentText("Sharing location with family")
+            .setContentTitle("FamilySafety — Location active")
+            .setContentText("Required for location sharing to work. Tap to open.")
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
