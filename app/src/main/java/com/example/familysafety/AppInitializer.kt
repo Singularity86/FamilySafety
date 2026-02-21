@@ -11,6 +11,8 @@ import com.example.familysafety.transport.MqttTransport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -112,6 +114,22 @@ class AppInitializer @Inject constructor(
 
                 isInitialized = true
                 Timber.i("$TAG: Initialization complete")
+
+                // Watch for membership changes (new members added/removed) and
+                // update MQTT subscriptions + encryption keys automatically.
+                scope.launch {
+                    groupStateManager.groupDefinition
+                        .filterNotNull()
+                        .distinctUntilChangedBy { it.members }
+                        .collect { updatedGroup ->
+                            try {
+                                mqttTransport.updateFamilyMembers(updatedGroup.members.toList())
+                                Timber.d("$TAG: Updated MQTT members after group change")
+                            } catch (e: Exception) {
+                                Timber.e(e, "$TAG: Failed to update MQTT members")
+                            }
+                        }
+                }
 
             } catch (e: Exception) {
                 Timber.e(e, "$TAG: Initialization failed")

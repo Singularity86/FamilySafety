@@ -460,63 +460,62 @@ class MqttTransport @Inject constructor(
         withContext(Dispatchers.IO) {
             val currentMemberId = memberId ?: throw GroupStateException.NotInitialized()
             val topic = MqttConfig.getLocationTopic(currentMemberId)
-            
             val messageJson = MessageProtocol.encodeLocationUpdate(location)
-            
-            val encryptedMessage = try {
-                val firstRecipient = familyMemberKeys.entries.firstOrNull()
-                if (firstRecipient != null) {
-                    e2eeManager.encryptMessage(
-                        plaintext = messageJson,
-                        recipientMemberId = firstRecipient.key,
-                        recipientX25519PublicKey = firstRecipient.value.x25519PublicKeyBytes()
-                    )
-                } else {
-                    messageJson
-                }
-            } catch (e: Exception) {
-                Timber.e(e, "Encryption failed")
-                throw CryptoException.EncryptionFailed(e.message ?: "Unknown error")
-            }
-            
-            val payload = encryptedMessage.toByteArray()
-            
-            if (_connectionState.value != ConnectionState.Connected) {
-                Timber.w("Not connected, queueing message")
-                queueMessage(topic, payload, MqttConfig.DEFAULT_QOS)
+
+            if (familyMemberKeys.isEmpty()) {
+                Timber.d("No recipients yet, skipping location publish")
                 return@withContext
             }
-            
-            val publishResult = ErrorHandler.withRetry(
-                maxAttempts = 3,
-                initialDelayMs = 500,
-                onError = { e, attempt ->
-                    Timber.w(e, "Publish attempt $attempt failed")
-                }
-            ) {
-                suspendCancellableCoroutine { continuation ->
-                    val message = MqttMessage(payload).apply {
-                        qos = MqttConfig.DEFAULT_QOS
-                        isRetained = false
-                    }
-                    
-                    mqttClient?.publish(topic, message, null, object : IMqttActionListener {
-                        override fun onSuccess(asyncActionToken: IMqttToken?) {
-                            Timber.d("Published encrypted location update")
-                            continuation.resume(Unit) {}
-                        }
 
-                        override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
-                            val error = exception ?: Exception("Publish failed")
-                            continuation.resumeWith(Result.failure(error))
-                        }
-                    })
+            // Encrypt separately for each recipient so every member can decrypt.
+            // NaCl box uses per-pair shared secrets, so one ciphertext cannot be
+            // read by multiple recipients — we publish one copy per member.
+            familyMemberKeys.forEach { (recipientId, recipientKeys) ->
+                val encryptedMessage = try {
+                    e2eeManager.encryptMessage(
+                        plaintext = messageJson,
+                        recipientMemberId = recipientId,
+                        recipientX25519PublicKey = recipientKeys.x25519PublicKeyBytes()
+                    )
+                } catch (e: Exception) {
+                    Timber.e(e, "Encryption failed for $recipientId")
+                    return@forEach
                 }
-            }
-            
-            if (publishResult.isFailure) {
-                Timber.w("Publish failed after retries, queueing")
-                queueMessage(topic, payload, MqttConfig.DEFAULT_QOS)
+
+                val payload = encryptedMessage.toByteArray()
+
+                if (_connectionState.value != ConnectionState.Connected) {
+                    queueMessage(topic, payload, MqttConfig.DEFAULT_QOS)
+                    return@forEach
+                }
+
+                val publishResult = ErrorHandler.withRetry(
+                    maxAttempts = 3,
+                    initialDelayMs = 500,
+                    onError = { e, attempt ->
+                        Timber.w(e, "Publish attempt $attempt failed for $recipientId")
+                    }
+                ) {
+                    suspendCancellableCoroutine { continuation ->
+                        val message = MqttMessage(payload).apply {
+                            qos = MqttConfig.DEFAULT_QOS
+                            isRetained = false
+                        }
+                        mqttClient?.publish(topic, message, null, object : IMqttActionListener {
+                            override fun onSuccess(asyncActionToken: IMqttToken?) {
+                                Timber.d("Published location to $recipientId")
+                                continuation.resume(Unit) {}
+                            }
+                            override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                                continuation.resumeWith(Result.failure(exception ?: Exception("Publish failed")))
+                            }
+                        })
+                    }
+                }
+
+                if (publishResult.isFailure) {
+                    queueMessage(topic, payload, MqttConfig.DEFAULT_QOS)
+                }
             }
         }
     }
@@ -720,7 +719,7 @@ class MqttTransport @Inject constructor(
         }
 
         val decryptedPayload = decryptResult.getOrElse {
-            Timber.e(it, "Failed to decrypt message from $senderId")
+            Timber.d("Failed to decrypt message from $senderId (not encrypted for us)")
             return
         }
 
