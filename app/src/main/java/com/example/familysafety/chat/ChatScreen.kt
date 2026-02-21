@@ -198,6 +198,12 @@ private fun DateHeader(dateKey: String) {
     }
 }
 
+/** Same HSL formula as MemberAvatar so bubble colors match the letter dots. */
+private fun memberBubbleColor(memberId: String): Color {
+    val hue = (memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360
+    return Color.hsl(hue.toFloat(), 0.55f, 0.45f)
+}
+
 @Composable
 private fun MessageBubble(
     message: ChatMessageEntity,
@@ -205,6 +211,14 @@ private fun MessageBubble(
     senderName: String? = null
 ) {
     val isOutgoing = message.isOutgoing
+
+    // Incoming bubbles use the same color as the sender's avatar dot.
+    val bubbleColor = if (isOutgoing) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        memberBubbleColor(message.senderId)
+    }
+    val textColor = Color.White  // both primary and HSL avatars are dark enough for white text
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -215,7 +229,7 @@ private fun MessageBubble(
             Text(
                 text = senderName,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
+                color = bubbleColor,
                 modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
             )
         }
@@ -227,13 +241,7 @@ private fun MessageBubble(
                 bottomStart = if (isOutgoing) 16.dp else 4.dp,
                 bottomEnd = if (isOutgoing) 4.dp else 16.dp
             ),
-            colors = CardDefaults.cardColors(
-                containerColor = if (isOutgoing) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant
-                }
-            )
+            colors = CardDefaults.cardColors(containerColor = bubbleColor)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 // Content
@@ -242,17 +250,13 @@ private fun MessageBubble(
                         Text(
                             text = message.content,
                             style = MaterialTheme.typography.bodyMedium,
-                            color = if (isOutgoing) {
-                                MaterialTheme.colorScheme.onPrimary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            }
+                            color = textColor
                         )
                     }
                     MessageType.LOCATION -> {
                         LocationMessageContent(
                             content = message.content,
-                            isOutgoing = isOutgoing
+                            isOutgoing = true  // always white text on colored bg
                         )
                     }
                     MessageType.SYSTEM -> {
@@ -276,18 +280,14 @@ private fun MessageBubble(
                     Text(
                         text = formatTime(message.timestamp),
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (isOutgoing) {
-                            MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        }
+                        color = Color.White.copy(alpha = 0.7f)
                     )
 
                     if (isOutgoing) {
                         Spacer(modifier = Modifier.width(4.dp))
                         MessageStatusIcon(
                             status = message.status,
-                            tint = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
+                            tint = Color.White.copy(alpha = 0.7f)
                         )
                     }
                 }
