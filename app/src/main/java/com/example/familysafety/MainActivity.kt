@@ -53,6 +53,11 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { /* no-op: NSD start already wrapped in try-catch for SecurityException */ }
 
+    // POST_NOTIFICATIONS is a runtime permission on Android 13+.
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* granted or not, notifications simply won't appear if denied */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -70,6 +75,7 @@ class MainActivity : ComponentActivity() {
                             appInitializer.initialize()
                             checkAndRequestLocationPermissions()
                             requestNearbyWifiPermissionIfNeeded()
+                            requestNotificationPermissionIfNeeded()
                         }
 
                         MainScreen()
@@ -154,6 +160,15 @@ class MainActivity : ComponentActivity() {
             locationPermissionLauncher.launch(permissions)
         } else {
             startLocationService()
+        }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val perm = Manifest.permission.POST_NOTIFICATIONS
+            if (ContextCompat.checkSelfPermission(this, perm) != PackageManager.PERMISSION_GRANTED) {
+                notificationPermissionLauncher.launch(perm)
+            }
         }
     }
 
