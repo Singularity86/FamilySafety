@@ -68,7 +68,7 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
-    memberId: String,
+    memberId: String,         // pass empty string for group chat
     onBack: () -> Unit,
     viewModel: ChatViewModel = hiltViewModel()
 ) {
@@ -76,12 +76,18 @@ fun ChatScreen(
     val messages by viewModel.currentMessages.collectAsState()
     val messageInput by viewModel.messageInput.collectAsState()
     val isSending by viewModel.isSending.collectAsState()
+    val isGroupChat by viewModel.isGroupConversation.collectAsState()
+    val memberNames by viewModel.memberNames.collectAsState()
 
     val listState = rememberLazyListState()
 
-    // Open conversation when screen loads
+    // Open the right conversation when screen loads
     LaunchedEffect(memberId) {
-        viewModel.openConversation(memberId)
+        if (memberId.isEmpty()) {
+            viewModel.openGroupConversation()
+        } else {
+            viewModel.openConversation(memberId)
+        }
     }
 
     // Scroll to bottom when new messages arrive
@@ -104,13 +110,13 @@ fun ChatScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = (currentRecipient?.displayName ?: "?").take(1).uppercase(),
+                                text = if (isGroupChat) "G" else (currentRecipient?.displayName ?: "?").take(1).uppercase(),
                                 style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                         }
                         Spacer(modifier = Modifier.width(12.dp))
-                        Text(currentRecipient?.displayName ?: "Chat")
+                        Text(if (isGroupChat) "Family Chat" else currentRecipient?.displayName ?: "Chat")
                     }
                 },
                 navigationIcon = {
@@ -150,7 +156,11 @@ fun ChatScreen(
                     }
 
                     items(dayMessages) { message ->
-                        MessageBubble(message = message)
+                        MessageBubble(
+                            message = message,
+                            showSenderName = isGroupChat && !message.isOutgoing,
+                            senderName = if (isGroupChat) memberNames[message.senderId] else null
+                        )
                     }
                 }
             }
@@ -189,13 +199,26 @@ private fun DateHeader(dateKey: String) {
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessageEntity) {
+private fun MessageBubble(
+    message: ChatMessageEntity,
+    showSenderName: Boolean = false,
+    senderName: String? = null
+) {
     val isOutgoing = message.isOutgoing
 
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start
     ) {
+        Column(horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start) {
+        if (showSenderName && senderName != null) {
+            Text(
+                text = senderName,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
+            )
+        }
         Card(
             modifier = Modifier.widthIn(max = 280.dp),
             shape = RoundedCornerShape(
@@ -270,6 +293,7 @@ private fun MessageBubble(message: ChatMessageEntity) {
                 }
             }
         }
+        } // Column
     }
 }
 

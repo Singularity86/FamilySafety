@@ -180,6 +180,44 @@ class ChatRepository @Inject constructor(
     }
 
     /**
+     * Send a text message to all members of the group (group chat).
+     */
+    suspend fun sendGroupTextMessage(groupId: String, content: String): Result<ChatMessageEntity> {
+        val localMember = groupStateManager.localMember.value
+            ?: return Result.failure(IllegalStateException("Not in a group"))
+        val group = groupStateManager.groupDefinition.value
+            ?: return Result.failure(IllegalStateException("No group"))
+
+        val message = ChatMessageEntity(
+            conversationId = groupId,
+            senderId = localMember.memberId,
+            recipientId = null,
+            content = content,
+            messageType = MessageType.TEXT,
+            status = MessageStatus.PENDING,
+            isOutgoing = true,
+            isReadLocally = true
+        )
+
+        chatMessageDao.insert(message)
+
+        val otherMembers = group.members.filter { it.memberId != localMember.memberId }
+        var anySucceeded = otherMembers.isEmpty()
+        otherMembers.forEach { member ->
+            if (sendViaNetwork(message, member, groupId)) anySucceeded = true
+        }
+
+        return if (anySucceeded) {
+            chatMessageDao.updateStatus(message.messageId, MessageStatus.SENT)
+            scope.launch { replicationManager.replicateChatMessage(message) }
+            Result.success(message.copy(status = MessageStatus.SENT))
+        } else {
+            chatMessageDao.updateStatus(message.messageId, MessageStatus.FAILED)
+            Result.failure(Exception("Failed to send to any member"))
+        }
+    }
+
+    /**
      * Core message sending logic.
      */
     private suspend fun sendMessage(
@@ -235,10 +273,12 @@ class ChatRepository @Inject constructor(
 
     /**
      * Send message over MQTT with E2E encryption.
+     * Pass [conversationId] for group messages (groupId); null uses the 1-to-1 default.
      */
     private suspend fun sendViaNetwork(
         message: ChatMessageEntity,
-        recipient: FamilyMember
+        recipient: FamilyMember,
+        conversationId: String? = null
     ): Boolean {
         val publisher = mqttPublisher ?: run {
             Timber.w("$TAG: MQTT publisher not set")
@@ -246,7 +286,6 @@ class ChatRepository @Inject constructor(
         }
 
         return try {
-            // Encrypt the message content
             val recipientX25519Key = hexToByteArray(recipient.x25519PublicKey)
 
             val encryptedContent = e2eeManager.encryptMessage(
@@ -256,6 +295,7 @@ class ChatRepository @Inject constructor(
                         content = message.content,
                         messageType = message.messageType,
                         timestamp = message.timestamp,
+                        conversationId = conversationId,
                         replyToMessageId = message.replyToMessageId
                     )
                 ),
@@ -334,20 +374,22 @@ class ChatRepository @Inject constructor(
 
             val localMemberId = groupStateManager.localMember.value?.memberId ?: return
 
+            // Group messages carry their conversationId (groupId); 1-to-1 derives it.
+            val conversationId = payload.conversationId
+                ?: ChatMessageEntity.generateConversationId(localMemberId, senderMemberId)
+
             // Create message entity
             val message = ChatMessageEntity(
                 messageId = payload.messageId,
-                conversationId = ChatMessageEntity.generateConversationId(localMemberId, senderMemberId),
+                conversationId = conversationId,
                 senderId = senderMemberId,
-                recipientId = localMemberId,
+                recipientId = if (payload.conversationId == null) localMemberId else null,
                 content = payload.content,
                 messageType = payload.messageType,
                 status = MessageStatus.DELIVERED,
                 timestamp = payload.timestamp,
                 isOutgoing = false,
-                isReadLocally = _activeConversationId.value == ChatMessageEntity.generateConversationId(
-                    localMemberId, senderMemberId
-                ),
+                isReadLocally = _activeConversationId.value == conversationId,
                 replyToMessageId = payload.replyToMessageId
             )
 
@@ -449,6 +491,7 @@ data class ChatMessagePayload(
     val content: String,
     val messageType: MessageType,
     val timestamp: Long,
+    val conversationId: String? = null, // null = 1-to-1; groupId = group chat
     val replyToMessageId: String? = null
 )
 

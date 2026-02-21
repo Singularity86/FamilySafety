@@ -79,6 +79,16 @@ class ChatViewModel @Inject constructor(
     private val _currentRecipient = MutableStateFlow<FamilyMember?>(null)
     val currentRecipient: StateFlow<FamilyMember?> = _currentRecipient.asStateFlow()
 
+    /** True when the open conversation is the whole-group chat. */
+    val isGroupConversation: StateFlow<Boolean> = _currentConversationId
+        .map { convId -> convId != null && convId == groupStateManager.groupDefinition.value?.groupId }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    /** Map of memberId → displayName for showing sender names in group chat. */
+    val memberNames: StateFlow<Map<String, String>> = groupStateManager.groupDefinition
+        .map { group -> group?.members?.associate { it.memberId to it.displayName } ?: emptyMap() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
     /**
      * Messages in current conversation.
      */
@@ -112,6 +122,16 @@ class ChatViewModel @Inject constructor(
     // =========================================================================
     // CONVERSATION LIST ACTIONS
     // =========================================================================
+
+    /**
+     * Open the group chat (all members in one thread).
+     */
+    fun openGroupConversation() {
+        val groupId = groupStateManager.groupDefinition.value?.groupId ?: return
+        _currentConversationId.value = groupId
+        _currentRecipient.value = null
+        chatRepository.setActiveConversation(groupId)
+    }
 
     /**
      * Open a conversation with a member.
@@ -166,26 +186,29 @@ class ChatViewModel @Inject constructor(
      * Send the current message.
      */
     fun sendMessage() {
-        val recipientId = _currentRecipient.value?.memberId ?: return
         val content = _messageInput.value.trim()
-
         if (content.isEmpty()) return
+
+        val recipientId = _currentRecipient.value?.memberId
+        val groupId = if (recipientId == null) groupStateManager.groupDefinition.value?.groupId else null
+
+        if (recipientId == null && groupId == null) return
 
         viewModelScope.launch {
             _isSending.value = true
             _messageInput.value = ""
 
-            val result = chatRepository.sendTextMessage(recipientId, content)
+            val result = if (recipientId != null) {
+                chatRepository.sendTextMessage(recipientId, content)
+            } else {
+                chatRepository.sendGroupTextMessage(groupId!!, content)
+            }
 
             _isSending.value = false
 
             result.fold(
-                onSuccess = {
-                    _events.emit(ChatEvent.MessageSent)
-                },
-                onFailure = { error ->
-                    _events.emit(ChatEvent.Error("Failed to send: ${error.message}"))
-                }
+                onSuccess = { _events.emit(ChatEvent.MessageSent) },
+                onFailure = { error -> _events.emit(ChatEvent.Error("Failed to send: ${error.message}")) }
             )
         }
     }

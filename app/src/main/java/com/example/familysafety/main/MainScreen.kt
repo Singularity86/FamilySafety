@@ -33,6 +33,7 @@ sealed class MainRoute(val route: String, val label: String, val icon: ImageVect
 
 // Chat sub-routes (not in bottom nav)
 object ChatRoutes {
+    const val GROUP_CHAT = "chat/group"
     const val CONVERSATION_LIST = "chat/conversations"
     const val CHAT_DETAIL = "chat/conversation/{memberId}"
 
@@ -114,7 +115,7 @@ fun MainScreen(
                         } == true,
                         onClick = {
                             val route = if (item == MainRoute.Chat) {
-                                ChatRoutes.CONVERSATION_LIST
+                                ChatRoutes.GROUP_CHAT
                             } else {
                                 item.route
                             }
@@ -168,6 +169,14 @@ fun MainScreen(
             }
 
             // Chat screens
+            composable(ChatRoutes.GROUP_CHAT) {
+                ChatScreen(
+                    memberId = "",   // empty = open group chat
+                    onBack = { navController.popBackStack() },
+                    viewModel = chatViewModel
+                )
+            }
+
             composable(ChatRoutes.CONVERSATION_LIST) {
                 ConversationListScreen(
                     onConversationClick = { memberId ->
