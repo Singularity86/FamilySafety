@@ -1,11 +1,19 @@
 package com.example.familysafety.invite
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
+import android.os.Build
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import com.example.familysafety.R
 import com.example.familysafety.group.*
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.sync.ChangeType
 import com.example.familysafety.sync.GroupSyncManager
 import com.example.familysafety.transport.MqttConfig
 import com.example.familysafety.transport.MqttTransport
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.Json
@@ -18,6 +26,7 @@ import javax.inject.Singleton
 
 @Singleton
 class InviteManager @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val cryptoProvider: LazysodiumCryptoProvider,
     private val e2eeManager: E2EEManager
 ) {
@@ -35,6 +44,29 @@ class InviteManager @Inject constructor(
 
     private val _pendingJoinRequests = MutableStateFlow<List<JoinRequest>>(emptyList())
     val pendingJoinRequests: StateFlow<List<JoinRequest>> = _pendingJoinRequests.asStateFlow()
+
+    companion object {
+        private const val CHANNEL_ID = "join_requests"
+        private const val NOTIFICATION_BASE_ID = 2000
+    }
+
+    init {
+        createNotificationChannel()
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Join Requests",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Alerts when someone wants to join your family group"
+            }
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.createNotificationChannel(channel)
+        }
+    }
 
     /**
      * Wire up MqttTransport for publishing join approvals back to the joiner.
@@ -78,7 +110,7 @@ class InviteManager @Inject constructor(
             }
 
             // Add to pending requests if not already present
-            _pendingJoinRequests.update { current ->
+            val added = _pendingJoinRequests.updateAndGet { current ->
                 if (current.any { it.requestId == joinRequest.requestId }) {
                     Timber.d("Join request ${joinRequest.requestId} already pending")
                     current
@@ -87,8 +119,30 @@ class InviteManager @Inject constructor(
                     current + joinRequest
                 }
             }
+
+            // Notify the user if this was a new request
+            if (added.any { it.requestId == joinRequest.requestId }) {
+                sendJoinRequestNotification(joinRequest)
+            }
         } catch (e: Exception) {
             Timber.e(e, "Failed to handle join request")
+        }
+    }
+
+    private fun sendJoinRequestNotification(request: JoinRequest) {
+        try {
+            val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle("Join request")
+                .setContentText("${request.displayName} wants to join your family group")
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .build()
+
+            NotificationManagerCompat.from(context)
+                .notify(NOTIFICATION_BASE_ID + request.requestId.hashCode(), notification)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to send join request notification")
         }
     }
 
@@ -145,10 +199,12 @@ class InviteManager @Inject constructor(
             val signature = cryptoProvider.signMessage(approvalMessage)
             stateManager.addMember(newMember, signature, inviterMemberId)
 
-            // Remove from pending
+            // Remove from pending and cancel notification
             _pendingJoinRequests.update { current ->
                 current.filter { it.requestId != request.requestId }
             }
+            NotificationManagerCompat.from(context)
+                .cancel(NOTIFICATION_BASE_ID + request.requestId.hashCode())
 
             // Broadcast updated group state to existing members
             val updatedGroupDef = stateManager.groupDefinition.value
@@ -158,7 +214,6 @@ class InviteManager @Inject constructor(
                 )
 
                 // Send group definition directly to the joiner's join_approval topic
-                // so they can complete onboarding immediately.
                 val approvalTopic = MqttConfig.getJoinApprovalTopic(request.requesterId)
                 val groupDefJson = json.encodeToString(updatedGroupDef)
                 mqttTransport?.publishRaw(
@@ -185,6 +240,8 @@ class InviteManager @Inject constructor(
             _pendingJoinRequests.update { current ->
                 current.filter { it.requestId != request.requestId }
             }
+            NotificationManagerCompat.from(context)
+                .cancel(NOTIFICATION_BASE_ID + request.requestId.hashCode())
             Timber.i("Rejected join request from ${request.displayName}")
             Result.success(Unit)
         } catch (e: Exception) {
