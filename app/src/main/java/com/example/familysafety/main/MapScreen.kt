@@ -198,7 +198,8 @@ fun MapScreen(
                 displayName = member?.displayName ?: "?",
                 memberId = memberId,
                 avatar = avatar,
-                sizePx = markerSizePx
+                sizePx = markerSizePx,
+                colorHue = member?.colorHue
             )
             val marker = Marker(mapView).apply {
                 position = GeoPoint(location.latitude, location.longitude)
@@ -241,7 +242,8 @@ private fun memberMarkerBitmap(
     displayName: String,
     memberId: String,
     avatar: Bitmap?,
-    sizePx: Int
+    sizePx: Int,
+    colorHue: Float? = null
 ): Bitmap {
     val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bmp)
@@ -275,9 +277,9 @@ private fun memberMarkerBitmap(
             .joinToString("") { it.first().uppercaseChar().toString() }
             .ifEmpty { "?" }
 
-        // Same colour logic as MemberAvatar composable
-        val hue = (memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360
-        val bgColor = ColorUtils.HSLToColor(floatArrayOf(hue.toFloat(), 0.55f, 0.45f))
+        // Use member's chosen hue, or derive from memberId hash (same as MemberAvatar).
+        val hue = colorHue ?: ((memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
+        val bgColor = ColorUtils.HSLToColor(floatArrayOf(hue, 0.55f, 0.45f))
 
         // White border
         paint.color = Color.WHITE

@@ -89,6 +89,11 @@ class ChatViewModel @Inject constructor(
         .map { group -> group?.members?.associate { it.memberId to it.displayName } ?: emptyMap() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
+    /** Map of memberId → colorHue (null = derive from ID hash) for bubble/avatar coloring. */
+    val memberColorHues: StateFlow<Map<String, Float?>> = groupStateManager.groupDefinition
+        .map { group -> group?.members?.associate { it.memberId to it.colorHue } ?: emptyMap() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
     /**
      * Messages in current conversation.
      */

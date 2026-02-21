@@ -87,6 +87,24 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    /** The current user's chosen color hue (null = auto from memberId hash). */
+    val myColorHue: StateFlow<Float?> = groupStateManager.groupDefinition
+        .map { it?.findMemberById(localMemberId.value)?.colorHue }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /** Persist a new color hue for the current user and broadcast to the group. */
+    fun updateMyColorHue(hue: Float) {
+        viewModelScope.launch {
+            val result = groupStateManager.updateMyColorHue(hue)
+            if (result is com.example.familysafety.group.GroupOperationResult.Success) {
+                groupSyncManager.broadcastGroupUpdate(
+                    result.value,
+                    com.example.familysafety.sync.ChangeType.VERSION_SYNC
+                )
+            }
+        }
+    }
+
     // Member the user wants to locate on the map (set from Members tab)
     private val _focusedMemberId = MutableStateFlow<String?>(null)
     val focusedMemberId: StateFlow<String?> = _focusedMemberId.asStateFlow()

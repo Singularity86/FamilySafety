@@ -78,6 +78,7 @@ fun ChatScreen(
     val isSending by viewModel.isSending.collectAsState()
     val isGroupChat by viewModel.isGroupConversation.collectAsState()
     val memberNames by viewModel.memberNames.collectAsState()
+    val memberColorHues by viewModel.memberColorHues.collectAsState()
 
     val listState = rememberLazyListState()
 
@@ -159,7 +160,8 @@ fun ChatScreen(
                         MessageBubble(
                             message = message,
                             showSenderName = isGroupChat && !message.isOutgoing,
-                            senderName = if (isGroupChat) memberNames[message.senderId] else null
+                            senderName = if (isGroupChat) memberNames[message.senderId] else null,
+                            senderColorHue = memberColorHues[message.senderId]
                         )
                     }
                 }
@@ -198,25 +200,26 @@ private fun DateHeader(dateKey: String) {
     }
 }
 
-/** Same HSL formula as MemberAvatar so bubble colors match the letter dots. */
-private fun memberBubbleColor(memberId: String): Color {
-    val hue = (memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360
-    return Color.hsl(hue.toFloat(), 0.55f, 0.45f)
+/** HSL color matching MemberAvatar, with optional override hue. */
+private fun memberBubbleColor(memberId: String, colorHue: Float? = null): Color {
+    val hue = colorHue ?: ((memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
+    return Color.hsl(hue, 0.55f, 0.45f)
 }
 
 @Composable
 private fun MessageBubble(
     message: ChatMessageEntity,
     showSenderName: Boolean = false,
-    senderName: String? = null
+    senderName: String? = null,
+    senderColorHue: Float? = null
 ) {
     val isOutgoing = message.isOutgoing
 
-    // Incoming bubbles use the same color as the sender's avatar dot.
+    // Incoming bubbles use the sender's chosen color (or auto-derived from ID).
     val bubbleColor = if (isOutgoing) {
         MaterialTheme.colorScheme.primary
     } else {
-        memberBubbleColor(message.senderId)
+        memberBubbleColor(message.senderId, senderColorHue)
     }
     val textColor = Color.White  // both primary and HSL avatars are dark enough for white text
 
@@ -229,7 +232,7 @@ private fun MessageBubble(
             Text(
                 text = senderName,
                 style = MaterialTheme.typography.labelSmall,
-                color = bubbleColor,
+                color = bubbleColor,  // name label matches bubble color
                 modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
             )
         }

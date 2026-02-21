@@ -3,9 +3,13 @@ package com.example.familysafety.main
 import android.graphics.Bitmap
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -15,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -30,6 +35,7 @@ fun SettingsScreen(
     val memberAvatars by viewModel.memberAvatars.collectAsState()
     val myAvatar: Bitmap? = memberAvatars[viewModel.myMemberId]
     val myMemberId = viewModel.myMemberId
+    val myColorHue by viewModel.myColorHue.collectAsState()
     val scope = rememberCoroutineScope()
 
     // Gallery picker launcher
@@ -87,8 +93,32 @@ fun SettingsScreen(
                     displayName = myDisplayName,
                     memberId = myMemberId,
                     bitmap = myAvatar,
+                    colorHue = myColorHue,
                     size = 56.dp,
                     onClick = { galleryLauncher.launch("image/*") }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Color picker card
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "My Color",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Text(
+                    text = "Choose the color others see for you on the map and in chat",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+                ColorSwatchPicker(
+                    selectedHue = myColorHue ?: memberHueFromId(myMemberId),
+                    onHueSelected = { viewModel.updateMyColorHue(it) }
                 )
             }
         }
@@ -305,11 +335,43 @@ fun SettingsScreen(
     }
 }
 
+/** Preset hues evenly spaced around the color wheel (same saturation/lightness as avatars). */
+private val presetHues = listOf(0f, 30f, 60f, 90f, 140f, 180f, 210f, 240f, 270f, 300f, 330f)
+
+/** Derive the auto hue from memberId (mirrors MemberAvatar logic). */
+fun memberHueFromId(memberId: String): Float =
+    ((memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
+
+@Composable
+private fun ColorSwatchPicker(
+    selectedHue: Float,
+    onHueSelected: (Float) -> Unit
+) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        items(presetHues) { hue ->
+            val color = Color.hsl(hue, 0.55f, 0.45f)
+            val isSelected = kotlin.math.abs(hue - selectedHue) < 5f
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(color)
+                    .then(
+                        if (isSelected) Modifier.border(3.dp, Color.White, CircleShape)
+                        else Modifier
+                    )
+                    .clickable { onHueSelected(hue) }
+            )
+        }
+    }
+}
+
 @Composable
 private fun MemberAvatarClickable(
     displayName: String,
     memberId: String,
     bitmap: Bitmap?,
+    colorHue: Float? = null,
     size: Dp,
     onClick: () -> Unit
 ) {
@@ -317,6 +379,7 @@ private fun MemberAvatarClickable(
         displayName = displayName,
         memberId = memberId,
         bitmap = bitmap,
+        colorHue = colorHue,
         size = size,
         modifier = Modifier
             .clip(CircleShape)

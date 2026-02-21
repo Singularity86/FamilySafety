@@ -321,6 +321,35 @@ class GroupStateManager(
         }
     }
 
+    suspend fun updateMyColorHue(hue: Float): GroupOperationResult<GroupDefinition> {
+        return stateMutex.withLock {
+            val currentGroup = _groupDefinition.value
+                ?: return@withLock GroupOperationResult.Failure(GroupError.NotGroupMember)
+
+            val localMemberObj = currentGroup.findMemberById(localMemberId)
+                ?: return@withLock GroupOperationResult.Failure(GroupError.MemberNotFound)
+
+            val updatedGroup = currentGroup.copy(
+                members = (currentGroup.members - localMemberObj) +
+                        localMemberObj.copy(colorHue = hue),
+                version = currentGroup.version + 1,
+                previousStateHash = currentGroup.computeStateHash()
+            )
+
+            try {
+                persistence.saveGroupDefinition(updatedGroup)
+            } catch (e: Exception) {
+                return@withLock GroupOperationResult.Failure(GroupError.StorageError)
+            }
+
+            val old = _groupDefinition.value!!
+            _groupDefinition.value = updatedGroup
+            _events.emit(GroupStateEvent.GroupUpdated(old, updatedGroup))
+
+            GroupOperationResult.Success(updatedGroup)
+        }
+    }
+
     // =========================================================================
     // RUNTIME STATE MANAGEMENT
     // =========================================================================

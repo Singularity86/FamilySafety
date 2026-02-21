@@ -110,7 +110,8 @@ fun MembersScreen(
                         onShowOnMap = {
                             viewModel.focusOnMember(member.memberId)
                             onNavigateToMap()
-                        }
+                        },
+                        colorHue = member.colorHue
                     )
                 }
             }
@@ -175,6 +176,7 @@ internal fun MemberAvatar(
     displayName: String,
     memberId: String,
     bitmap: Bitmap? = null,
+    colorHue: Float? = null,
     size: Dp = 40.dp,
     modifier: Modifier = Modifier
 ) {
@@ -199,8 +201,8 @@ internal fun MemberAvatar(
         .joinToString("") { it.first().uppercaseChar().toString() }
         .ifEmpty { "?" }
 
-    val hue = (memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360
-    val bgColor = Color.hsl(hue.toFloat(), 0.55f, 0.45f)
+    val hue = colorHue ?: ((memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
+    val bgColor = Color.hsl(hue, 0.55f, 0.45f)
 
     Box(
         contentAlignment = Alignment.Center,
@@ -224,6 +226,7 @@ private fun MemberCard(
     location: com.example.familysafety.location.MemberLocation?,
     avatar: Bitmap? = null,
     isMe: Boolean,
+    colorHue: Float? = null,
     onShowOnMap: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -276,7 +279,8 @@ private fun MemberCard(
                 MemberAvatar(
                     displayName = member.displayName,
                     memberId = member.memberId,
-                    bitmap = avatar
+                    bitmap = avatar,
+                    colorHue = colorHue
                 )
 
                 Column {
