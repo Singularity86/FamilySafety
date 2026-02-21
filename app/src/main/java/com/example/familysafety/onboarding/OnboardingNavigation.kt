@@ -118,9 +118,21 @@ fun OnboardingNavigation(
             JoinFamilyScreen(
                 viewModel = viewModel,
                 onComplete = onOnboardingComplete,
-                onBack = {
+                onBack = { navController.popBackStack() },
+                onNavigateToScanner = { navController.navigate("qr_scanner") },
+                navController = navController
+            )
+        }
+
+        composable("qr_scanner") {
+            QrScannerScreen(
+                onCodeScanned = { code ->
+                    navController.previousBackStackEntry
+                        ?.savedStateHandle
+                        ?.set("scanned_code", code)
                     navController.popBackStack()
-                }
+                },
+                onBack = { navController.popBackStack() }
             )
         }
     }

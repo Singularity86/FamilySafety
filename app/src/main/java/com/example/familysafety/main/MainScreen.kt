@@ -39,6 +39,9 @@ object ChatRoutes {
     fun chatDetail(memberId: String) = "chat/conversation/$memberId"
 }
 
+// Routes that should hide the bottom nav bar
+private val fullScreenRoutes = setOf("invite", "qr_scanner")
+
 private val bottomNavItems = listOf(
     MainRoute.Map,
     MainRoute.Members,
@@ -57,12 +60,15 @@ fun MainScreen(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
 
-    // Observe unread chat count for badge
+    // Observe unread chat count and pending join requests for badges
     val totalUnreadCount by chatViewModel.totalUnreadCount.collectAsState()
+    val pendingJoinCount by viewModel.pendingJoinRequests.collectAsState()
+
+    val isFullScreen = currentDestination?.route in fullScreenRoutes
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            if (!isFullScreen) TopAppBar(
                 title = {
                     Text("FamilySafety")
                 },
@@ -75,17 +81,24 @@ fun MainScreen(
             )
         },
         bottomBar = {
+            if (isFullScreen) return@Scaffold
             NavigationBar {
                 bottomNavItems.forEach { item ->
                     NavigationBarItem(
                         icon = {
-                            if (item == MainRoute.Chat && totalUnreadCount > 0) {
+                            val chatBadge = item == MainRoute.Chat && totalUnreadCount > 0
+                            val membersBadge = item == MainRoute.Members && pendingJoinCount.isNotEmpty()
+                            if (chatBadge || membersBadge) {
                                 BadgedBox(
                                     badge = {
-                                        Badge {
-                                            Text(
-                                                text = if (totalUnreadCount > 99) "99+" else totalUnreadCount.toString()
-                                            )
+                                        if (chatBadge) {
+                                            Badge {
+                                                Text(
+                                                    text = if (totalUnreadCount > 99) "99+" else totalUnreadCount.toString()
+                                                )
+                                            }
+                                        } else {
+                                            Badge()
                                         }
                                     }
                                 ) {
@@ -137,7 +150,17 @@ fun MainScreen(
                             launchSingleTop = true
                             restoreState = true
                         }
+                    },
+                    onNavigateToInvite = {
+                        navController.navigate("invite")
                     }
+                )
+            }
+
+            composable("invite") {
+                InviteScreen(
+                    viewModel = viewModel,
+                    onBack = { navController.popBackStack() }
                 )
             }
             composable(MainRoute.Settings.route) {

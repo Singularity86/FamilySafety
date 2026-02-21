@@ -13,3 +13,8 @@
 .externalNativeBuild
 .cxx
 local.properties
+bugreport.zip
+bugreport_extracted/
+*.log
+"Context from Claude.txt"
+.kotlin/

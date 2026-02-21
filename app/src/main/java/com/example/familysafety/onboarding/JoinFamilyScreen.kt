@@ -2,8 +2,11 @@ package com.example.familysafety.onboarding
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.navigation.NavController
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,11 +21,22 @@ fun JoinFamilyScreen(
     viewModel: OnboardingViewModel,
     onComplete: () -> Unit,
     onBack: () -> Unit,
+    onNavigateToScanner: () -> Unit = {},
+    navController: NavController = rememberNavController(),
     modifier: Modifier = Modifier
 ) {
     var inviteCode by remember { mutableStateOf("") }
-    var showScanner by remember { mutableStateOf(false) }
     var joinFailed by remember { mutableStateOf(false) }
+
+    // Receive QR scan result from QrScannerScreen via savedStateHandle
+    val currentBackStack by navController.currentBackStackEntryAsState()
+    val scannedCode = currentBackStack?.savedStateHandle?.get<String>("scanned_code")
+    LaunchedEffect(scannedCode) {
+        if (!scannedCode.isNullOrBlank()) {
+            inviteCode = scannedCode
+            currentBackStack?.savedStateHandle?.remove<String>("scanned_code")
+        }
+    }
     val isLoading by viewModel.isLoading.collectAsState()
     val scope = rememberCoroutineScope()
 
@@ -32,7 +46,7 @@ fun JoinFamilyScreen(
                 title = { Text("Join Family") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -64,33 +78,11 @@ fun JoinFamilyScreen(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 trailingIcon = {
-                    IconButton(onClick = { showScanner = true }) {
+                    IconButton(onClick = onNavigateToScanner) {
                         Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan QR Code")
                     }
                 }
             )
-
-            if (showScanner) {
-                AlertDialog(
-                    onDismissRequest = { showScanner = false },
-                    title = { Text("Scan QR Code") },
-                    text = {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(300.dp)
-                        ) {
-                            // QR Scanner would go here
-                            Text("QR Scanner Placeholder")
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = { showScanner = false }) {
-                            Text("Cancel")
-                        }
-                    }
-                )
-            }
 
             Spacer(modifier = Modifier.weight(1f))
 

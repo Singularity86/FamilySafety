@@ -20,20 +20,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.familysafety.invite.JoinRequest
-import kotlinx.coroutines.launch
+
 
 @Composable
 fun MembersScreen(
     viewModel: MainViewModel,
     onNavigateToMap: () -> Unit = {},
+    onNavigateToInvite: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val familyMembers by viewModel.familyMembers.collectAsState()
@@ -42,28 +41,11 @@ fun MembersScreen(
     val memberAvatars by viewModel.memberAvatars.collectAsState()
     val myMemberId = viewModel.myMemberId
 
-    val scope = rememberCoroutineScope()
-    val clipboardManager = LocalClipboardManager.current
-
-    var showInviteDialog by remember { mutableStateOf(false) }
-    var inviteCode by remember { mutableStateOf("") }
-    var isGeneratingCode by remember { mutableStateOf(false) }
-
     Scaffold(
         modifier = modifier.fillMaxSize(),
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = {
-                    scope.launch {
-                        isGeneratingCode = true
-                        val result = viewModel.generateInviteCode()
-                        isGeneratingCode = false
-                        result.onSuccess { code ->
-                            inviteCode = code
-                            showInviteDialog = true
-                        }
-                    }
-                },
+                onClick = onNavigateToInvite,
                 icon = { Icon(Icons.Default.PersonAdd, contentDescription = null) },
                 text = { Text("Invite") }
             )
@@ -135,49 +117,6 @@ fun MembersScreen(
         }
     }
 
-    // Invite code dialog
-    if (showInviteDialog) {
-        AlertDialog(
-            onDismissRequest = { showInviteDialog = false },
-            title = { Text("Invite to Family") },
-            text = {
-                Column {
-                    Text(
-                        text = "Share this code with the person you want to invite. " +
-                            "They can enter it from the Join Family screen.",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(bottom = 16.dp)
-                    )
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = MaterialTheme.shapes.small,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = inviteCode,
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = FontFamily.Monospace
-                            ),
-                            modifier = Modifier.padding(12.dp)
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    clipboardManager.setText(AnnotatedString(inviteCode))
-                    showInviteDialog = false
-                }) {
-                    Text("Copy & Close")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showInviteDialog = false }) {
-                    Text("Close")
-                }
-            }
-        )
-    }
 }
 
 @Composable
