@@ -159,8 +159,7 @@ fun ChatScreen(
                     items(dayMessages) { message ->
                         MessageBubble(
                             message = message,
-                            showSenderName = isGroupChat && !message.isOutgoing,
-                            senderName = if (isGroupChat) memberNames[message.senderId] else null,
+                            senderName = if (!message.isOutgoing) memberNames[message.senderId] else null,
                             senderColorHue = memberColorHues[message.senderId]
                         )
                     }
@@ -209,7 +208,6 @@ private fun memberBubbleColor(memberId: String, colorHue: Float? = null): Color 
 @Composable
 private fun MessageBubble(
     message: ChatMessageEntity,
-    showSenderName: Boolean = false,
     senderName: String? = null,
     senderColorHue: Float? = null
 ) {
@@ -221,18 +219,19 @@ private fun MessageBubble(
     } else {
         memberBubbleColor(message.senderId, senderColorHue)
     }
-    val textColor = Color.White  // both primary and HSL avatars are dark enough for white text
+    val textColor = Color.White
 
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start
     ) {
         Column(horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start) {
-        if (showSenderName && senderName != null) {
+        if (senderName != null) {
             Text(
                 text = senderName,
                 style = MaterialTheme.typography.labelSmall,
-                color = bubbleColor,  // name label matches bubble color
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                color = bubbleColor,
                 modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
             )
         }

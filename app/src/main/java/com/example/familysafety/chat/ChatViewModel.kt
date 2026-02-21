@@ -10,6 +10,8 @@ import com.example.familysafety.storage.MessageType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -132,10 +134,16 @@ class ChatViewModel @Inject constructor(
      * Open the group chat (all members in one thread).
      */
     fun openGroupConversation() {
-        val groupId = groupStateManager.groupDefinition.value?.groupId ?: return
-        _currentConversationId.value = groupId
-        _currentRecipient.value = null
-        chatRepository.setActiveConversation(groupId)
+        viewModelScope.launch {
+            // Wait for the group to be loaded — .value may be null on first launch.
+            val groupId = groupStateManager.groupDefinition
+                .filterNotNull()
+                .first()
+                .groupId
+            _currentConversationId.value = groupId
+            _currentRecipient.value = null
+            chatRepository.setActiveConversation(groupId)
+        }
     }
 
     /**
