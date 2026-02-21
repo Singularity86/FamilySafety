@@ -107,21 +107,29 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Check if user has completed onboarding.
+     * Check if the user has genuinely completed onboarding.
      *
-     * Primary check: the "onboarding_complete" flag written by OnboardingViewModel
-     * after createFamily()/joinFamily() succeeds.
+     * Requires BOTH conditions to be true:
+     *  1. The "onboarding_complete" flag is set.
+     *  2. The cryptographic keys are actually present and readable.
      *
-     * Fallback: directly ask AndroidKeyStoreLocalKeyStore whether keys have been
-     * initialized, which handles the edge case where the pref was written but the
-     * app data was partially cleared.
+     * If only the flag is set but the keys are gone (e.g. restored from backup
+     * after a reinstall while the Keystore entries were not), we clear the stale
+     * flag and return false so the onboarding flow runs again.
      */
     private fun checkIfOnboarded(): Boolean {
         val prefs = getSharedPreferences("familysafety_prefs", MODE_PRIVATE)
-        if (prefs.getBoolean("onboarding_complete", false)) return true
+        if (!prefs.getBoolean("onboarding_complete", false)) return false
         return try {
-            AndroidKeyStoreLocalKeyStore(applicationContext).isInitialized()
+            val keysReady = AndroidKeyStoreLocalKeyStore(applicationContext).isInitialized()
+            if (!keysReady) {
+                // Flag set but keys missing — stale backup state.
+                prefs.edit().remove("onboarding_complete").commit()
+            }
+            keysReady
         } catch (e: Exception) {
+            // Keys unreadable — clear the flag so onboarding runs fresh.
+            prefs.edit().remove("onboarding_complete").commit()
             false
         }
     }
