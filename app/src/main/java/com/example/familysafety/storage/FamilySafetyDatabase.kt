@@ -65,8 +65,32 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
         /**
          * Get existing passphrase or create a new one.
          * Passphrase is stored in EncryptedSharedPreferences backed by Android Keystore.
+         *
+         * If the Keystore key is in a corrupt state (e.g. after a reinstall), we clear
+         * the stale prefs file and Keystore entry and start fresh.
          */
         private fun getOrCreatePassphrase(context: Context): ByteArray {
+            return try {
+                getOrCreatePassphraseInternal(context)
+            } catch (e: Exception) {
+                // Tink/Keystore corruption — wipe and retry with a clean slate.
+                clearEncryptedPrefsAndKey(context)
+                getOrCreatePassphraseInternal(context)
+            }
+        }
+
+        private fun clearEncryptedPrefsAndKey(context: Context) {
+            try { context.deleteSharedPreferences(PREFS_NAME) } catch (_: Exception) {}
+            try {
+                val ks = java.security.KeyStore.getInstance("AndroidKeyStore")
+                ks.load(null)
+                if (ks.containsAlias(MasterKey.DEFAULT_MASTER_KEY_ALIAS)) {
+                    ks.deleteEntry(MasterKey.DEFAULT_MASTER_KEY_ALIAS)
+                }
+            } catch (_: Exception) {}
+        }
+
+        private fun getOrCreatePassphraseInternal(context: Context): ByteArray {
             val masterKey = MasterKey.Builder(context)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build()
@@ -82,21 +106,16 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
             val existingPassphrase = prefs.getString(KEY_DB_PASSPHRASE, null)
 
             return if (existingPassphrase != null) {
-                // Decode existing passphrase
                 android.util.Base64.decode(existingPassphrase, android.util.Base64.NO_WRAP)
             } else {
-                // Generate new passphrase
                 val newPassphrase = ByteArray(PASSPHRASE_LENGTH)
                 SecureRandom().nextBytes(newPassphrase)
-
-                // Store it
                 prefs.edit()
                     .putString(
                         KEY_DB_PASSPHRASE,
                         android.util.Base64.encodeToString(newPassphrase, android.util.Base64.NO_WRAP)
                     )
                     .apply()
-
                 newPassphrase
             }
         }
