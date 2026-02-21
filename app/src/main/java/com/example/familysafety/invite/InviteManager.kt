@@ -177,6 +177,10 @@ class InviteManager @Inject constructor(
      * so they can complete onboarding without waiting for a general sync.
      */
     suspend fun approveJoinRequest(request: JoinRequest): Result<Unit> {
+        // Dismiss immediately so the notification never gets stuck, even if approval fails.
+        _pendingJoinRequests.update { current -> current.filter { it.requestId != request.requestId } }
+        NotificationManagerCompat.from(context).cancel(NOTIFICATION_BASE_ID + request.requestId.hashCode())
+
         return try {
             val stateManager = groupStateManager
                 ?: return Result.failure(IllegalStateException("No group state manager"))
@@ -198,13 +202,6 @@ class InviteManager @Inject constructor(
                 .toByteArray(Charsets.UTF_8)
             val signature = cryptoProvider.signMessage(approvalMessage)
             stateManager.addMember(newMember, signature, inviterMemberId)
-
-            // Remove from pending and cancel notification
-            _pendingJoinRequests.update { current ->
-                current.filter { it.requestId != request.requestId }
-            }
-            NotificationManagerCompat.from(context)
-                .cancel(NOTIFICATION_BASE_ID + request.requestId.hashCode())
 
             // Broadcast updated group state to existing members
             val updatedGroupDef = stateManager.groupDefinition.value
