@@ -39,9 +39,6 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: FamilySafetyDatabase? = null
 
-        /**
-         * Get or create the encrypted database instance.
-         */
         fun getInstance(context: Context): FamilySafetyDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: buildDatabase(context).also { INSTANCE = it }
@@ -50,36 +47,48 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
 
         private fun buildDatabase(context: Context): FamilySafetyDatabase {
             val passphrase = getOrCreatePassphrase(context)
-            val factory = SupportFactory(passphrase)
+            return buildRoomDatabase(context, passphrase)
+        }
 
+        private fun buildRoomDatabase(context: Context, passphrase: ByteArray): FamilySafetyDatabase {
             return Room.databaseBuilder(
                 context.applicationContext,
                 FamilySafetyDatabase::class.java,
                 DATABASE_NAME
             )
-                .openHelperFactory(factory)
+                .openHelperFactory(SupportFactory(passphrase))
                 .fallbackToDestructiveMigration()
+                .addCallback(object : Callback() {
+                    override fun onDestructiveMigration(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        // Called by Room when it wipes the DB — nothing extra needed.
+                    }
+                })
                 .build()
         }
 
         /**
          * Get existing passphrase or create a new one.
-         * Passphrase is stored in EncryptedSharedPreferences backed by Android Keystore.
          *
-         * If the Keystore key is in a corrupt state (e.g. after a reinstall), we clear
-         * the stale prefs file and Keystore entry and start fresh.
+         * Recovery path: if the Keystore / Tink layer is corrupt (e.g. after a reinstall
+         * that left a stale Keystore entry), we clear the encrypted prefs, the Keystore
+         * alias, AND the SQLCipher database file (which would be unreadable with a new
+         * passphrase anyway), then start completely fresh.
          */
         private fun getOrCreatePassphrase(context: Context): ByteArray {
             return try {
                 getOrCreatePassphraseInternal(context)
             } catch (e: Exception) {
-                // Tink/Keystore corruption — wipe and retry with a clean slate.
-                clearEncryptedPrefsAndKey(context)
+                // Wipe everything tied to the old key and retry.
+                clearAll(context)
                 getOrCreatePassphraseInternal(context)
             }
         }
 
-        private fun clearEncryptedPrefsAndKey(context: Context) {
+        /**
+         * Delete the encrypted prefs file, the Keystore master key alias, and the
+         * SQLCipher database file so the app can start with a completely clean slate.
+         */
+        private fun clearAll(context: Context) {
             try { context.deleteSharedPreferences(PREFS_NAME) } catch (_: Exception) {}
             try {
                 val ks = java.security.KeyStore.getInstance("AndroidKeyStore")
@@ -88,6 +97,8 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
                     ks.deleteEntry(MasterKey.DEFAULT_MASTER_KEY_ALIAS)
                 }
             } catch (_: Exception) {}
+            // Without the passphrase the database is unreadable — delete it too.
+            try { context.deleteDatabase(DATABASE_NAME) } catch (_: Exception) {}
         }
 
         private fun getOrCreatePassphraseInternal(context: Context): ByteArray {
@@ -110,19 +121,18 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
             } else {
                 val newPassphrase = ByteArray(PASSPHRASE_LENGTH)
                 SecureRandom().nextBytes(newPassphrase)
+                // commit() — synchronous write so the passphrase is on disk before the
+                // database file is created, preventing a mismatch on the next launch.
                 prefs.edit()
                     .putString(
                         KEY_DB_PASSPHRASE,
                         android.util.Base64.encodeToString(newPassphrase, android.util.Base64.NO_WRAP)
                     )
-                    .apply()
+                    .commit()
                 newPassphrase
             }
         }
 
-        /**
-         * Close the database (for testing or app shutdown).
-         */
         fun closeDatabase() {
             INSTANCE?.close()
             INSTANCE = null
