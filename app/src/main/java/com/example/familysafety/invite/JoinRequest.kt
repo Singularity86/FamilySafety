@@ -15,7 +15,7 @@ import java.util.Base64
  */
 @Serializer(forClass = ByteArray::class)
 object ByteArraySerializer : KSerializer<ByteArray> {
-    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor("ByteArray", PrimitiveKind.STRING)
+    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor("Base64ByteArray", PrimitiveKind.STRING)
     
     override fun serialize(encoder: Encoder, value: ByteArray) {
         encoder.encodeString(Base64.getEncoder().encodeToString(value))
