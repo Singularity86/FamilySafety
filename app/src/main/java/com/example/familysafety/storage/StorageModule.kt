@@ -38,4 +38,12 @@ object StorageModule {
     ): ChatMessageDao {
         return database.chatMessageDao()
     }
+
+    @Provides
+    @Singleton
+    fun provideSharedFileDao(
+        database: FamilySafetyDatabase
+    ): SharedFileDao {
+        return database.sharedFileDao()
+    }
 }

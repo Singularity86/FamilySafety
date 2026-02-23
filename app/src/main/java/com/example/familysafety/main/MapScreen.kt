@@ -23,16 +23,46 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import androidx.compose.material.icons.filled.FileDownload
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import org.osmdroid.tileprovider.cachemanager.CacheManager
+import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
+import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
+
+private fun cartoTileSource(style: String, name: String) =
+    object : OnlineTileSourceBase(
+        name, 0, 19, 256, ".png",
+        arrayOf(
+            "https://a.basemaps.cartocdn.com/$style/",
+            "https://b.basemaps.cartocdn.com/$style/",
+            "https://c.basemaps.cartocdn.com/$style/",
+            "https://d.basemaps.cartocdn.com/$style/"
+        ),
+        "© OpenStreetMap contributors © CARTO"
+    ) {
+        override fun getTileURLString(pMapTileIndex: Long): String =
+            baseUrl +
+                MapTileIndex.getZoom(pMapTileIndex) + "/" +
+                MapTileIndex.getX(pMapTileIndex) + "/" +
+                MapTileIndex.getY(pMapTileIndex) + mImageFilenameEnding
+    }
+
+/** Light tiles — similar to Google Maps. */
+private val CARTO_VOYAGER = cartoTileSource("rastertiles/voyager", "CartoVoyager")
+
+/** Dark tiles — for dark mode. */
+private val CARTO_DARK = cartoTileSource("dark_matter", "CartoDark")
 
 @Composable
 fun MapScreen(
@@ -121,6 +151,7 @@ fun MapScreen(
     }
 
     // --- Map (permission granted) ---
+    val isDark = isSystemInDarkTheme()
     val memberLocations by viewModel.memberLocations.collectAsState()
     val familyMembers by viewModel.familyMembers.collectAsState()
     val focusedMemberId by viewModel.focusedMemberId.collectAsState()
@@ -130,13 +161,24 @@ fun MapScreen(
     val markerSizePx = (44 * density).toInt()
     val dotSizePx = (18 * density).toInt()
 
+    val scope = rememberCoroutineScope()
+    var showDownloadDialog by remember { mutableStateOf(false) }
+    var isDownloading by remember { mutableStateOf(false) }
+
     val mapView = remember {
         MapView(context).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
+            setTileSource(if (isDark) CARTO_DARK else CARTO_VOYAGER)
             setMultiTouchControls(true)
             controller.setZoom(12.0)
             controller.setCenter(GeoPoint(37.7749, -122.4194))
         }
+    }
+    val cacheManager = remember(mapView) { CacheManager(mapView) }
+
+    // Switch tile source live when system theme changes
+    LaunchedEffect(isDark) {
+        mapView.setTileSource(if (isDark) CARTO_DARK else CARTO_VOYAGER)
+        mapView.invalidate()
     }
 
     // Blue dot for own location — replaces the default person icon.
@@ -213,10 +255,97 @@ fun MapScreen(
         mapView.invalidate()
     }
 
-    AndroidView(
-        factory = { mapView },
-        modifier = modifier
-    )
+    // Download-confirmation dialog
+    if (showDownloadDialog) {
+        val bbox = mapView.boundingBox
+        val zoomCur = mapView.zoomLevelDouble.toInt()
+        val zoomMin = zoomCur.coerceAtLeast(8)
+        val zoomMax = (zoomCur + 2).coerceAtMost(17)
+        val tileCount = cacheManager.possibleTilesInArea(bbox, zoomMin, zoomMax)
+        val tooMany = tileCount > 5_000
+
+        AlertDialog(
+            onDismissRequest = { showDownloadDialog = false },
+            title = { Text("Download for offline") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Cache map tiles for the current view so they're available without internet.")
+                    Text(
+                        text = if (tooMany)
+                            "~$tileCount tiles needed — zoom in for a smaller area."
+                        else
+                            "~$tileCount tiles · zoom $zoomMin–$zoomMax",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (tooMany)
+                            MaterialTheme.colorScheme.error
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !tooMany,
+                    onClick = {
+                        showDownloadDialog = false
+                        isDownloading = true
+                        scope.launch {
+                            val done = CompletableDeferred<Unit>()
+                            cacheManager.downloadAreaAsync(
+                                context, bbox, zoomMin, zoomMax,
+                                object : CacheManager.CacheManagerCallback {
+                                    override fun onTaskComplete() { done.complete(Unit) }
+                                    override fun onTaskFailed(errors: Int) { done.complete(Unit) }
+                                    override fun updateProgress(p: Int, cz: Int, zm: Int, zx: Int) {}
+                                    override fun downloadStarted() {}
+                                    override fun setPossibleTilesInArea(t: Int) {}
+                                }
+                            )
+                            done.await()
+                            isDownloading = false
+                        }
+                    }
+                ) { Text("Download") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDownloadDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    Box(modifier = modifier) {
+        AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
+
+        if (isDownloading) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 16.dp, bottom = 80.dp),
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                tonalElevation = 4.dp
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Text("Downloading tiles…", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        } else {
+            SmallFloatingActionButton(
+                onClick = { showDownloadDialog = true },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 16.dp, bottom = 80.dp),
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            ) {
+                Icon(Icons.Default.FileDownload, contentDescription = "Download for offline")
+            }
+        }
+    }
 }
 
 /** Small blue dot used for the device's own GPS location. */

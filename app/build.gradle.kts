@@ -137,6 +137,9 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("org.bouncycastle:bcprov-jdk15to18:1.76")
 
+    // Coil — Compose-native image loading (for file thumbnails)
+    implementation("io.coil-kt:coil-compose:2.6.0")
+
     // Material Design (for XML themes)
     implementation("com.google.android.material:material:1.11.0")    
 

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- External files dir: getExternalFilesDir(null)/familysafety_files -->
+    <external-files-path
+        name="shared_files"
+        path="familysafety_files/" />
+</paths>

@@ -22,12 +22,15 @@ import androidx.navigation.navArgument
 import com.example.familysafety.chat.ChatScreen
 import com.example.familysafety.chat.ChatViewModel
 import com.example.familysafety.chat.ConversationListScreen
+import com.example.familysafety.files.FilesViewModel
+import com.example.familysafety.ui.theme.ThemeMode
 import androidx.compose.ui.unit.dp
 
 sealed class MainRoute(val route: String, val label: String, val icon: ImageVector) {
     data object Map : MainRoute("map", "Map", Icons.Default.Place)
     data object Members : MainRoute("members", "Members", Icons.Default.People)
     data object Chat : MainRoute("chat", "Chat", Icons.Default.Chat)
+    data object Files : MainRoute("files", "Files", Icons.Default.Folder)
     data object Settings : MainRoute("settings", "Settings", Icons.Default.Settings)
 }
 
@@ -47,6 +50,7 @@ private val bottomNavItems = listOf(
     MainRoute.Map,
     MainRoute.Members,
     MainRoute.Chat,
+    MainRoute.Files,
     MainRoute.Settings
 )
 
@@ -54,7 +58,10 @@ private val bottomNavItems = listOf(
 @Composable
 fun MainScreen(
     viewModel: MainViewModel = hiltViewModel(),
-    chatViewModel: ChatViewModel = hiltViewModel()
+    chatViewModel: ChatViewModel = hiltViewModel(),
+    filesViewModel: FilesViewModel = hiltViewModel(),
+    onThemeChanged: (ThemeMode) -> Unit = {},
+    navigateTo: String? = null
 ) {
     val syncManager = viewModel.groupSyncManager
     val navController = rememberNavController()
@@ -67,7 +74,45 @@ fun MainScreen(
 
     val isFullScreen = currentDestination?.route in fullScreenRoutes
 
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Navigate to a specific tab when opened from a notification tap.
+    LaunchedEffect(navigateTo) {
+        if (!navigateTo.isNullOrBlank()) {
+            navController.navigate(navigateTo) {
+                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+    }
+
+    // Show an in-app snackbar when a join request arrives while the app is in the foreground.
+    var prevJoinCount by remember { mutableIntStateOf(pendingJoinCount.size) }
+    LaunchedEffect(pendingJoinCount) {
+        val newCount = pendingJoinCount.size
+        if (newCount > prevJoinCount) {
+            val newest = pendingJoinCount.lastOrNull()
+            if (newest != null) {
+                val result = snackbarHostState.showSnackbar(
+                    message = "${newest.displayName} wants to join your family",
+                    actionLabel = "View",
+                    duration = SnackbarDuration.Long
+                )
+                if (result == SnackbarResult.ActionPerformed) {
+                    navController.navigate(MainRoute.Members.route) {
+                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                }
+            }
+        }
+        prevJoinCount = newCount
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             if (!isFullScreen) TopAppBar(
                 title = {
@@ -114,10 +159,9 @@ fun MainScreen(
                             it.route == item.route || it.route?.startsWith("chat/") == true && item == MainRoute.Chat
                         } == true,
                         onClick = {
-                            val route = if (item == MainRoute.Chat) {
-                                ChatRoutes.GROUP_CHAT
-                            } else {
-                                item.route
+                            val route = when (item) {
+                                MainRoute.Chat -> ChatRoutes.GROUP_CHAT
+                                else -> item.route
                             }
                             navController.navigate(route) {
                                 popUpTo(navController.graph.findStartDestination().id) {
@@ -164,8 +208,11 @@ fun MainScreen(
                     onBack = { navController.popBackStack() }
                 )
             }
+            composable(MainRoute.Files.route) {
+                FilesScreen(viewModel = filesViewModel)
+            }
             composable(MainRoute.Settings.route) {
-                SettingsScreen(viewModel = viewModel)
+                SettingsScreen(viewModel = viewModel, onThemeChanged = onThemeChanged)
             }
 
             // Chat screens

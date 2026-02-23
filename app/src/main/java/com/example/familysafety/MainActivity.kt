@@ -8,6 +8,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -20,6 +21,8 @@ import com.example.familysafety.location.LocationService
 import com.example.familysafety.onboarding.OnboardingNavigation
 import com.example.familysafety.main.MainScreen
 import com.example.familysafety.ui.theme.FamilySafetyTheme
+import com.example.familysafety.ui.theme.ThemeMode
+import com.example.familysafety.ui.theme.ThemePreference
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -35,6 +38,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var localMemberId: LocalMemberId
+
+    // Tracks the tab the app should navigate to (set from notification tap).
+    private val navigateTo = mutableStateOf<String?>(null)
 
     private val locationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -60,9 +66,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        navigateTo.value = intent?.getStringExtra("navigate_to")
 
         setContent {
-            FamilySafetyTheme {
+            val systemDark = isSystemInDarkTheme()
+            var themeMode by remember { mutableStateOf(ThemePreference.get(this@MainActivity)) }
+            val darkTheme = when (themeMode) {
+                ThemeMode.DARK -> true
+                ThemeMode.LIGHT -> false
+                ThemeMode.SYSTEM -> systemDark
+            }
+
+            FamilySafetyTheme(darkTheme = darkTheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -78,7 +93,13 @@ class MainActivity : ComponentActivity() {
                             requestNotificationPermissionIfNeeded()
                         }
 
-                        MainScreen()
+                        MainScreen(
+                            navigateTo = navigateTo.value,
+                            onThemeChanged = { mode ->
+                                ThemePreference.set(this@MainActivity, mode)
+                                themeMode = mode
+                            }
+                        )
                     } else {
                         OnboardingNavigation(
                             onOnboardingComplete = {
@@ -103,6 +124,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        navigateTo.value = intent.getStringExtra("navigate_to")
     }
 
     override fun onDestroy() {

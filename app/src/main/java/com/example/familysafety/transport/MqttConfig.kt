@@ -106,4 +106,34 @@ object MqttConfig {
     fun getChatReadTopic(memberId: String): String {
         return "familysafe/$memberId/chat/read"
     }
+
+    // =========================================================================
+    // SHARED FILE TOPICS
+    // =========================================================================
+
+    /**
+     * Manifest broadcast topic — published with retained=true so new subscribers
+     * immediately receive the current file list.
+     */
+    fun getFileManifestTopic(groupId: String): String =
+        "familysafe/group/$groupId/files/manifest"
+
+    /**
+     * Per-chunk topic for transferring file data.
+     */
+    fun getFileChunkTopic(groupId: String, fileId: String, chunkIndex: Int): String =
+        "familysafe/group/$groupId/files/chunk/$fileId/$chunkIndex"
+
+    /**
+     * Wildcard topic to subscribe to all chunks for the group.
+     */
+    fun getFileChunkWildcardTopic(groupId: String): String =
+        "familysafe/group/$groupId/files/chunk/#"
+
+    /**
+     * A member publishes here to ask existing members to re-broadcast all files.
+     * Used by new members joining who need the full file history.
+     */
+    fun getFileRequestTopic(memberId: String): String =
+        "familysafe/$memberId/files/request"
 }

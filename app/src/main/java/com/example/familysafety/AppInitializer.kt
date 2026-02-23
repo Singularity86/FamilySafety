@@ -2,6 +2,7 @@ package com.example.familysafety
 
 import com.example.familysafety.avatar.AvatarRepository
 import com.example.familysafety.chat.ChatRepository
+import com.example.familysafety.files.SharedFileRepository
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.invite.InviteManager
 import com.example.familysafety.location.LocationRepository
@@ -33,7 +34,8 @@ class AppInitializer @Inject constructor(
     private val chatRepository: ChatRepository,
     private val inviteManager: InviteManager,
     private val groupSyncManager: GroupSyncManager,
-    private val avatarRepository: AvatarRepository
+    private val avatarRepository: AvatarRepository,
+    private val sharedFileRepository: SharedFileRepository
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var isInitialized = false
@@ -75,6 +77,7 @@ class AppInitializer @Inject constructor(
                 mqttTransport.setReplicationManager(replicationManager)
                 mqttTransport.setChatRepository(chatRepository)
                 mqttTransport.setInviteManager(inviteManager)
+                mqttTransport.setFileRepository(sharedFileRepository)
                 inviteManager.setMqttTransport(mqttTransport)
                 Timber.d("$TAG: MQTT transport wired up")
 
@@ -117,6 +120,7 @@ class AppInitializer @Inject constructor(
 
                 // Watch for membership changes (new members added/removed) and
                 // update MQTT subscriptions + encryption keys automatically.
+                var previousMemberIds: Set<String> = groupDef.members.map { it.memberId }.toSet()
                 scope.launch {
                     groupStateManager.groupDefinition
                         .filterNotNull()
@@ -125,6 +129,14 @@ class AppInitializer @Inject constructor(
                             try {
                                 mqttTransport.updateFamilyMembers(updatedGroup.members.toList())
                                 Timber.d("$TAG: Updated MQTT members after group change")
+
+                                // Sync files to any newly added members
+                                val newMemberIds = updatedGroup.members.map { it.memberId }.toSet()
+                                if (newMemberIds.size > previousMemberIds.size) {
+                                    sharedFileRepository.syncNewMember(updatedGroup.groupId)
+                                    Timber.d("$TAG: Triggered file sync for new member(s)")
+                                }
+                                previousMemberIds = newMemberIds
                             } catch (e: Exception) {
                                 Timber.e(e, "$TAG: Failed to update MQTT members")
                             }

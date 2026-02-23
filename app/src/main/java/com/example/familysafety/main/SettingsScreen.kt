@@ -1,6 +1,8 @@
 package com.example.familysafety.main
 
+import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -20,17 +22,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.familysafety.ui.theme.ThemeMode
+import com.example.familysafety.ui.theme.ThemePreference
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     viewModel: MainViewModel,
+    onThemeChanged: (ThemeMode) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val groupName by viewModel.groupName.collectAsState()
     val memberAvatars by viewModel.memberAvatars.collectAsState()
     val myAvatar: Bitmap? = memberAvatars[viewModel.myMemberId]
@@ -49,6 +58,29 @@ fun SettingsScreen(
     var showWarningDialog by remember { mutableStateOf(false) }
     var showPhraseDialog by remember { mutableStateOf(false) }
     var recoveryWords by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    // Theme picker state
+    var currentTheme by remember { mutableStateOf(ThemePreference.get(context)) }
+
+    // Backup/restore dialog state
+    var showExportDialog by remember { mutableStateOf(false) }
+    var showImportPasswordDialog by remember { mutableStateOf(false) }
+    var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
+    var backupPassword by remember { mutableStateOf("") }
+    var backupPasswordConfirm by remember { mutableStateOf("") }
+    var importPassword by remember { mutableStateOf("") }
+    var backupError by remember { mutableStateOf<String?>(null) }
+    var isBackupLoading by remember { mutableStateOf(false) }
+
+    val importFilePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let {
+            pendingImportUri = it
+            importPassword = ""
+            showImportPasswordDialog = true
+        }
+    }
 
     Column(
         modifier = modifier
@@ -125,6 +157,49 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Appearance card — theme picker
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Appearance",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+                Text(
+                    text = "App Theme",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    ThemeMode.values().forEachIndexed { index, mode ->
+                        SegmentedButton(
+                            selected = currentTheme == mode,
+                            onClick = {
+                                currentTheme = mode
+                                ThemePreference.set(context, mode)
+                                onThemeChanged(mode)
+                            },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = index,
+                                count = ThemeMode.values().size
+                            ),
+                            label = {
+                                Text(
+                                    when (mode) {
+                                        ThemeMode.SYSTEM -> "System"
+                                        ThemeMode.LIGHT -> "Light"
+                                        ThemeMode.DARK -> "Dark"
+                                    }
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
@@ -170,6 +245,51 @@ fun SettingsScreen(
                         checked = locationEnabled,
                         onCheckedChange = { locationEnabled = it }
                     )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Backup card
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Backup",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                TextButton(
+                    onClick = {
+                        backupPassword = ""
+                        backupPasswordConfirm = ""
+                        backupError = null
+                        showExportDialog = true
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Export Encrypted Backup")
+                        Icon(imageVector = Icons.Default.KeyboardArrowRight, contentDescription = null)
+                    }
+                }
+                HorizontalDivider()
+                TextButton(
+                    onClick = { importFilePicker.launch(arrayOf("*/*")) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Restore from Backup")
+                        Icon(imageVector = Icons.Default.KeyboardArrowRight, contentDescription = null)
+                    }
                 }
             }
         }
@@ -257,6 +377,163 @@ fun SettingsScreen(
                 TextButton(onClick = { showWarningDialog = false }) {
                     Text("Cancel")
                 }
+            }
+        )
+    }
+
+    // Export backup dialog
+    if (showExportDialog) {
+        AlertDialog(
+            onDismissRequest = { showExportDialog = false },
+            icon = { Icon(Icons.Default.Lock, contentDescription = null) },
+            title = { Text("Export Backup") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Set a password to protect your backup. " +
+                        "You will need this password to restore.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = backupPassword,
+                        onValueChange = { backupPassword = it; backupError = null },
+                        label = { Text("Password") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = backupPasswordConfirm,
+                        onValueChange = { backupPasswordConfirm = it; backupError = null },
+                        label = { Text("Confirm Password") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (backupError != null) {
+                        Text(
+                            text = backupError!!,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (backupPassword.length < 8) {
+                            backupError = "Password must be at least 8 characters"
+                            return@TextButton
+                        }
+                        if (backupPassword != backupPasswordConfirm) {
+                            backupError = "Passwords do not match"
+                            return@TextButton
+                        }
+                        isBackupLoading = true
+                        scope.launch {
+                            val uri = viewModel.exportBackup(backupPassword)
+                            isBackupLoading = false
+                            if (uri != null) {
+                                showExportDialog = false
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "application/octet-stream"
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(
+                                    Intent.createChooser(shareIntent, "Save Backup")
+                                )
+                            } else {
+                                backupError = "Export failed — no family group or mnemonic found"
+                            }
+                        }
+                    },
+                    enabled = !isBackupLoading
+                ) {
+                    if (isBackupLoading) CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                    else Text("Export")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExportDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Import backup — password dialog
+    if (showImportPasswordDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showImportPasswordDialog = false
+                pendingImportUri = null
+            },
+            icon = { Icon(Icons.Default.Lock, contentDescription = null) },
+            title = { Text("Restore Backup") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Enter the password you used when creating this backup. " +
+                        "All current data will be replaced.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = importPassword,
+                        onValueChange = { importPassword = it; backupError = null },
+                        label = { Text("Password") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (backupError != null) {
+                        Text(
+                            text = backupError!!,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val uri = pendingImportUri ?: return@TextButton
+                        isBackupLoading = true
+                        scope.launch {
+                            val result = viewModel.importBackup(uri, importPassword)
+                            isBackupLoading = false
+                            when (result) {
+                                is MainViewModel.ImportResult.Success -> {
+                                    showImportPasswordDialog = false
+                                    // Restart the app so Hilt rebuilds with new keys
+                                    val restartIntent = context.packageManager
+                                        .getLaunchIntentForPackage(context.packageName)!!
+                                        .apply {
+                                            addFlags(
+                                                Intent.FLAG_ACTIVITY_NEW_TASK or
+                                                Intent.FLAG_ACTIVITY_CLEAR_TASK
+                                            )
+                                        }
+                                    context.startActivity(restartIntent)
+                                    android.os.Process.killProcess(android.os.Process.myPid())
+                                }
+                                is MainViewModel.ImportResult.Error -> {
+                                    backupError = result.message
+                                }
+                            }
+                        }
+                    },
+                    enabled = !isBackupLoading
+                ) {
+                    if (isBackupLoading) CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                    else Text("Restore")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showImportPasswordDialog = false
+                    pendingImportUri = null
+                }) { Text("Cancel") }
             }
         )
     }

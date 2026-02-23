@@ -5,6 +5,8 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import net.sqlcipher.database.SupportFactory
@@ -19,9 +21,10 @@ import java.security.SecureRandom
 @Database(
     entities = [
         LocationHistoryEntity::class,
-        ChatMessageEntity::class
+        ChatMessageEntity::class,
+        SharedFileEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -29,6 +32,7 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
 
     abstract fun locationHistoryDao(): LocationHistoryDao
     abstract fun chatMessageDao(): ChatMessageDao
+    abstract fun sharedFileDao(): SharedFileDao
 
     companion object {
         private const val DATABASE_NAME = "familysafety_encrypted.db"
@@ -50,6 +54,30 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
             return buildRoomDatabase(context, passphrase)
         }
 
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `shared_files` (
+                        `fileId` TEXT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `mimeType` TEXT NOT NULL,
+                        `sizeBytes` INTEGER NOT NULL,
+                        `contentHash` TEXT NOT NULL,
+                        `uploaderMemberId` TEXT NOT NULL,
+                        `uploadedAt` INTEGER NOT NULL,
+                        `chunkCount` INTEGER NOT NULL,
+                        `isDeleted` INTEGER NOT NULL DEFAULT 0,
+                        `deletedByMemberId` TEXT,
+                        `deletedAt` INTEGER,
+                        `localPath` TEXT,
+                        `chunksReceived` INTEGER NOT NULL DEFAULT 0,
+                        `downloadState` TEXT NOT NULL DEFAULT 'PENDING',
+                        PRIMARY KEY(`fileId`)
+                    )
+                """.trimIndent())
+            }
+        }
+
         private fun buildRoomDatabase(context: Context, passphrase: ByteArray): FamilySafetyDatabase {
             return Room.databaseBuilder(
                 context.applicationContext,
@@ -57,9 +85,10 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
                 DATABASE_NAME
             )
                 .openHelperFactory(SupportFactory(passphrase))
+                .addMigrations(MIGRATION_1_2)
                 .fallbackToDestructiveMigration()
                 .addCallback(object : Callback() {
-                    override fun onDestructiveMigration(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    override fun onDestructiveMigration(db: SupportSQLiteDatabase) {
                         // Called by Room when it wipes the DB — nothing extra needed.
                     }
                 })

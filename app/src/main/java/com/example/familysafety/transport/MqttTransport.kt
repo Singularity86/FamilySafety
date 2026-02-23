@@ -2,6 +2,7 @@ package com.example.familysafety.transport
 
 import android.content.Context
 import com.example.familysafety.chat.ChatRepository
+import com.example.familysafety.files.SharedFileRepository
 import com.example.familysafety.invite.InviteManager
 import com.example.familysafety.core.*
 import com.example.familysafety.crypto.E2EEManager
@@ -38,6 +39,7 @@ class MqttTransport @Inject constructor(
     private var replicationManager: ReplicationManager? = null
     private var chatRepository: ChatRepository? = null
     private var inviteManager: InviteManager? = null
+    private var fileRepository: SharedFileRepository? = null
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -115,6 +117,18 @@ class MqttTransport @Inject constructor(
             publishRaw(topic, payload, qos)
         }
         Timber.d("ChatRepository wired up to MqttTransport")
+    }
+
+    /**
+     * Wire up SharedFileRepository for shared file transfer.
+     * Must be called after construction to avoid circular dependency.
+     */
+    fun setFileRepository(repository: SharedFileRepository) {
+        fileRepository = repository
+        repository.setMqttPublisher { topic, payload, qos, retained ->
+            publishRaw(topic, payload, qos, retained)
+        }
+        Timber.d("SharedFileRepository wired up to MqttTransport")
     }
 
     suspend fun initialize(
@@ -395,6 +409,16 @@ class MqttTransport @Inject constructor(
             if (currentGroupId != null) {
                 topics.add(MqttConfig.getReplicationAnnounceTopic(currentGroupId))
                 qosLevels.add(MqttConfig.QOS_AT_MOST_ONCE)
+            }
+
+            // Shared file topics
+            topics.add(MqttConfig.getFileRequestTopic(currentMemberId))
+            qosLevels.add(MqttConfig.DEFAULT_QOS)
+            if (currentGroupId != null) {
+                topics.add(MqttConfig.getFileManifestTopic(currentGroupId))
+                qosLevels.add(MqttConfig.DEFAULT_QOS)
+                topics.add(MqttConfig.getFileChunkWildcardTopic(currentGroupId))
+                qosLevels.add(MqttConfig.DEFAULT_QOS)
             }
 
             mqttClient?.subscribe(
@@ -684,6 +708,30 @@ class MqttTransport @Inject constructor(
                     handleEncryptedLocationOrPresence(topic, payload)
                 }
 
+                // Shared file manifest: familysafe/group/{groupId}/files/manifest
+                topic.contains("/files/manifest") -> {
+                    fileRepository?.handleIncomingManifest(payload.toByteArray())
+                }
+
+                // Shared file chunks: familysafe/group/{groupId}/files/chunk/{fileId}/{n}
+                topic.contains("/files/chunk/") -> {
+                    // Extract fileId and chunkIndex from topic suffix: .../chunk/{fileId}/{n}
+                    val parts = topic.split("/files/chunk/", limit = 2)
+                    if (parts.size == 2) {
+                        val chunkParts = parts[1].split("/")
+                        if (chunkParts.size >= 2) {
+                            val fileId = chunkParts[0]
+                            val chunkIndex = chunkParts[1].toIntOrNull() ?: 0
+                            fileRepository?.handleIncomingChunk(fileId, chunkIndex, payload.toByteArray())
+                        }
+                    }
+                }
+
+                // File re-broadcast request: familysafe/{memberId}/files/request
+                topic.endsWith("/files/request") -> {
+                    fileRepository?.handleFileRequest(payload.toByteArray())
+                }
+
                 else -> {
                     Timber.w("Unknown topic pattern: $topic")
                 }
@@ -831,7 +879,10 @@ class MqttTransport @Inject constructor(
      * Used by ReplicationManager and ChatRepository for their specific messages.
      * Returns true if publish succeeded.
      */
-    suspend fun publishRaw(topic: String, payload: ByteArray, qos: Int): Boolean {
+    suspend fun publishRaw(topic: String, payload: ByteArray, qos: Int): Boolean =
+        publishRaw(topic, payload, qos, retained = false)
+
+    suspend fun publishRaw(topic: String, payload: ByteArray, qos: Int, retained: Boolean): Boolean {
         return withContext(Dispatchers.IO) {
             if (_connectionState.value != ConnectionState.Connected) {
                 Timber.w("Not connected, queueing raw message")
@@ -843,12 +894,12 @@ class MqttTransport @Inject constructor(
                 suspendCancellableCoroutine { continuation ->
                     val message = MqttMessage(payload).apply {
                         this.qos = qos
-                        isRetained = false
+                        isRetained = retained
                     }
 
                     mqttClient?.publish(topic, message, null, object : IMqttActionListener {
                         override fun onSuccess(asyncActionToken: IMqttToken?) {
-                            Timber.d("Published raw message to $topic")
+                            Timber.d("Published raw message to $topic (retained=$retained)")
                             continuation.resume(true) {}
                         }
 

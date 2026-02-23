@@ -171,7 +171,8 @@ data class ReplicatedMessage(
     val replyToMessageId: String? = null
 ) {
     fun toChatMessageEntity(
-        replicatedFrom: String
+        replicatedFrom: String,
+        localMemberId: String? = null
     ): ChatMessageEntity = ChatMessageEntity(
         messageId = messageId,
         conversationId = conversationId,
@@ -181,7 +182,7 @@ data class ReplicatedMessage(
         messageType = messageType,
         status = status,
         timestamp = timestamp,
-        isOutgoing = isOutgoing,
+        isOutgoing = if (localMemberId != null) senderId == localMemberId else isOutgoing,
         isReadLocally = false,
         isReplicated = true,
         replicatedFrom = replicatedFrom,

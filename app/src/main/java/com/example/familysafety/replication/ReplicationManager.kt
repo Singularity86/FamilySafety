@@ -381,7 +381,8 @@ class ReplicationManager @Inject constructor(
                 }
                 ReplicationDataType.CHAT_MESSAGES -> {
                     response.messages?.let { messages ->
-                        val entities = messages.map { it.toChatMessageEntity(senderMemberId) }
+                        val localId = groupStateManager.localMember.value?.memberId
+                        val entities = messages.map { it.toChatMessageEntity(senderMemberId, localId) }
                         chatMessageDao.insertAll(entities)
                         Timber.d("$TAG: Stored ${messages.size} replicated messages")
                         _events.emit(

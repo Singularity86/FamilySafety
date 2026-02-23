@@ -2,7 +2,9 @@ package com.example.familysafety.invite
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -109,19 +111,21 @@ class InviteManager @Inject constructor(
                 return
             }
 
-            // Add to pending requests if not already present
-            val added = _pendingJoinRequests.updateAndGet { current ->
+            // Add to pending requests only if not already present, and track whether it was new
+            var isNew = false
+            _pendingJoinRequests.update { current ->
                 if (current.any { it.requestId == joinRequest.requestId }) {
-                    Timber.d("Join request ${joinRequest.requestId} already pending")
+                    Timber.d("Join request ${joinRequest.requestId} already pending, skipping notification")
                     current
                 } else {
+                    isNew = true
                     Timber.i("Added join request from ${joinRequest.displayName}")
                     current + joinRequest
                 }
             }
 
-            // Notify the user if this was a new request
-            if (added.any { it.requestId == joinRequest.requestId }) {
+            // Only notify for genuinely new requests — not MQTT re-deliveries
+            if (isNew) {
                 sendJoinRequestNotification(joinRequest)
             }
         } catch (e: Exception) {
@@ -131,12 +135,28 @@ class InviteManager @Inject constructor(
 
     private fun sendJoinRequestNotification(request: JoinRequest) {
         try {
+            val launchIntent = context.packageManager
+                .getLaunchIntentForPackage(context.packageName)
+                ?.apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra("navigate_to", "members")
+                }
+            val pendingIntent = launchIntent?.let {
+                PendingIntent.getActivity(
+                    context,
+                    request.requestId.hashCode(),
+                    it,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            }
+
             val notification = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("Join request")
                 .setContentText("${request.displayName} wants to join your family group")
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
+                .apply { if (pendingIntent != null) setContentIntent(pendingIntent) }
                 .build()
 
             NotificationManagerCompat.from(context)
