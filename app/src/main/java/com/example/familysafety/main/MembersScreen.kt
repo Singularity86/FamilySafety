@@ -10,8 +10,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.PersonRemove
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,6 +35,7 @@ fun MembersScreen(
     viewModel: MainViewModel,
     onNavigateToMap: () -> Unit = {},
     onNavigateToInvite: () -> Unit = {},
+    onNavigateToHistory: (memberId: String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val familyMembers by viewModel.familyMembers.collectAsState()
@@ -111,6 +114,8 @@ fun MembersScreen(
                             viewModel.focusOnMember(member.memberId)
                             onNavigateToMap()
                         },
+                        onShowHistory = { onNavigateToHistory(member.memberId) },
+                        onRemove = { viewModel.removeMember(member.memberId) },
                         colorHue = member.colorHue
                     )
                 }
@@ -228,9 +233,50 @@ private fun MemberCard(
     isMe: Boolean,
     colorHue: Float? = null,
     onShowOnMap: () -> Unit = {},
+    onShowHistory: () -> Unit = {},
+    onRemove: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showDialog by remember { mutableStateOf(false) }
+    var showRemoveDialog by remember { mutableStateOf(false) }
+
+    if (showRemoveDialog) {
+        AlertDialog(
+            onDismissRequest = { showRemoveDialog = false },
+            icon = {
+                Icon(
+                    Icons.Default.PersonRemove,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = { Text("Remove ${member.displayName}?") },
+            text = {
+                Text(
+                    "This will remove ${member.displayName} from the family group on all devices. " +
+                    "They will need a new invite to rejoin."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showRemoveDialog = false
+                        onRemove()
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Remove")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRemoveDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     if (showDialog) {
         AlertDialog(
@@ -323,12 +369,35 @@ private fun MemberCard(
                 }
             }
 
-            if (location != null) {
-                Icon(
-                    imageVector = Icons.Default.LocationOn,
-                    contentDescription = "Location available",
-                    tint = MaterialTheme.colorScheme.primary
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (location != null) {
+                    Icon(
+                        imageVector = Icons.Default.LocationOn,
+                        contentDescription = "Location available",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+                IconButton(onClick = onShowHistory, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.History,
+                        contentDescription = "View location history",
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (!isMe) {
+                    IconButton(
+                        onClick = { showRemoveDialog = true },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PersonRemove,
+                            contentDescription = "Remove member",
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
             }
         }
     }

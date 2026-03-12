@@ -40,6 +40,7 @@ class MqttTransport @Inject constructor(
     private var chatRepository: ChatRepository? = null
     private var inviteManager: InviteManager? = null
     private var fileRepository: SharedFileRepository? = null
+    private var localTransport: LocalTransport? = null
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -51,7 +52,7 @@ class MqttTransport @Inject constructor(
     
     private var reconnectJob: Job? = null
     private var reconnectAttempts = 0
-    private val maxReconnectAttempts = 10
+    private var currentKeepAlive = MqttConfig.KEEP_ALIVE_MOVING
 
     sealed class ConnectionState {
         data object Disconnected : ConnectionState()
@@ -70,11 +71,17 @@ class MqttTransport @Inject constructor(
     init {
         scope.launch {
             networkMonitor.isNetworkAvailable.collect { isAvailable ->
-                if (isAvailable && _connectionState.value is ConnectionState.Disconnected) {
-                    Timber.i("Network available, attempting reconnect")
-                    reconnect()
-                } else if (!isAvailable) {
+                if (isAvailable) {
+                    val state = _connectionState.value
+                    if (state is ConnectionState.Disconnected || state is ConnectionState.Error) {
+                        Timber.i("Network available, resetting reconnect counter and reconnecting")
+                        reconnectAttempts = 0
+                        reconnectJob?.cancel()
+                        reconnect()
+                    }
+                } else {
                     Timber.w("Network unavailable")
+                    reconnectJob?.cancel()
                     _connectionState.value = ConnectionState.Error(
                         "No network connection",
                         canRetry = false
@@ -117,6 +124,24 @@ class MqttTransport @Inject constructor(
             publishRaw(topic, payload, qos)
         }
         Timber.d("ChatRepository wired up to MqttTransport")
+    }
+
+    /**
+     * Wire up LocalTransport for same-network direct delivery.
+     * When a peer is reachable locally, messages are sent via TCP instead of MQTT,
+     * saving the round-trip through the internet broker.
+     */
+    fun setLocalTransport(transport: LocalTransport) {
+        localTransport = transport
+        // Route incoming local messages through the same handler as MQTT
+        transport.onMessageReceived = { topic, payloadString ->
+            scope.launch {
+                ErrorHandler.safely("MqttTransport", "local message handling") {
+                    handleIncomingMessage(topic, payloadString)
+                }
+            }
+        }
+        Timber.d("LocalTransport wired up to MqttTransport")
     }
 
     /**
@@ -230,7 +255,7 @@ class MqttTransport @Inject constructor(
                 val options = MqttConnectOptions().apply {
                     isCleanSession = false
                     connectionTimeout = MqttConfig.CONNECTION_TIMEOUT
-                    keepAliveInterval = MqttConfig.KEEP_ALIVE_INTERVAL
+                    keepAliveInterval = currentKeepAlive
                     isAutomaticReconnect = false
                     
                     // Capture memberId as a local val so the compiler can smart-cast
@@ -312,20 +337,9 @@ class MqttTransport @Inject constructor(
 
     private fun scheduleReconnect() {
         reconnectJob?.cancel()
-        
-        if (reconnectAttempts >= maxReconnectAttempts) {
-            Timber.e("Max reconnection attempts reached")
-            _connectionState.value = ConnectionState.Error(
-                "Connection failed after $maxReconnectAttempts attempts",
-                canRetry = false
-            )
-            return
-        }
-        
         reconnectJob = scope.launch {
             val delay = calculateBackoff(reconnectAttempts)
             Timber.i("Scheduling reconnect in ${delay}ms (attempt ${reconnectAttempts + 1})")
-            
             delay(delay)
             reconnect()
         }
@@ -508,6 +522,17 @@ class MqttTransport @Inject constructor(
 
                 val payload = encryptedMessage.toByteArray()
 
+                // Try local WiFi first — no internet required, lower latency, no broker hops
+                val lt = localTransport
+                if (lt != null && lt.isReachable(recipientId)) {
+                    val sentLocally = lt.send(topic, encryptedMessage, recipientId)
+                    if (sentLocally) {
+                        Timber.d("Location sent locally to ${recipientId.take(8)}")
+                        return@forEach // skip MQTT for this recipient
+                    }
+                    // Local send failed → fall through to MQTT
+                }
+
                 if (_connectionState.value != ConnectionState.Connected) {
                     queueMessage(topic, payload, MqttConfig.DEFAULT_QOS)
                     return@forEach
@@ -527,7 +552,7 @@ class MqttTransport @Inject constructor(
                         }
                         mqttClient?.publish(topic, message, null, object : IMqttActionListener {
                             override fun onSuccess(asyncActionToken: IMqttToken?) {
-                                Timber.d("Published location to $recipientId")
+                                Timber.d("Published location via MQTT to $recipientId")
                                 continuation.resume(Unit) {}
                             }
                             override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
@@ -914,6 +939,32 @@ class MqttTransport @Inject constructor(
                 Timber.e(e, "Error publishing raw message")
                 queueMessage(topic, payload, qos)
                 false
+            }
+        }
+    }
+
+    /**
+     * Called by LocationService when the device movement state changes.
+     * Switches the MQTT keepalive interval to save battery when stationary:
+     *   - Moving  → 60 s  (broker pings every minute, fast reconnect detection)
+     *   - Still   → 300 s (broker pings every 5 min, minimal radio wakeups)
+     * The new keepalive takes effect on the next reconnect.
+     */
+    fun notifyMovementState(isMoving: Boolean) {
+        val newKeepAlive = if (isMoving) MqttConfig.KEEP_ALIVE_MOVING else MqttConfig.KEEP_ALIVE_STATIONARY
+        if (newKeepAlive == currentKeepAlive) return
+        currentKeepAlive = newKeepAlive
+        Timber.d("Movement state changed: keepalive will be ${currentKeepAlive}s on next connect")
+
+        // Reconnect immediately so the new keepalive is negotiated with the broker now.
+        if (_connectionState.value == ConnectionState.Connected) {
+            scope.launch {
+                ErrorHandler.safely("MqttTransport", "reconnect for keepalive change") {
+                    mqttClient?.disconnect()
+                    _connectionState.value = ConnectionState.Disconnected
+                    reconnectAttempts = 0
+                    reconnect()
+                }
             }
         }
     }

@@ -10,9 +10,15 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Lets the app request exemption from battery optimization so the location
+         foreground service isn't killed by the OS when the screen is off. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Required on Android 13+ to show join-request notifications -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Required on Android 10+ for Activity Recognition API -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <!-- Required for NSD (mDNS) local avatar sync -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
@@ -46,6 +52,21 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <receiver
+            android:name=".location.ActivityTransitionReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <receiver
+            android:name=".location.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"

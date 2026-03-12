@@ -230,13 +230,9 @@ class GroupStateManager(
             val remover = currentGroup.findMemberById(removerMemberId)
                 ?: return@withLock GroupOperationResult.Failure(GroupError.MemberNotFound)
 
-            // Authorization check: only creator can remove others, anyone can remove self
-            val isSelfRemoval = targetMemberId == removerMemberId
-            val isCreator = removerMemberId == currentGroup.creatorMemberId
-
-            if (!isSelfRemoval && !isCreator) {
-                return@withLock GroupOperationResult.Failure(GroupError.NotGroupCreator)
-            }
+            // Any member can remove any other member — the signature proves they hold
+            // their own private key, which is sufficient authorization in a family group.
+            // (Self-removal is also allowed; it's equivalent to "leave family".)
 
             // Verify signature
             val removalMessage = buildMemberRemovalApprovalMessage(
@@ -284,6 +280,22 @@ class GroupStateManager(
         }
     }
 
+    /**
+     * Remove a member using this device's own key as authorization.
+     * Generates the signature internally so callers don't need access to the crypto provider.
+     */
+    suspend fun removeMemberByLocal(targetMemberId: String): GroupOperationResult<GroupDefinition> {
+        val currentGroup = _groupDefinition.value
+            ?: return GroupOperationResult.Failure(GroupError.NotGroupMember)
+        val removalMessage = buildMemberRemovalApprovalMessage(
+            groupId = currentGroup.groupId,
+            groupVersion = currentGroup.version,
+            targetMemberId = targetMemberId
+        )
+        val signature = cryptoProvider.sign(removalMessage)
+        return removeMember(targetMemberId, signature, localMemberId)
+    }
+
     // =========================================================================
     // AVATAR HASH UPDATE
     // =========================================================================
@@ -303,6 +315,35 @@ class GroupStateManager(
             val updatedGroup = currentGroup.copy(
                 members = (currentGroup.members - localMemberObj) +
                         localMemberObj.copy(avatarHash = hash),
+                version = currentGroup.version + 1,
+                previousStateHash = currentGroup.computeStateHash()
+            )
+
+            try {
+                persistence.saveGroupDefinition(updatedGroup)
+            } catch (e: Exception) {
+                return@withLock GroupOperationResult.Failure(GroupError.StorageError)
+            }
+
+            val old = _groupDefinition.value!!
+            _groupDefinition.value = updatedGroup
+            _events.emit(GroupStateEvent.GroupUpdated(old, updatedGroup))
+
+            GroupOperationResult.Success(updatedGroup)
+        }
+    }
+
+    suspend fun updateMyDisplayName(name: String): GroupOperationResult<GroupDefinition> {
+        return stateMutex.withLock {
+            val currentGroup = _groupDefinition.value
+                ?: return@withLock GroupOperationResult.Failure(GroupError.NotGroupMember)
+
+            val localMemberObj = currentGroup.findMemberById(localMemberId)
+                ?: return@withLock GroupOperationResult.Failure(GroupError.MemberNotFound)
+
+            val updatedGroup = currentGroup.copy(
+                members = (currentGroup.members - localMemberObj) +
+                        localMemberObj.copy(displayName = name),
                 version = currentGroup.version + 1,
                 previousStateHash = currentGroup.computeStateHash()
             )

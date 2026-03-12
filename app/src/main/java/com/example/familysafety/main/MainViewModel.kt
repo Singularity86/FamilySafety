@@ -96,10 +96,39 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    // Pending URI waiting to be cropped before saving as avatar
+    private val _pendingCropUri = MutableStateFlow<Uri?>(null)
+    val pendingCropUri: StateFlow<Uri?> = _pendingCropUri.asStateFlow()
+
+    fun setPendingCropUri(uri: Uri?) { _pendingCropUri.value = uri }
+    fun clearPendingCropUri() { _pendingCropUri.value = null }
+
+    /** Save an already-cropped [Bitmap] as the current user's avatar. */
+    fun setMyAvatarBitmap(bitmap: Bitmap) {
+        viewModelScope.launch {
+            avatarRepository.setMyAvatarFromBitmap(bitmap)
+        }
+    }
+
     /** The current user's chosen color hue (null = auto from memberId hash). */
     val myColorHue: StateFlow<Float?> = groupStateManager.groupDefinition
         .map { it?.findMemberById(localMemberId.value)?.colorHue }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /** Update the current user's display name and broadcast to the group. */
+    fun updateMyDisplayName(name: String) {
+        val sanitized = com.example.familysafety.core.DataValidator.sanitizeDisplayName(name)
+        if (sanitized.isBlank()) return
+        viewModelScope.launch {
+            val result = groupStateManager.updateMyDisplayName(sanitized)
+            if (result is com.example.familysafety.group.GroupOperationResult.Success) {
+                groupSyncManager.broadcastGroupUpdate(
+                    result.value,
+                    com.example.familysafety.sync.ChangeType.VERSION_SYNC
+                )
+            }
+        }
+    }
 
     /** Persist a new color hue for the current user and broadcast to the group. */
     fun updateMyColorHue(hue: Float) {
@@ -194,6 +223,26 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Wipe all local group data and cryptographic keys so the app returns to
+     * the onboarding screen.  The caller is responsible for restarting the
+     * process afterwards.
+     */
+    suspend fun leaveFamily(): Unit = withContext(Dispatchers.IO) {
+        try {
+            EncryptedGroupStatePersistence.getInstance(context).deleteGroupDefinition()
+        } catch (_: Exception) {}
+        try {
+            AndroidKeyStoreLocalKeyStore(context).destroyKeys()
+        } catch (_: Exception) {}
+        // Remove the location-service member ID so it doesn't resume tracking on restart
+        context.getSharedPreferences("location_service", Context.MODE_PRIVATE)
+            .edit().remove("member_id").commit()
+        // Clear the onboarding flag — causes MainActivity to show onboarding on next launch
+        context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)
+            .edit().remove("onboarding_complete").commit()
+    }
+
     suspend fun generateInviteCode(): Result<String> = withContext(Dispatchers.IO) {
         inviteManager.generateInviteCode()
     }
@@ -207,6 +256,23 @@ class MainViewModel @Inject constructor(
     fun rejectJoinRequest(request: JoinRequest) {
         viewModelScope.launch {
             inviteManager.rejectJoinRequest(request)
+        }
+    }
+
+    /**
+     * Remove a member from the group and broadcast the change to all remaining members.
+     * Any member can remove any other member (including ghost/failed-invite members).
+     */
+    fun removeMember(memberId: String) {
+        viewModelScope.launch {
+            val result = groupStateManager.removeMemberByLocal(memberId)
+            if (result is com.example.familysafety.group.GroupOperationResult.Success) {
+                groupSyncManager.broadcastGroupUpdate(
+                    result.value,
+                    com.example.familysafety.sync.ChangeType.MEMBER_REMOVED,
+                    memberId
+                )
+            }
         }
     }
 }

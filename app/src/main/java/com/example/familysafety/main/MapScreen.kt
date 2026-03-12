@@ -23,12 +23,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FileDownload
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import org.osmdroid.tileprovider.cachemanager.CacheManager
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
@@ -40,29 +39,21 @@ import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 
-private fun cartoTileSource(style: String, name: String) =
-    object : OnlineTileSourceBase(
-        name, 0, 19, 256, ".png",
-        arrayOf(
-            "https://a.basemaps.cartocdn.com/$style/",
-            "https://b.basemaps.cartocdn.com/$style/",
-            "https://c.basemaps.cartocdn.com/$style/",
-            "https://d.basemaps.cartocdn.com/$style/"
-        ),
-        "© OpenStreetMap contributors © CARTO"
-    ) {
-        override fun getTileURLString(pMapTileIndex: Long): String =
-            baseUrl +
-                MapTileIndex.getZoom(pMapTileIndex) + "/" +
-                MapTileIndex.getX(pMapTileIndex) + "/" +
-                MapTileIndex.getY(pMapTileIndex) + mImageFilenameEnding
-    }
-
-/** Light tiles — similar to Google Maps. */
-private val CARTO_VOYAGER = cartoTileSource("rastertiles/voyager", "CartoVoyager")
-
-/** Dark tiles — for dark mode. */
-private val CARTO_DARK = cartoTileSource("dark_matter", "CartoDark")
+private val MAP_TILES = object : OnlineTileSourceBase(
+    "OsmStandard", 0, 19, 256, ".png",
+    arrayOf(
+        "https://a.tile.openstreetmap.org/",
+        "https://b.tile.openstreetmap.org/",
+        "https://c.tile.openstreetmap.org/"
+    ),
+    "© OpenStreetMap contributors"
+) {
+    override fun getTileURLString(pMapTileIndex: Long): String =
+        baseUrl +
+            MapTileIndex.getZoom(pMapTileIndex) + "/" +
+            MapTileIndex.getX(pMapTileIndex) + "/" +
+            MapTileIndex.getY(pMapTileIndex) + mImageFilenameEnding
+}
 
 @Composable
 fun MapScreen(
@@ -151,35 +142,37 @@ fun MapScreen(
     }
 
     // --- Map (permission granted) ---
-    val isDark = isSystemInDarkTheme()
     val memberLocations by viewModel.memberLocations.collectAsState()
     val familyMembers by viewModel.familyMembers.collectAsState()
     val focusedMemberId by viewModel.focusedMemberId.collectAsState()
     val memberAvatars by viewModel.memberAvatars.collectAsState()
 
     val density = context.resources.displayMetrics.density
-    val markerSizePx = (44 * density).toInt()
+    val markerSizePx = (52 * density).toInt()
     val dotSizePx = (18 * density).toInt()
 
     val scope = rememberCoroutineScope()
     var showDownloadDialog by remember { mutableStateOf(false) }
-    var isDownloading by remember { mutableStateOf(false) }
+    var downloadTask by remember { mutableStateOf<CacheManager.CacheManagerTask?>(null) }
+    var downloadProgress by remember { mutableIntStateOf(0) }
+    var downloadTotal by remember { mutableIntStateOf(0) }
+    var downloadErrorMessage by remember { mutableStateOf<String?>(null) }
+    val isDownloading = downloadTask != null
+
+    // Cancel any in-progress download if the composable is removed from composition.
+    DisposableEffect(Unit) {
+        onDispose { downloadTask?.cancel(true) }
+    }
 
     val mapView = remember {
         MapView(context).apply {
-            setTileSource(if (isDark) CARTO_DARK else CARTO_VOYAGER)
+            setTileSource(MAP_TILES)
             setMultiTouchControls(true)
-            controller.setZoom(12.0)
-            controller.setCenter(GeoPoint(37.7749, -122.4194))
+            controller.setZoom(2.0)
+            controller.setCenter(GeoPoint(0.0, 0.0))
         }
     }
     val cacheManager = remember(mapView) { CacheManager(mapView) }
-
-    // Switch tile source live when system theme changes
-    LaunchedEffect(isDark) {
-        mapView.setTileSource(if (isDark) CARTO_DARK else CARTO_VOYAGER)
-        mapView.invalidate()
-    }
 
     // Blue dot for own location — replaces the default person icon.
     val myLocationOverlay = remember {
@@ -247,7 +240,7 @@ fun MapScreen(
                 position = GeoPoint(location.latitude, location.longitude)
                 title = member?.displayName ?: memberId
                 snippet = "Updated ${getTimeAgo(location.timestamp)} · ±${location.accuracy.toInt()}m"
-                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                 icon = BitmapDrawable(context.resources, bmp)
             }
             mapView.overlays.add(marker)
@@ -258,29 +251,48 @@ fun MapScreen(
     // Download-confirmation dialog
     if (showDownloadDialog) {
         val bbox = mapView.boundingBox
-        val zoomCur = mapView.zoomLevelDouble.toInt()
-        val zoomMin = zoomCur.coerceAtLeast(8)
-        val zoomMax = (zoomCur + 2).coerceAtMost(17)
+        // Download all zoom levels (0–17) for the visible area so the map works
+        // offline whether zoomed all the way out or in to street level.
+        val zoomMin = 0
+        val zoomMax = 17
         val tileCount = cacheManager.possibleTilesInArea(bbox, zoomMin, zoomMax)
-        val tooMany = tileCount > 5_000
+        // Rough estimate: OSM tiles average ~15 KB each.
+        val estimatedMb = tileCount * 15 / 1024
+        val isLarge  = estimatedMb > 80   // warn but still allow
+        val tooMany  = tileCount > 100_000 // block — unreasonably large
 
         AlertDialog(
             onDismissRequest = { showDownloadDialog = false },
             title = { Text("Download for offline") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Cache map tiles for the current view so they're available without internet.")
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Cache all zoom levels for this area so the map works without internet.")
                     Text(
-                        text = if (tooMany)
-                            "~$tileCount tiles needed — zoom in for a smaller area."
-                        else
-                            "~$tileCount tiles · zoom $zoomMin–$zoomMax",
+                        text = when {
+                            tooMany  -> "~$tileCount tiles (~${estimatedMb} MB) — zoom in to a smaller area first."
+                            isLarge  -> "~$tileCount tiles · ~${estimatedMb} MB · zoom $zoomMin–$zoomMax"
+                            else     -> "~$tileCount tiles · ~${estimatedMb} MB · zoom $zoomMin–$zoomMax"
+                        },
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (tooMany)
-                            MaterialTheme.colorScheme.error
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant
+                        color = when {
+                            tooMany -> MaterialTheme.colorScheme.error
+                            isLarge -> MaterialTheme.colorScheme.onSurfaceVariant
+                            else    -> MaterialTheme.colorScheme.onSurfaceVariant
+                        }
                     )
+                    if (isLarge && !tooMany) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                            shape = MaterialTheme.shapes.extraSmall
+                        ) {
+                            Text(
+                                text = "Large download — make sure you're on Wi-Fi.",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
+                    }
                 }
             },
             confirmButton = {
@@ -288,22 +300,39 @@ fun MapScreen(
                     enabled = !tooMany,
                     onClick = {
                         showDownloadDialog = false
-                        isDownloading = true
-                        scope.launch {
-                            val done = CompletableDeferred<Unit>()
-                            cacheManager.downloadAreaAsync(
-                                context, bbox, zoomMin, zoomMax,
-                                object : CacheManager.CacheManagerCallback {
-                                    override fun onTaskComplete() { done.complete(Unit) }
-                                    override fun onTaskFailed(errors: Int) { done.complete(Unit) }
-                                    override fun updateProgress(p: Int, cz: Int, zm: Int, zx: Int) {}
-                                    override fun downloadStarted() {}
-                                    override fun setPossibleTilesInArea(t: Int) {}
+                        downloadProgress = 0
+                        downloadTotal = 0
+                        downloadTask = cacheManager.downloadAreaAsyncNoUI(
+                            context, bbox, zoomMin, zoomMax,
+                            object : CacheManager.CacheManagerCallback {
+                                override fun onTaskComplete() {
+                                    scope.launch {
+                                        // Clear the in-memory tile LRU so the map re-fetches
+                                        // from the SQL cache rather than serving stale nulls.
+                                        mapView.tileProvider.clearTileCache()
+                                        mapView.invalidate()
+                                        downloadTask = null
+                                    }
                                 }
-                            )
-                            done.await()
-                            isDownloading = false
-                        }
+                                override fun onTaskFailed(errors: Int) {
+                                    scope.launch {
+                                        mapView.tileProvider.clearTileCache()
+                                        mapView.invalidate()
+                                        if (errors > 0) {
+                                            downloadErrorMessage = "$errors tile(s) failed to download"
+                                        }
+                                        downloadTask = null
+                                    }
+                                }
+                                override fun updateProgress(p: Int, cz: Int, zm: Int, zx: Int) {
+                                    scope.launch { downloadProgress = p }
+                                }
+                                override fun downloadStarted() {}
+                                override fun setPossibleTilesInArea(t: Int) {
+                                    scope.launch { downloadTotal = t }
+                                }
+                            }
+                        )
                     }
                 ) { Text("Download") }
             },
@@ -313,6 +342,15 @@ fun MapScreen(
         )
     }
 
+    // Auto-dismiss error banner after 4 s. Must be unconditional (outside Box) so
+    // the composable call order stays stable regardless of whether there's an error.
+    LaunchedEffect(downloadErrorMessage) {
+        if (downloadErrorMessage != null) {
+            kotlinx.coroutines.delay(4_000)
+            downloadErrorMessage = null
+        }
+    }
+
     Box(modifier = modifier) {
         AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
 
@@ -320,18 +358,46 @@ fun MapScreen(
             Surface(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(start = 16.dp, bottom = 80.dp),
+                    .padding(start = 16.dp, bottom = 80.dp)
+                    .widthIn(min = 180.dp, max = 260.dp),
                 shape = MaterialTheme.shapes.small,
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 tonalElevation = 4.dp
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    Text("Downloading tiles…", style = MaterialTheme.typography.bodySmall)
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = if (downloadTotal > 0)
+                                "Downloading… $downloadProgress/$downloadTotal"
+                            else
+                                "Downloading tiles…",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        IconButton(
+                            onClick = {
+                                downloadTask?.cancel(true)
+                                downloadTask = null
+                            },
+                            modifier = Modifier.size(20.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Cancel download",
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+                    val fraction = if (downloadTotal > 0) downloadProgress.toFloat() / downloadTotal else 0f
+                    LinearProgressIndicator(
+                        progress = { fraction },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp)
+                    )
                 }
             }
         } else {
@@ -343,6 +409,25 @@ fun MapScreen(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Icon(Icons.Default.FileDownload, contentDescription = "Download for offline")
+            }
+        }
+
+        // Brief error banner shown when some tiles fail to download
+        if (downloadErrorMessage != null) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 80.dp, start = 16.dp, end = 16.dp),
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.errorContainer,
+                tonalElevation = 4.dp
+            ) {
+                Text(
+                    text = downloadErrorMessage!!,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
             }
         }
     }
@@ -364,8 +449,12 @@ private fun blueDotBitmap(sizePx: Int): Bitmap {
 }
 
 /**
- * Circular marker bitmap matching the Members tab avatar style:
- * photo if available, otherwise coloured initials circle.
+ * Teardrop-style map pin matching the Life360 aesthetic:
+ * coloured accent ring → white inner ring → photo or initials,
+ * with a downward-pointing tail and a soft drop shadow.
+ *
+ * The bitmap is (sizePx) wide and (sizePx + tailHeight) tall.
+ * The geographical anchor point is the very bottom tip of the tail.
  */
 private fun memberMarkerBitmap(
     displayName: String,
@@ -374,19 +463,60 @@ private fun memberMarkerBitmap(
     sizePx: Int,
     colorHue: Float? = null
 ): Bitmap {
-    val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+    val tailH  = (sizePx * 0.34f).toInt()
+    val totalH = sizePx + tailH + 4          // +4 px headroom for shadow bleed
+
+    val bmp    = Bitmap.createBitmap(sizePx, totalH, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bmp)
-    val r = sizePx / 2f
-    val border = (sizePx * 0.09f).coerceAtLeast(3f)
+    val r      = sizePx / 2f
+    val cx     = r
+    val cy     = r                            // centre of the circle within the bitmap
+    val border = (sizePx * 0.10f).coerceAtLeast(3f)
+    val tipY   = cy + r + tailH.toFloat()    // tip of the pin tail
+
+    val hue         = colorHue ?: ((memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
+    val accentColor = ColorUtils.HSLToColor(floatArrayOf(hue, 0.70f, 0.50f))
+
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
+    // Build the balloon-pin outline path:
+    // arc from 120° → 60° (300° sweep, covering the top) then lines to pin tip.
+    fun pinPath(radius: Float, tip: Float) = android.graphics.Path().apply {
+        val x0 = cx + radius * Math.cos(Math.toRadians(120.0)).toFloat()
+        val y0 = cy + radius * Math.sin(Math.toRadians(120.0)).toFloat()
+        moveTo(x0, y0)
+        arcTo(
+            android.graphics.RectF(cx - radius, cy - radius, cx + radius, cy + radius),
+            120f, 300f, false
+        )
+        lineTo(cx, tip)
+        close()
+    }
+
+    // 1 — Soft drop shadow (blur behind the pin)
+    paint.color = Color.argb(55, 0, 0, 0)
+    paint.maskFilter = android.graphics.BlurMaskFilter(
+        sizePx * 0.09f, android.graphics.BlurMaskFilter.Blur.NORMAL
+    )
+    canvas.save()
+    canvas.translate(2f, 3f)
+    canvas.drawPath(pinPath(r * 0.97f, tipY - 2f), paint)
+    canvas.restore()
+    paint.maskFilter = null
+
+    // 2 — Accent-coloured outer pin
+    paint.color = accentColor
+    canvas.drawPath(pinPath(r, tipY), paint)
+
+    // 3 — White inner circle (creates the border ring effect)
+    paint.color = Color.WHITE
+    canvas.drawCircle(cx, cy, r - border, paint)
+
+    // 4 — Avatar photo or coloured initials
+    val innerR = r - border
     if (avatar != null) {
-        // White border
-        paint.color = Color.WHITE
-        canvas.drawCircle(r, r, r, paint)
-        // Scale avatar into inner circle
-        val inner = (r - border).toInt()
-        val scaled = Bitmap.createScaledBitmap(avatar, inner * 2, inner * 2, true)
+        val sz     = (innerR * 2).toInt().coerceAtLeast(1)
+        val scaled = Bitmap.createScaledBitmap(avatar, sz, sz, true)
         val shader = android.graphics.BitmapShader(
             scaled,
             android.graphics.Shader.TileMode.CLAMP,
@@ -394,8 +524,8 @@ private fun memberMarkerBitmap(
         )
         paint.shader = shader
         canvas.save()
-        canvas.translate(border, border)
-        canvas.drawCircle(inner.toFloat(), inner.toFloat(), inner.toFloat(), paint)
+        canvas.translate(cx - innerR, cy - innerR)
+        canvas.drawCircle(innerR, innerR, innerR, paint)
         canvas.restore()
         paint.shader = null
     } else {
@@ -406,24 +536,18 @@ private fun memberMarkerBitmap(
             .joinToString("") { it.first().uppercaseChar().toString() }
             .ifEmpty { "?" }
 
-        // Use member's chosen hue, or derive from memberId hash (same as MemberAvatar).
-        val hue = colorHue ?: ((memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
-        val bgColor = ColorUtils.HSLToColor(floatArrayOf(hue, 0.55f, 0.45f))
+        // Fill slightly lighter than the accent ring so it reads well
+        paint.color = ColorUtils.HSLToColor(floatArrayOf(hue, 0.65f, 0.58f))
+        canvas.drawCircle(cx, cy, innerR, paint)
 
-        // White border
         paint.color = Color.WHITE
-        canvas.drawCircle(r, r, r, paint)
-        // Coloured fill
-        paint.color = bgColor
-        canvas.drawCircle(r, r, r - border, paint)
-        // Initials text
-        paint.color = Color.WHITE
-        paint.textSize = sizePx * 0.36f
+        paint.textSize = innerR * 0.74f
         paint.textAlign = Paint.Align.CENTER
         paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        val textY = r - (paint.descent() + paint.ascent()) / 2f
-        canvas.drawText(initials, r, textY, paint)
+        val textY = cy - (paint.descent() + paint.ascent()) / 2f
+        canvas.drawText(initials, cx, textY, paint)
     }
+
     return bmp
 }
 

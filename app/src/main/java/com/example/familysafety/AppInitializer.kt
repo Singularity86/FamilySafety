@@ -8,6 +8,7 @@ import com.example.familysafety.invite.InviteManager
 import com.example.familysafety.location.LocationRepository
 import com.example.familysafety.replication.ReplicationManager
 import com.example.familysafety.sync.GroupSyncManager
+import com.example.familysafety.transport.LocalTransport
 import com.example.familysafety.transport.MqttTransport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +31,7 @@ class AppInitializer @Inject constructor(
     private val groupStateManager: GroupStateManager,
     private val locationRepository: LocationRepository,
     private val mqttTransport: MqttTransport,
+    private val localTransport: LocalTransport,
     private val replicationManager: ReplicationManager,
     private val chatRepository: ChatRepository,
     private val inviteManager: InviteManager,
@@ -78,6 +80,7 @@ class AppInitializer @Inject constructor(
                 mqttTransport.setChatRepository(chatRepository)
                 mqttTransport.setInviteManager(inviteManager)
                 mqttTransport.setFileRepository(sharedFileRepository)
+                mqttTransport.setLocalTransport(localTransport)
                 inviteManager.setMqttTransport(mqttTransport)
                 Timber.d("$TAG: MQTT transport wired up")
 
@@ -95,6 +98,10 @@ class AppInitializer @Inject constructor(
                     groupIdParam = groupDef.groupId
                 )
                 Timber.d("$TAG: MQTT transport initialized")
+
+                // 6b. Start local WiFi transport (NSD registration + TCP server)
+                localTransport.start(localMember.memberId)
+                Timber.d("$TAG: LocalTransport started")
 
                 // 7. Initialize InviteManager (needs member ID + state refs)
                 inviteManager.initialize(localMember.memberId, groupStateManager, groupSyncManager)
@@ -173,6 +180,7 @@ class AppInitializer @Inject constructor(
      */
     fun cleanup() {
         mqttTransport.cleanup()
+        localTransport.stop()
         avatarRepository.cleanup()
         isInitialized = false
         Timber.d("$TAG: Cleanup complete")

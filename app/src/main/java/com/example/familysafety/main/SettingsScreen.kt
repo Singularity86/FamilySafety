@@ -3,6 +3,7 @@ package com.example.familysafety.main
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import com.example.familysafety.location.LocationService
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -25,7 +26,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.theme.ThemeMode
@@ -37,6 +41,7 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(
     viewModel: MainViewModel,
     onThemeChanged: (ThemeMode) -> Unit = {},
+    onNavigateToCrop: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -45,13 +50,17 @@ fun SettingsScreen(
     val myAvatar: Bitmap? = memberAvatars[viewModel.myMemberId]
     val myMemberId = viewModel.myMemberId
     val myColorHue by viewModel.myColorHue.collectAsState()
+    val familyMembers by viewModel.familyMembers.collectAsState()
+    val myDisplayName = familyMembers.find { it.memberId == myMemberId }?.displayName ?: ""
+    var nameEdit by remember(myDisplayName) { mutableStateOf(myDisplayName) }
+    var isEditingName by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    // Gallery picker launcher
+    // Gallery picker launcher — routes through the crop screen before saving
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
-        uri?.let { viewModel.setMyAvatar(it) }
+        uri?.let { viewModel.setPendingCropUri(it); onNavigateToCrop() }
     }
 
     // Recovery phrase dialog state
@@ -71,6 +80,10 @@ fun SettingsScreen(
     var importPassword by remember { mutableStateOf("") }
     var backupError by remember { mutableStateOf<String?>(null) }
     var isBackupLoading by remember { mutableStateOf(false) }
+
+    // Leave family dialog state
+    var showLeaveDialog by remember { mutableStateOf(false) }
+    var isLeaving by remember { mutableStateOf(false) }
 
     val importFilePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -94,41 +107,89 @@ fun SettingsScreen(
             modifier = Modifier.padding(bottom = 24.dp)
         )
 
-        // Avatar card
+        // Profile card — avatar + display name
         Card(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .padding(16.dp)
-                    .fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "Profile Photo",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        text = if (myAvatar != null) "Tap to change" else "Tap to set a photo",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Profile Photo",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = if (myAvatar != null) "Tap to change" else "Tap to set a photo",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    MemberAvatarClickable(
+                        displayName = myDisplayName.ifBlank { "Me" },
+                        memberId = myMemberId,
+                        bitmap = myAvatar,
+                        colorHue = myColorHue,
+                        size = 56.dp,
+                        onClick = { galleryLauncher.launch("image/*") }
                     )
                 }
-                // Reuse MemberAvatar composable via a wrapper Box
-                val myDisplayName by remember {
-                    derivedStateOf {
-                        viewModel.familyMembers.value
-                            .find { it.memberId == myMemberId }?.displayName ?: "Me"
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+                Text(
+                    text = "Display Name",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                if (isEditingName) {
+                    OutlinedTextField(
+                        value = nameEdit,
+                        onValueChange = { nameEdit = it.take(30) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            viewModel.updateMyDisplayName(nameEdit)
+                            isEditingName = false
+                        }),
+                        trailingIcon = {
+                            Row {
+                                IconButton(onClick = {
+                                    viewModel.updateMyDisplayName(nameEdit)
+                                    isEditingName = false
+                                }) {
+                                    Icon(Icons.Default.Check, contentDescription = "Save")
+                                }
+                                IconButton(onClick = {
+                                    nameEdit = myDisplayName
+                                    isEditingName = false
+                                }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Cancel")
+                                }
+                            }
+                        }
+                    )
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = myDisplayName.ifBlank { "Not set" },
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                        IconButton(onClick = { isEditingName = true }) {
+                            Icon(
+                                Icons.Default.Edit,
+                                contentDescription = "Edit name",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 }
-                MemberAvatarClickable(
-                    displayName = myDisplayName,
-                    memberId = myMemberId,
-                    bitmap = myAvatar,
-                    colorHue = myColorHue,
-                    size = 56.dp,
-                    onClick = { galleryLauncher.launch("image/*") }
-                )
             }
         }
 
@@ -321,7 +382,7 @@ fun SettingsScreen(
                 HorizontalDivider()
 
                 TextButton(
-                    onClick = { /* TODO: Leave family */ },
+                    onClick = { showLeaveDialog = true },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.textButtonColors(
                         contentColor = MaterialTheme.colorScheme.error
@@ -534,6 +595,55 @@ fun SettingsScreen(
                     showImportPasswordDialog = false
                     pendingImportUri = null
                 }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Leave family confirmation dialog
+    if (showLeaveDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!isLeaving) showLeaveDialog = false },
+            icon = { Icon(Icons.Default.ExitToApp, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Leave Family?") },
+            text = {
+                Text(
+                    "This will permanently erase your cryptographic keys and group membership " +
+                    "from this device. You will need your 12-word recovery phrase to rejoin.\n\n" +
+                    "This action cannot be undone."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        isLeaving = true
+                        scope.launch {
+                            LocationService.stopTracking(context)
+                            viewModel.leaveFamily()
+                            val restartIntent = context.packageManager
+                                .getLaunchIntentForPackage(context.packageName)!!
+                                .apply {
+                                    addFlags(
+                                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                                        Intent.FLAG_ACTIVITY_CLEAR_TASK
+                                    )
+                                }
+                            context.startActivity(restartIntent)
+                            android.os.Process.killProcess(android.os.Process.myPid())
+                        }
+                    },
+                    enabled = !isLeaving,
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    if (isLeaving) CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                    else Text("Leave Family")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLeaveDialog = false }, enabled = !isLeaving) {
+                    Text("Cancel")
+                }
             }
         )
     }

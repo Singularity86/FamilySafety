@@ -63,12 +63,15 @@ class FilesViewModel @Inject constructor(
     }
 
     fun openFile(file: SharedFileEntity, context: Context) {
-        val localPath = file.localPath ?: return
-        val f = File(localPath)
-        if (!f.exists()) {
-            _errorMessage.value = "File not downloaded yet"
+        val localPath = file.localPath
+        if (localPath == null || !File(localPath).exists()) {
+            _errorMessage.value = "File not downloaded yet — requesting from other members…"
+            viewModelScope.launch {
+                fileRepository.requestFilesFromPeers()
+            }
             return
         }
+        val f = File(localPath)
         try {
             val uri = FileProvider.getUriForFile(
                 context,

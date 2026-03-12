@@ -294,6 +294,37 @@ class SharedFileRepository @Inject constructor(
     // =========================================================================
 
     /**
+     * Ask every other group member to re-broadcast all their file chunks.
+     * Used when this device missed chunks because it was offline during an upload.
+     * Each peer receives the request on their own file-request topic and responds
+     * by re-publishing the manifest + all chunks to the group.
+     */
+    suspend fun requestFilesFromPeers(): Result<Unit> {
+        return try {
+            val groupDef = groupStateManager.groupDefinition.value
+                ?: return Result.failure(IllegalStateException("No group"))
+            val myMemberId = groupStateManager.localMember.value?.memberId
+                ?: return Result.failure(IllegalStateException("No local member"))
+
+            val payload = json.encodeToString(FileRequestMessage(requesterId = myMemberId))
+                .toByteArray()
+
+            groupDef.members
+                .filter { it.memberId != myMemberId }
+                .forEach { member ->
+                    val topic = MqttConfig.getFileRequestTopic(member.memberId)
+                    mqttPublisher?.invoke(topic, payload, MqttConfig.QOS_AT_LEAST_ONCE, false)
+                }
+
+            Timber.d("$TAG: Requested file re-broadcast from ${groupDef.members.size - 1} peers")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Timber.e(e, "$TAG: Failed to request files from peers")
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Called by AppInitializer when a new member joins.
      * The retained manifest message will be received automatically;
      * we also publish a fresh manifest in case the retained one is stale.

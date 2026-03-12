@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -220,6 +221,7 @@ private fun FileCard(
 ) {
     val isComplete = file.downloadState == "COMPLETE"
     val isDownloading = file.downloadState == "DOWNLOADING"
+    val isPending = file.downloadState == "PENDING"
 
     Card(
         modifier = Modifier
@@ -265,6 +267,23 @@ private fun FileCard(
                         modifier = Modifier.size(32.dp),
                         strokeWidth = 3.dp,
                         color = Color.White
+                    )
+                }
+            }
+
+            // Pending overlay — file known but not yet received
+            if (isPending) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.55f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CloudDownload,
+                        contentDescription = "Waiting for download",
+                        modifier = Modifier.size(32.dp),
+                        tint = Color.White.copy(alpha = 0.85f)
                     )
                 }
             }

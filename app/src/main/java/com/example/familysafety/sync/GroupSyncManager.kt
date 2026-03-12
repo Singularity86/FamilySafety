@@ -149,10 +149,19 @@ class GroupSyncManager @Inject constructor(
     ) {
         withContext(Dispatchers.IO) {
             try {
+                // GroupSyncManager.initialize() hasn't been called yet (MQTT not ready).
+                // Silently skip rather than surface an error indicator to the user.
+                val myMemberId = currentMemberId ?: run {
+                    Timber.d("GroupSyncManager not initialized, skipping broadcast")
+                    return@withContext
+                }
+                val client = mqttClient ?: run {
+                    Timber.d("GroupSyncManager MQTT client not available, skipping broadcast")
+                    return@withContext
+                }
+
                 _syncState.value = SyncState.Syncing
-                
-                val myMemberId = currentMemberId ?: throw GroupStateException.NotInitialized()
-                
+
                 val syncMessage = GroupSyncMessage(
                     groupId = groupDefinition.groupId,
                     version = groupDefinition.version.toInt(),
@@ -182,7 +191,7 @@ class GroupSyncManager @Inject constructor(
                             isRetained = false
                         }
                         
-                        mqttClient?.publish(topic, message, null, object : IMqttActionListener {
+                        client.publish(topic, message, null, object : IMqttActionListener {
                             override fun onSuccess(asyncActionToken: IMqttToken?) {
                                 Timber.i("Broadcasted group update v${groupDefinition.version}")
                                 continuation.resume(Unit) {}

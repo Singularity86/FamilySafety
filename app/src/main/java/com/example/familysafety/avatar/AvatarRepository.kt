@@ -3,6 +3,7 @@ package com.example.familysafety.avatar
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ColorSpace
 import android.net.Uri
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.group.LocalMemberId
@@ -65,7 +66,12 @@ class AvatarRepository @Inject constructor(
             val inputStream = context.contentResolver.openInputStream(uri)
                 ?: return@withContext Result.failure(Exception("Cannot open image"))
 
-            val original = BitmapFactory.decodeStream(inputStream)
+            // Force sRGB so Display P3 photos (Galaxy S-series) don't get
+            // hue/saturation shifted when rendered on an sRGB canvas.
+            val opts = BitmapFactory.Options().apply {
+                inPreferredColorSpace = ColorSpace.get(ColorSpace.Named.SRGB)
+            }
+            val original = BitmapFactory.decodeStream(inputStream, null, opts)
             inputStream.close()
 
             original ?: return@withContext Result.failure(Exception("Cannot decode image"))
@@ -91,6 +97,28 @@ class AvatarRepository @Inject constructor(
             Result.success(Unit)
         } catch (e: Exception) {
             Timber.e(e, "AvatarRepository: setMyAvatar failed")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Save an already-decoded [Bitmap] as the current user's avatar.
+     * Used by the crop screen, which decodes the image once and passes the cropped result.
+     */
+    suspend fun setMyAvatarFromBitmap(bitmap: Bitmap): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val scaled = scaleBitmap(bitmap, maxDimension = 512)
+            val out = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            if (scaled !== bitmap) scaled.recycle()
+            val jpeg = out.toByteArray()
+            val myId = localMemberId.value
+            store.save(myId, jpeg)
+            updateCache(myId, BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size))
+            groupStateManager.updateLocalMemberAvatarHash(AvatarStore.sha256Hex(jpeg))
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Timber.e(e, "AvatarRepository: setMyAvatarFromBitmap failed")
             Result.failure(e)
         }
     }

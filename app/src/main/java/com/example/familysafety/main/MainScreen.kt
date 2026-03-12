@@ -34,6 +34,12 @@ sealed class MainRoute(val route: String, val label: String, val icon: ImageVect
     data object Settings : MainRoute("settings", "Settings", Icons.Default.Settings)
 }
 
+// History route (not in bottom nav — detail screen)
+object HistoryRoute {
+    const val PATTERN = "history/{memberId}"
+    fun route(memberId: String) = "history/$memberId"
+}
+
 // Chat sub-routes (not in bottom nav)
 object ChatRoutes {
     const val GROUP_CHAT = "chat/group"
@@ -44,7 +50,7 @@ object ChatRoutes {
 }
 
 // Routes that should hide the bottom nav bar
-private val fullScreenRoutes = setOf("invite", "qr_scanner")
+private val fullScreenRoutes = setOf("invite", "qr_scanner", HistoryRoute.PATTERN, "avatar_crop")
 
 private val bottomNavItems = listOf(
     MainRoute.Map,
@@ -198,6 +204,9 @@ fun MainScreen(
                     },
                     onNavigateToInvite = {
                         navController.navigate("invite")
+                    },
+                    onNavigateToHistory = { memberId ->
+                        navController.navigate(HistoryRoute.route(memberId))
                     }
                 )
             }
@@ -212,7 +221,18 @@ fun MainScreen(
                 FilesScreen(viewModel = filesViewModel)
             }
             composable(MainRoute.Settings.route) {
-                SettingsScreen(viewModel = viewModel, onThemeChanged = onThemeChanged)
+                SettingsScreen(
+                    viewModel = viewModel,
+                    onThemeChanged = onThemeChanged,
+                    onNavigateToCrop = { navController.navigate("avatar_crop") }
+                )
+            }
+
+            composable("avatar_crop") {
+                AvatarCropScreen(
+                    viewModel = viewModel,
+                    onBack = { navController.popBackStack() }
+                )
             }
 
             // Chat screens
@@ -244,6 +264,17 @@ fun MainScreen(
                     memberId = memberId,
                     onBack = { navController.popBackStack() },
                     viewModel = chatViewModel
+                )
+            }
+
+            // History detail screen
+            composable(
+                route = HistoryRoute.PATTERN,
+                arguments = listOf(navArgument("memberId") { type = NavType.StringType })
+            ) {
+                HistoryScreen(
+                    viewModel = hiltViewModel(),
+                    onBack = { navController.popBackStack() }
                 )
             }
         }

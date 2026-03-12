@@ -3,8 +3,11 @@ package com.example.familysafety
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -91,6 +94,7 @@ class MainActivity : ComponentActivity() {
                             checkAndRequestLocationPermissions()
                             requestNearbyWifiPermissionIfNeeded()
                             requestNotificationPermissionIfNeeded()
+                            requestBatteryOptimizationExemptionIfNeeded()
                         }
 
                         MainScreen(
@@ -209,6 +213,27 @@ class MainActivity : ComponentActivity() {
             if (ContextCompat.checkSelfPermission(this, perm) != PackageManager.PERMISSION_GRANTED) {
                 nearbyWifiLauncher.launch(perm)
             }
+        }
+    }
+
+    /**
+     * Ask the OS to exempt this app from battery optimization so the location
+     * foreground service isn't throttled or killed when the screen is off.
+     * This is particularly important on Samsung/Xiaomi/Oppo devices with
+     * aggressive battery management.
+     */
+    private fun requestBatteryOptimizationExemptionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        if (pm.isIgnoringBatteryOptimizations(packageName)) return
+        try {
+            startActivity(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+            )
+        } catch (e: Exception) {
+            // Device doesn't support the direct request dialog; silently ignore.
         }
     }
 
