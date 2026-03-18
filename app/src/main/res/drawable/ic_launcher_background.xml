@@ -6,16 +6,16 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Radial gradient: warm rose-plum center → near-black edges -->
+    <!-- Deep navy-to-near-black radial gradient -->
     <path android:pathData="M0,0h108v108h-108z">
         <aapt:attr name="android:fillColor">
             <gradient
                 android:type="radial"
                 android:centerX="54"
-                android:centerY="46"
-                android:gradientRadius="66"
-                android:startColor="#3B1829"
-                android:endColor="#0F0A0D" />
+                android:centerY="42"
+                android:gradientRadius="68"
+                android:startColor="#0C1A38"
+                android:endColor="#050810" />
         </aapt:attr>
     </path>
 

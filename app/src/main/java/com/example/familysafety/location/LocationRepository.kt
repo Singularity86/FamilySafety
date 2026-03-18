@@ -1,5 +1,7 @@
 package com.example.familysafety.location
 
+import com.example.familysafety.geofence.GeofenceMonitor
+import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.storage.LocationHistoryRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,7 +20,9 @@ import javax.inject.Singleton
  */
 @Singleton
 class LocationRepository @Inject constructor(
-    private val locationHistoryRepository: LocationHistoryRepository
+    private val locationHistoryRepository: LocationHistoryRepository,
+    private val geofenceMonitor: GeofenceMonitor,
+    private val groupStateManager: GroupStateManager
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -59,6 +63,12 @@ class LocationRepository @Inject constructor(
         _memberLocations.value = _memberLocations.value.toMutableMap().apply {
             put(location.memberId, location)
         }
+
+        // Check geofences and speed for this location update
+        val displayName = groupStateManager.groupDefinition.value
+            ?.findMemberById(location.memberId)?.displayName
+            ?: location.memberId.take(8)
+        geofenceMonitor.checkLocation(location, displayName)
 
         // Persist to database asynchronously
         scope.launch {

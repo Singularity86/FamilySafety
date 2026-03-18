@@ -53,8 +53,15 @@ class MainActivity : ComponentActivity() {
 
         if (fineLocationGranted || coarseLocationGranted) {
             startLocationService()
+            // On Android 10+, request background location separately so the OS
+            // delivers updates when the screen is off ("Allow all the time").
+            requestBackgroundLocationIfNeeded()
         }
     }
+
+    private val backgroundLocationLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* granted or not — foreground service still runs; background access improves reliability */ }
 
     // Nearby Wi-Fi Devices permission — required for mDNS (NSD) on Android 13+.
     // Silently ignored if denied; avatar sync via NSD simply won't work on LAN.
@@ -171,12 +178,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Check and request foreground location permissions.
-     * Background location is NOT requested here — Android 11+ requires it to be
-     * requested separately after foreground is granted, and we don't need it for
-     * basic family location sharing.
-     */
     private fun checkAndRequestLocationPermissions() {
         val permissions = arrayOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
@@ -191,6 +192,21 @@ class MainActivity : ComponentActivity() {
             locationPermissionLauncher.launch(permissions)
         } else {
             startLocationService()
+            requestBackgroundLocationIfNeeded()
+        }
+    }
+
+    /**
+     * Request ACCESS_BACKGROUND_LOCATION ("Allow all the time") separately after foreground
+     * location is granted. Required on Android 10+ for reliable location delivery when the
+     * screen is off. On Android 11+, this takes the user to Settings; on Android 10 a dialog
+     * is shown. Without this, the OS throttles location to once per hour in background.
+     */
+    private fun requestBackgroundLocationIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val perm = Manifest.permission.ACCESS_BACKGROUND_LOCATION
+        if (ContextCompat.checkSelfPermission(this, perm) != PackageManager.PERMISSION_GRANTED) {
+            backgroundLocationLauncher.launch(perm)
         }
     }
 

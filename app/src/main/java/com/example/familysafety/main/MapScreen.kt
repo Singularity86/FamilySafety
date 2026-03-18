@@ -10,7 +10,10 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
+import android.view.MotionEvent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -28,6 +31,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FileDownload
+import com.example.familysafety.geofence.GeofenceZone
 import kotlinx.coroutines.launch
 import org.osmdroid.tileprovider.cachemanager.CacheManager
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
@@ -36,6 +40,8 @@ import org.osmdroid.util.GeoPoint
 import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Overlay
+import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 
@@ -58,7 +64,9 @@ private val MAP_TILES = object : OnlineTileSourceBase(
 @Composable
 fun MapScreen(
     viewModel: MainViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    geofences: List<GeofenceZone> = emptyList(),
+    onLongPressMap: (GeoPoint) -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -221,6 +229,36 @@ fun MapScreen(
         mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
         mapView.controller.setZoom(16.0)
         viewModel.clearFocus()
+    }
+
+    // Add long-press overlay once (stable reference via remember)
+    val longPressOverlay = remember(onLongPressMap) {
+        LongPressOverlay(onLongPressMap)
+    }
+    LaunchedEffect(longPressOverlay) {
+        mapView.overlays.removeAll { it is LongPressOverlay }
+        mapView.overlays.add(0, longPressOverlay)
+    }
+
+    // Draw geofence zone circles
+    LaunchedEffect(geofences) {
+        mapView.overlays.removeAll { it is Polygon }
+        for (zone in geofences) {
+            val center = GeoPoint(zone.latitude, zone.longitude)
+            val circlePoints = Polygon.pointsAsCircle(center, zone.radiusMeters.toDouble())
+            val color = androidx.core.graphics.ColorUtils.HSLToColor(
+                floatArrayOf(zone.colorHue, 0.6f, 0.5f)
+            )
+            val fillColor = (color and 0x00FFFFFF) or (0x33 shl 24) // ~20% alpha
+            val polygon = Polygon(mapView).apply {
+                points = circlePoints
+                fillPaint.color = fillColor
+                outlinePaint.color = color
+                outlinePaint.strokeWidth = 3f
+            }
+            mapView.overlays.add(polygon)
+        }
+        mapView.invalidate()
     }
 
     // Rebuild member markers whenever locations, members, or avatars change.
@@ -549,6 +587,31 @@ private fun memberMarkerBitmap(
     }
 
     return bmp
+}
+
+/** Detects a 600 ms long-press on the map and calls [onLongPress] with the tapped GeoPoint. */
+private class LongPressOverlay(
+    private val onLongPress: (GeoPoint) -> Unit
+) : Overlay() {
+    private val handler = Handler(Looper.getMainLooper())
+    private var pendingRunnable: Runnable? = null
+
+    override fun onTouchEvent(event: MotionEvent, mapView: MapView): Boolean {
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                val geoPoint = mapView.projection.fromPixels(
+                    event.x.toInt(), event.y.toInt()
+                ) as GeoPoint
+                pendingRunnable = Runnable { onLongPress(geoPoint) }
+                handler.postDelayed(pendingRunnable!!, 600)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_MOVE -> {
+                pendingRunnable?.let { handler.removeCallbacks(it) }
+                pendingRunnable = null
+            }
+        }
+        return false // don't consume — allow normal map panning
+    }
 }
 
 private fun getTimeAgo(timestamp: Long): String {

@@ -19,10 +19,15 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import com.example.familysafety.chat.ChatScreen
 import com.example.familysafety.chat.ChatViewModel
 import com.example.familysafety.chat.ConversationListScreen
 import com.example.familysafety.files.FilesViewModel
+import com.example.familysafety.geofence.GeofenceEditorScreen
+import com.example.familysafety.geofence.GeofenceListScreen
+import com.example.familysafety.geofence.GeofenceViewModel
 import com.example.familysafety.ui.theme.ThemeMode
 import androidx.compose.ui.unit.dp
 
@@ -31,6 +36,7 @@ sealed class MainRoute(val route: String, val label: String, val icon: ImageVect
     data object Members : MainRoute("members", "Members", Icons.Default.People)
     data object Chat : MainRoute("chat", "Chat", Icons.Default.Chat)
     data object Files : MainRoute("files", "Files", Icons.Default.Folder)
+    data object Zones : MainRoute("geofences", "Zones", Icons.Default.LocationCity)
     data object Settings : MainRoute("settings", "Settings", Icons.Default.Settings)
 }
 
@@ -50,13 +56,17 @@ object ChatRoutes {
 }
 
 // Routes that should hide the bottom nav bar
-private val fullScreenRoutes = setOf("invite", "qr_scanner", HistoryRoute.PATTERN, "avatar_crop")
+private val fullScreenRoutes = setOf(
+    "invite", "qr_scanner", HistoryRoute.PATTERN, "avatar_crop",
+    "geofence_editor/{geofenceId}"
+)
 
 private val bottomNavItems = listOf(
     MainRoute.Map,
     MainRoute.Members,
     MainRoute.Chat,
     MainRoute.Files,
+    MainRoute.Zones,
     MainRoute.Settings
 )
 
@@ -66,6 +76,7 @@ fun MainScreen(
     viewModel: MainViewModel = hiltViewModel(),
     chatViewModel: ChatViewModel = hiltViewModel(),
     filesViewModel: FilesViewModel = hiltViewModel(),
+    geofenceViewModel: GeofenceViewModel = hiltViewModel(),
     onThemeChanged: (ThemeMode) -> Unit = {},
     navigateTo: String? = null
 ) {
@@ -188,7 +199,15 @@ fun MainScreen(
             modifier = Modifier.padding(paddingValues)
         ) {
             composable(MainRoute.Map.route) {
-                MapScreen(viewModel = viewModel)
+                val geofences by geofenceViewModel.geofences.collectAsState()
+                MapScreen(
+                    viewModel = viewModel,
+                    geofences = geofences,
+                    onLongPressMap = { geoPoint ->
+                        geofenceViewModel.setPendingGeoPoint(geoPoint.latitude, geoPoint.longitude)
+                        navController.navigate("geofence_editor/new")
+                    }
+                )
             }
             composable(MainRoute.Members.route) {
                 MembersScreen(
@@ -219,6 +238,24 @@ fun MainScreen(
             }
             composable(MainRoute.Files.route) {
                 FilesScreen(viewModel = filesViewModel)
+            }
+            composable(MainRoute.Zones.route) {
+                GeofenceListScreen(
+                    onNavigateToEditor = { geofenceId ->
+                        navController.navigate("geofence_editor/$geofenceId")
+                    }
+                )
+            }
+            composable(
+                route = "geofence_editor/{geofenceId}",
+                arguments = listOf(navArgument("geofenceId") { type = NavType.StringType })
+            ) { backStackEntry ->
+                val geofenceId = backStackEntry.arguments?.getString("geofenceId") ?: "new"
+                GeofenceEditorScreen(
+                    geofenceId = geofenceId,
+                    viewModel = geofenceViewModel,
+                    onBack = { navController.popBackStack() }
+                )
             }
             composable(MainRoute.Settings.route) {
                 SettingsScreen(

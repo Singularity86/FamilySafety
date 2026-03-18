@@ -52,6 +52,12 @@ class LocationService : Service() {
     private var lastReportedMoving: Boolean? = null
 
     private var activityMonitoringJob: Job? = null
+    private var reconnectObserverJob: Job? = null
+
+    private val wakeLock by lazy {
+        (getSystemService(POWER_SERVICE) as android.os.PowerManager)
+            .newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "FamilySafety::LocationPublish")
+    }
 
     companion object {
         private const val CHANNEL_ID = "location_service_channel"
@@ -169,6 +175,23 @@ class LocationService : Service() {
             }
         }
 
+        // When MQTT reconnects, immediately republish last known location so other
+        // members don't have to wait up to 5 minutes for the next GPS fix.
+        reconnectObserverJob = scope.launch {
+            var wasConnected = false
+            mqttTransport.connectionState.collect { state ->
+                val isNowConnected = state is MqttTransport.ConnectionState.Connected
+                if (isNowConnected && !wasConnected) {
+                    val lastLocation = locationRepository.myLocation.value
+                    if (lastLocation != null) {
+                        Timber.i("MQTT reconnected — republishing last known location")
+                        mqttTransport.publishLocation(lastLocation)
+                    }
+                }
+                wasConnected = isNowConnected
+            }
+        }
+
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 result.lastLocation?.let { location ->
@@ -209,7 +232,10 @@ class LocationService : Service() {
         isTracking = false
         activityMonitoringJob?.cancel()
         activityMonitoringJob = null
+        reconnectObserverJob?.cancel()
+        reconnectObserverJob = null
         activityRecognitionManager.stopMonitoring()
+        if (wakeLock.isHeld) wakeLock.release()
         Timber.i("Stopped location updates")
     }
 
@@ -239,8 +265,12 @@ class LocationService : Service() {
     private fun handleLocationUpdate(location: Location) {
         val id = memberId ?: return
 
+        // Hold a partial wake lock for up to 15 seconds to prevent the CPU from
+        // sleeping mid-publish on aggressive battery-managed devices (Samsung, etc.)
+        wakeLock.acquire(15_000L)
+
         scope.launch {
-            ErrorHandler.safely(
+            try { ErrorHandler.safely(
                 tag = "LocationService",
                 operation = "location update"
             ) {
@@ -285,6 +315,8 @@ class LocationService : Service() {
                 // GPS speed debounce: AR is the primary signal, but GPS speed acts as
                 // a fallback when AR confidence is low (e.g. first few minutes of tracking).
                 adjustIntervalFromGps(location)
+            } } finally {
+                if (wakeLock.isHeld) wakeLock.release()
             }
         }
     }

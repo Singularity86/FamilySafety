@@ -36,7 +36,8 @@ class ChatRepository @Inject constructor(
     private val chatMessageDao: ChatMessageDao,
     private val groupStateManager: GroupStateManager,
     private val e2eeManager: E2EEManager,
-    private val replicationManager: ReplicationManager
+    private val replicationManager: ReplicationManager,
+    private val notificationHelper: ChatNotificationHelper
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true }
@@ -396,6 +397,24 @@ class ChatRepository @Inject constructor(
             // Save to database
             chatMessageDao.insert(message)
             Timber.d("$TAG: Received and saved message ${message.messageId} from $senderMemberId")
+
+            // Post notification if the conversation is not currently open
+            if (_activeConversationId.value != conversationId) {
+                val preview = when (payload.messageType) {
+                    MessageType.TEXT -> payload.content.take(80)
+                    MessageType.LOCATION -> "Shared a location"
+                    MessageType.SYSTEM -> payload.content.take(80)
+                }
+                val isGroupMessage = payload.conversationId != null
+                val route = if (isGroupMessage) "chat/group"
+                            else "chat/conversation/$senderMemberId"
+                notificationHelper.notifyNewMessage(
+                    senderName = sender.displayName,
+                    senderMemberId = senderMemberId,
+                    messagePreview = preview,
+                    conversationRoute = route
+                )
+            }
 
             // Send delivery receipt
             sendDeliveryReceipt(sender, message.messageId)

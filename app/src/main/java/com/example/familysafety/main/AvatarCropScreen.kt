@@ -11,6 +11,8 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.RotateLeft
+import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -149,6 +151,31 @@ fun AvatarCropScreen(
                 Text("Cancel", color = Color.White)
             }
             Spacer(Modifier.weight(1f))
+            IconButton(
+                onClick = {
+                    imageBitmap?.let { bmp2 ->
+                        imageBitmap = rotateBitmap(bmp2, -90f)
+                        scale = 1f
+                        offset = Offset.Zero
+                    }
+                },
+                enabled = bmp != null
+            ) {
+                Icon(Icons.Default.RotateLeft, contentDescription = "Rotate left", tint = Color.White)
+            }
+            IconButton(
+                onClick = {
+                    imageBitmap?.let { bmp2 ->
+                        imageBitmap = rotateBitmap(bmp2, 90f)
+                        scale = 1f
+                        offset = Offset.Zero
+                    }
+                },
+                enabled = bmp != null
+            ) {
+                Icon(Icons.Default.RotateRight, contentDescription = "Rotate right", tint = Color.White)
+            }
+            Spacer(Modifier.weight(1f))
             Button(
                 onClick = {
                     val b = imageBitmap ?: return@Button
@@ -201,4 +228,9 @@ private fun computeCropBitmap(
     val h = (bottom - top).coerceAtLeast(1)
 
     return Bitmap.createBitmap(bitmap, left, top, w, h)
+}
+
+private fun rotateBitmap(bitmap: Bitmap, degrees: Float): Bitmap {
+    val matrix = android.graphics.Matrix().apply { postRotate(degrees) }
+    return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
 }

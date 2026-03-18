@@ -312,6 +312,74 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Speed Alerts card
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Speed Alerts",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Text(
+                    text = "Get notified when a family member drives above this speed",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                val speedPrefs = context.getSharedPreferences("geofence_prefs", android.content.Context.MODE_PRIVATE)
+                var speedAlertsEnabled by remember {
+                    mutableStateOf(speedPrefs.getBoolean("speed_alerts_enabled", true))
+                }
+                var speedThreshold by remember {
+                    mutableIntStateOf(speedPrefs.getInt("speed_threshold_mph", 90))
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Enable speed alerts")
+                    Switch(
+                        checked = speedAlertsEnabled,
+                        onCheckedChange = { enabled ->
+                            speedAlertsEnabled = enabled
+                            speedPrefs.edit().putBoolean("speed_alerts_enabled", enabled).apply()
+                        }
+                    )
+                }
+
+                if (speedAlertsEnabled) {
+                    Text(
+                        text = "Threshold: $speedThreshold mph",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Slider(
+                        value = speedThreshold.toFloat(),
+                        onValueChange = { value ->
+                            speedThreshold = value.toInt()
+                            speedPrefs.edit().putInt("speed_threshold_mph", value.toInt()).apply()
+                        },
+                        valueRange = 50f..120f,
+                        steps = 69, // 1 mph steps between 50 and 120
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("50 mph", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("120 mph", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Backup card
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {

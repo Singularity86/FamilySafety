@@ -1,70 +1,185 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
     <!--
-        Shield + Heart icon
-        Safe zone: 18–90 (72×72dp centred in 108×108dp).
-        Shield: 28–80 wide (52dp), 22–82 tall (60dp), centred at (54, 52).
-        Heart cutout: 42–66 wide (24dp), 38–61 tall (23dp).
+        Liquid-glass shield + heart icon.
+        Shield spans x:32–76, y:25–83 — tip at y=83 sits comfortably inside
+        the adaptive-icon safe area (18–90) and circular-crop safe area (~27–81).
     -->
 
-    <!-- Soft drop shadow: shield shifted down 3dp, 22% opacity -->
+    <!-- 1. Soft drop shadow (shifted +3 dp down, 20% opacity) -->
     <path
         android:fillColor="#000000"
-        android:alpha="0.22"
+        android:alpha="0.20"
         android:pathData="
-            M 32,25 L 76,25
-            Q 80,25 80,29
-            L 80,55
-            C 80,69 65,80 54,85
-            C 43,80 28,69 28,55
-            L 28,29
-            Q 28,25 32,25
+            M35,28 L73,28
+            Q76,28 76,32
+            L76,57
+            C76,71 63,81 54,86
+            C45,81 32,71 32,57
+            L32,32
+            Q32,28 35,28
             Z" />
 
-    <!-- Shield body with heart cut-out (evenOdd = heart becomes transparent) -->
+    <!-- 2. Shield base body — frosted blue glass gradient, heart punched out -->
     <path
         android:fillType="evenOdd"
-        android:fillColor="#F2CCDC"
         android:pathData="
-            M 32,22
-            L 76,22
-            Q 80,22 80,26
-            L 80,52
-            C 80,66 65,77 54,82
-            C 43,77 28,66 28,52
-            L 28,26
-            Q 28,22 32,22
+            M35,25 L73,25
+            Q76,25 76,29
+            L76,54
+            C76,68 63,79 54,83
+            C45,79 32,68 32,54
+            L32,29
+            Q32,25 35,25
             Z
+            M54,62
+            C51,58 44,53 44,47
+            C44,41 48,39 51,42
+            C52,43 53,45 54,48
+            C55,45 56,43 57,42
+            C60,39 64,41 64,47
+            C64,53 57,58 54,62
+            Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54" android:startY="25"
+                android:endX="54" android:endY="83"
+                android:startColor="#5090C4"
+                android:endColor="#1A3D68" />
+        </aapt:attr>
+    </path>
 
-            M 54,61
-            C 50,57 42,52 42,46
-            C 42,40 47,38 50,41
-            C 52,42 53,44 54,47
-            C 55,44 56,42 58,41
-            C 61,38 66,40 66,46
-            C 66,52 58,57 54,61
+    <!-- 3. Large diffuse glass reflection — upper ~45% of shield interior -->
+    <path
+        android:alpha="0.40"
+        android:pathData="
+            M36,25 L72,25
+            Q76,25 76,30
+            L76,50
+            Q66,43 54,43
+            Q42,43 32,50
+            L32,30
+            Q32,25 36,25
+            Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54" android:startY="25"
+                android:endX="54" android:endY="50"
+                android:startColor="#FFFFFF"
+                android:endColor="#00FFFFFF" />
+        </aapt:attr>
+    </path>
+
+    <!-- 4. Specular highlight — bright narrow band at very top edge -->
+    <path
+        android:alpha="0.72"
+        android:pathData="
+            M38,25 L70,25
+            Q74,25 75.5,28
+            L75.5,34
+            Q65,30 54,30
+            Q43,30 32.5,34
+            L32.5,28
+            Q34,25 38,25
+            Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54" android:startY="25"
+                android:endX="54" android:endY="34"
+                android:startColor="#FFFFFF"
+                android:endColor="#00FFFFFF" />
+        </aapt:attr>
+    </path>
+
+    <!-- 5. Caustic shimmer — subtle lens-shaped light band upper-centre -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:alpha="0.13"
+        android:pathData="
+            M48,33
+            Q56,29 64,35
+            Q60,45 54,46
+            Q48,45 44,35
             Z" />
 
-    <!-- Subtle highlight: thin inner rim on shield top, adds depth -->
+    <!-- 6. Side-rim internal reflection — left inner edge gleam -->
+    <path
+        android:alpha="0.18"
+        android:pathData="
+            M33,32 L33,54
+            C33,64 38,73 44,78
+            L44,72
+            C39,67 35,59 35,54
+            L35,34
+            Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="33" android:startY="54"
+                android:endX="44" android:endY="54"
+                android:startColor="#FFFFFF"
+                android:endColor="#00FFFFFF" />
+        </aapt:attr>
+    </path>
+
+    <!-- 7. Heart fill — warm rose with slight glow -->
+    <path
+        android:fillColor="#FFB0CC"
+        android:alpha="0.95"
+        android:pathData="
+            M54,62
+            C51,58 44,53 44,47
+            C44,41 48,39 51,42
+            C52,43 53,45 54,48
+            C55,45 56,43 57,42
+            C60,39 64,41 64,47
+            C64,53 57,58 54,62
+            Z" />
+
+    <!-- 8. Heart specular — small white gleam on upper-right lobe -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:alpha="0.52"
+        android:pathData="
+            M57.5,42.5
+            C60,41 63.5,42.5 64,46
+            Q62,42 58,43.5
+            Q56,44.5 55,48
+            Q55.5,45 57.5,42.5
+            Z" />
+
+    <!-- 9. Outer edge rim — full shield outline, subtle white stroke -->
     <path
         android:fillColor="#00000000"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="1.2"
-        android:alpha="0.18"
+        android:strokeWidth="1.4"
+        android:alpha="0.28"
         android:pathData="
-            M 32,22
-            L 76,22
-            Q 80,22 80,26
-            L 80,52
-            C 80,66 65,77 54,82
-            C 43,77 28,66 28,52
-            L 28,26
-            Q 28,22 32,22
+            M35,25 L73,25
+            Q76,25 76,29
+            L76,54
+            C76,68 63,79 54,83
+            C45,79 32,68 32,54
+            L32,29
+            Q32,25 35,25
             Z" />
+
+    <!-- 10. Top-edge accent — brighter stroke on the top bar only -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.0"
+        android:strokeLineCap="round"
+        android:alpha="0.65"
+        android:pathData="M37,25 L71,25 Q74.5,25 75.5,27.5" />
 
 </vector>
