@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import java.util.Calendar
@@ -88,4 +89,9 @@ class HistoryViewModel @Inject constructor(
     }
 
     fun isAtToday(): Boolean = _selectedDayStart.value >= todayMidnightMs()
+
+    /** Total number of location records stored for this member (all days). */
+    val totalRecordCount: StateFlow<Int> = flow {
+        emit(historyRepo.getCountForMember(memberId))
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 }

@@ -1,8 +1,12 @@
 package com.example.familysafety.main
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import com.example.familysafety.location.LocationService
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -32,6 +37,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.example.familysafety.ui.theme.ThemeMode
 import com.example.familysafety.ui.theme.ThemePreference
 import kotlinx.coroutines.launch
@@ -305,6 +313,83 @@ fun SettingsScreen(
                     Switch(
                         checked = locationEnabled,
                         onCheckedChange = { locationEnabled = it }
+                    )
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                // Live permission status — refreshes whenever user returns from system settings
+                val lifecycleOwner = LocalLifecycleOwner.current
+                var hasFineLocation by remember {
+                    mutableStateOf(
+                        ContextCompat.checkSelfPermission(
+                            context, Manifest.permission.ACCESS_FINE_LOCATION
+                        ) == PackageManager.PERMISSION_GRANTED
+                    )
+                }
+                var hasBackgroundLocation by remember {
+                    mutableStateOf(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                            ContextCompat.checkSelfPermission(
+                                context, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                            ) == PackageManager.PERMISSION_GRANTED
+                        else true
+                    )
+                }
+                DisposableEffect(lifecycleOwner) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_RESUME) {
+                            hasFineLocation = ContextCompat.checkSelfPermission(
+                                context, Manifest.permission.ACCESS_FINE_LOCATION
+                            ) == PackageManager.PERMISSION_GRANTED
+                            hasBackgroundLocation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                                ContextCompat.checkSelfPermission(
+                                    context, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                                ) == PackageManager.PERMISSION_GRANTED
+                            else true
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+                }
+
+                val appSettingsLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.StartActivityForResult()
+                ) { /* permission re-check happens via ON_RESUME */ }
+                val bgPermLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission()
+                ) { granted -> hasBackgroundLocation = granted }
+
+                PermissionStatusRow(
+                    label = "Location while using app",
+                    granted = hasFineLocation,
+                    onGrant = {
+                        appSettingsLauncher.launch(
+                            Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:${context.packageName}")
+                            )
+                        )
+                    }
+                )
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    PermissionStatusRow(
+                        label = "Location always (background)",
+                        granted = hasBackgroundLocation,
+                        onGrant = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                // Android 11+: OS only allows this via the Settings page
+                                appSettingsLauncher.launch(
+                                    Intent(
+                                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
+                                )
+                            } else {
+                                // Android 10: permission dialog still works
+                                bgPermLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                            }
+                        }
                     )
                 }
             }
@@ -787,6 +872,41 @@ fun SettingsScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun PermissionStatusRow(label: String, granted: Boolean, onGrant: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+        ) {
+            Icon(
+                imageVector = if (granted) Icons.Default.CheckCircle else Icons.Default.Warning,
+                contentDescription = null,
+                tint = if (granted) Color(0xFF4CAF50) else MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Column {
+                Text(label, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    text = if (granted) "Granted" else "Not granted — tap to fix",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (granted) Color(0xFF4CAF50) else MaterialTheme.colorScheme.error
+                )
+            }
+        }
+        if (!granted) {
+            TextButton(onClick = onGrant) { Text("Grant") }
+        }
     }
 }
 

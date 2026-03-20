@@ -10,8 +10,10 @@ import android.graphics.drawable.Drawable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.*
@@ -20,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.graphics.ColorUtils
 import com.example.familysafety.location.MemberLocation
@@ -69,6 +72,7 @@ fun HistoryScreen(
     val locationHistory by viewModel.locationHistory.collectAsState()
     val distanceMeters by viewModel.distanceMeters.collectAsState()
     val selectedDayStart by viewModel._selectedDayStart.collectAsState()
+    val totalRecordCount by viewModel.totalRecordCount.collectAsState()
 
     val colorHue = member?.colorHue
         ?: ((viewModel.memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
@@ -77,6 +81,15 @@ fun HistoryScreen(
     val dayLabel = remember(selectedDayStart) {
         SimpleDateFormat("EEEE, MMM d", Locale.getDefault()).format(Date(selectedDayStart))
     }
+
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    var showTimePicker by remember { mutableStateOf(false) }
+    val timePickerState = rememberTimePickerState(
+        initialHour = 12,
+        initialMinute = 0,
+        is24Hour = false
+    )
 
     Scaffold(
         topBar = {
@@ -116,7 +129,19 @@ fun HistoryScreen(
                 IconButton(onClick = { viewModel.previousDay() }) {
                     Icon(Icons.Default.ChevronLeft, contentDescription = "Previous day")
                 }
-                Text(text = dayLabel, style = MaterialTheme.typography.titleSmall)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = dayLabel, style = MaterialTheme.typography.titleSmall)
+                    if (locationHistory.isNotEmpty()) {
+                        IconButton(onClick = { showTimePicker = true }) {
+                            Icon(
+                                Icons.Default.AccessTime,
+                                contentDescription = "Jump to time",
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
                 IconButton(
                     onClick = { viewModel.nextDay() },
                     enabled = !viewModel.isAtToday()
@@ -137,6 +162,12 @@ fun HistoryScreen(
             // Stats row
             val pointCount = locationHistory.size
             val distanceKm = distanceMeters / 1000f
+            val estimatedKb = (totalRecordCount * 120L) / 1024
+            val storageLabel = when {
+                estimatedKb < 1 -> "<1 KB"
+                estimatedKb < 1024 -> "$estimatedKb KB"
+                else -> "${"%.1f".format(estimatedKb / 1024f)} MB"
+            }
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -144,27 +175,76 @@ fun HistoryScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = MaterialTheme.shapes.small
             ) {
-                Text(
-                    text = if (pointCount == 0) "No location data for this day"
-                           else "$pointCount points · ${"%.1f".format(distanceKm)} km",
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (pointCount == 0) MaterialTheme.colorScheme.onSurfaceVariant
-                            else MaterialTheme.colorScheme.onSurface
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = if (pointCount == 0) "No location data for this day"
+                               else "$pointCount points · ${"%.1f".format(distanceKm)} km",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (pointCount == 0) MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.onSurface
+                    )
+                    if (totalRecordCount > 0) {
+                        Text(
+                            text = "$totalRecordCount total · $storageLabel",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
 
             // Timeline — newest first
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 16.dp)
             ) {
-                items(locationHistory.asReversed(), key = { it.timestamp }) { loc ->
+                items(locationHistory.asReversed(), key = { "${it.timestamp}_${it.latitude}_${it.longitude}" }) { loc ->
                     LocationHistoryRow(location = loc)
                     HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
                 }
             }
         }
+    }
+
+    // Time-jump dialog
+    if (showTimePicker) {
+        AlertDialog(
+            onDismissRequest = { showTimePicker = false },
+            title = { Text("Jump to time") },
+            text = {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth()) {
+                    TimePicker(state = timePickerState)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showTimePicker = false
+                    // Build target timestamp from selected hour:minute on the displayed day
+                    val targetMs = selectedDayStart +
+                        timePickerState.hour * 3_600_000L +
+                        timePickerState.minute * 60_000L
+                    // locationHistory is DESC (newest first); asReversed() gives ASC (oldest first)
+                    val ascending = locationHistory.asReversed()
+                    // Find the first entry at or after the target time
+                    val idx = ascending.indexOfFirst { it.timestamp >= targetMs }
+                    val scrollTo = when {
+                        idx >= 0 -> idx
+                        ascending.isNotEmpty() -> ascending.lastIndex // target is after all entries
+                        else -> return@TextButton
+                    }
+                    scope.launch { listState.animateScrollToItem(scrollTo) }
+                }) { Text("Go") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTimePicker = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 
@@ -222,7 +302,15 @@ private fun RouteMapView(
                     mapView.controller.animateTo(points.first())
                     mapView.controller.setZoom(15.0)
                 } else {
-                    mapView.zoomToBoundingBox(BoundingBox.fromGeoPoints(points), true, 100)
+                    val box = BoundingBox.fromGeoPoints(points)
+                    // Guard against zero-area box (all points identical) which can
+                    // cause a divide-by-zero inside zoomToBoundingBox on some devices.
+                    if (box.latNorth != box.latSouth || box.lonEast != box.lonWest) {
+                        mapView.zoomToBoundingBox(box, true, 100)
+                    } else {
+                        mapView.controller.animateTo(points.first())
+                        mapView.controller.setZoom(15.0)
+                    }
                 }
             }
         }

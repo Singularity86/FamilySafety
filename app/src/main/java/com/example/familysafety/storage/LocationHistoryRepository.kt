@@ -250,6 +250,13 @@ class LocationHistoryRepository @Inject constructor(
     }
 
     /**
+     * Get total count of stored locations for a specific member (all time).
+     */
+    suspend fun getCountForMember(memberId: String): Int {
+        return locationHistoryDao.getLocationCount(memberId, 0L, Long.MAX_VALUE)
+    }
+
+    /**
      * Get count per member.
      */
     suspend fun getCountPerMember(): Map<String, Int> {

@@ -26,6 +26,7 @@ import com.example.familysafety.main.MainScreen
 import com.example.familysafety.ui.theme.FamilySafetyTheme
 import com.example.familysafety.ui.theme.ThemeMode
 import com.example.familysafety.ui.theme.ThemePreference
+import androidx.core.view.WindowCompat
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -76,6 +77,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Let Compose handle insets (keyboard, status bar) instead of the OS resizing the window.
+        // Without this, imePadding() fights the window resize and causes a blank-screen flash.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         navigateTo.value = intent?.getStringExtra("navigate_to")
 
         setContent {
