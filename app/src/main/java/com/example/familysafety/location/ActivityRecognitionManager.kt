@@ -24,6 +24,9 @@ class ActivityRecognitionManager @Inject constructor(
     private val _isMoving = MutableStateFlow(true)
     val isMoving: StateFlow<Boolean> = _isMoving.asStateFlow()
 
+    private val _isInVehicle = MutableStateFlow(false)
+    val isInVehicle: StateFlow<Boolean> = _isInVehicle.asStateFlow()
+
     private var pendingIntent: PendingIntent? = null
 
     fun startMonitoring() {
@@ -45,6 +48,14 @@ class ActivityRecognitionManager @Inject constructor(
                 .build(),
             ActivityTransition.Builder()
                 .setActivityType(DetectedActivity.STILL)
+                .setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_EXIT)
+                .build(),
+            ActivityTransition.Builder()
+                .setActivityType(DetectedActivity.IN_VEHICLE)
+                .setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_ENTER)
+                .build(),
+            ActivityTransition.Builder()
+                .setActivityType(DetectedActivity.IN_VEHICLE)
                 .setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_EXIT)
                 .build()
         )
@@ -78,6 +89,16 @@ class ActivityRecognitionManager @Inject constructor(
                 event.transitionType == ActivityTransition.ACTIVITY_TRANSITION_EXIT -> {
                     Timber.d("Activity: device is now MOVING")
                     _isMoving.value = true
+                }
+                event.activityType == DetectedActivity.IN_VEHICLE &&
+                event.transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER -> {
+                    Timber.d("Activity: device is now IN_VEHICLE")
+                    _isInVehicle.value = true
+                }
+                event.activityType == DetectedActivity.IN_VEHICLE &&
+                event.transitionType == ActivityTransition.ACTIVITY_TRANSITION_EXIT -> {
+                    Timber.d("Activity: device left IN_VEHICLE")
+                    _isInVehicle.value = false
                 }
             }
         }

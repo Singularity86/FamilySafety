@@ -14,6 +14,7 @@ import com.example.familysafety.core.ErrorHandler
 import com.example.familysafety.core.RateLimiters
 import com.example.familysafety.core.DataValidator
 import com.example.familysafety.core.ValidationResult
+import com.example.familysafety.crash.CrashDetectionMonitor
 import com.example.familysafety.transport.MqttConfig
 import com.example.familysafety.transport.MqttTransport
 import com.google.android.gms.location.*
@@ -34,6 +35,9 @@ class LocationService : Service() {
     @Inject
     lateinit var activityRecognitionManager: ActivityRecognitionManager
 
+    @Inject
+    lateinit var crashDetectionMonitor: CrashDetectionMonitor
+
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
 
@@ -52,6 +56,7 @@ class LocationService : Service() {
     private var lastReportedMoving: Boolean? = null
 
     private var activityMonitoringJob: Job? = null
+    private var vehicleMonitoringJob: Job? = null
     private var reconnectObserverJob: Job? = null
 
     private val wakeLock by lazy {
@@ -175,6 +180,20 @@ class LocationService : Service() {
             }
         }
 
+        // Arm crash detection only when the user is confirmed to be in a vehicle
+        val crashPrefs = getSharedPreferences(CrashDetectionMonitor.PREFS_NAME, MODE_PRIVATE)
+        val crashEnabled = crashPrefs.getBoolean(CrashDetectionMonitor.PREF_ENABLED, false)
+        val crashSensitivity = crashPrefs.getFloat(
+            CrashDetectionMonitor.PREF_SENSITIVITY, CrashDetectionMonitor.SENSITIVITY_MEDIUM
+        )
+        crashDetectionMonitor.setThreshold(crashSensitivity)
+        crashDetectionMonitor.setEnabled(crashEnabled)
+        vehicleMonitoringJob = scope.launch {
+            activityRecognitionManager.isInVehicle.collect { inVehicle ->
+                crashDetectionMonitor.setArmed(inVehicle)
+            }
+        }
+
         // When MQTT reconnects, immediately republish last known location so other
         // members don't have to wait up to 5 minutes for the next GPS fix.
         reconnectObserverJob = scope.launch {
@@ -232,9 +251,12 @@ class LocationService : Service() {
         isTracking = false
         activityMonitoringJob?.cancel()
         activityMonitoringJob = null
+        vehicleMonitoringJob?.cancel()
+        vehicleMonitoringJob = null
         reconnectObserverJob?.cancel()
         reconnectObserverJob = null
         activityRecognitionManager.stopMonitoring()
+        crashDetectionMonitor.setEnabled(false)
         if (wakeLock.isHeld) wakeLock.release()
         Timber.i("Stopped location updates")
     }
@@ -293,6 +315,7 @@ class LocationService : Service() {
                 }
 
                 locationRepository.updateMyLocation(memberLocation)
+                crashDetectionMonitor.feedSpeed(if (location.hasSpeed()) location.speed else 0f)
 
                 if (!RateLimiters.locationUpdates.allowRequest(id)) {
                     val retryAfter = RateLimiters.locationUpdates.getRetryAfterMs(id)

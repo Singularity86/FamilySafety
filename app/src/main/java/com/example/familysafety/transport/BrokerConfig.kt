@@ -1,14 +1,16 @@
 package com.example.familysafety.transport
 
 object BrokerConfig {
-    
+
     enum class Environment {
         DEVELOPMENT,
         STAGING,
         PRODUCTION
     }
-    
-    private var currentEnvironment = Environment.DEVELOPMENT
+
+    private var currentEnvironment: Environment = runCatching {
+        Environment.valueOf(com.example.familysafety.BuildConfig.MQTT_ENVIRONMENT)
+    }.getOrDefault(Environment.DEVELOPMENT)
     
     private val brokers = mapOf(
         Environment.DEVELOPMENT to BrokerSettings(

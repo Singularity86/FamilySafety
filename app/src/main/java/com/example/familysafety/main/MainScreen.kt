@@ -171,7 +171,7 @@ fun MainScreen(
                                 Icon(item.icon, contentDescription = item.label)
                             }
                         },
-                        label = { Text(item.label) },
+                        label = null,
                         selected = currentDestination?.hierarchy?.any {
                             it.route == item.route || it.route?.startsWith("chat/") == true && item == MainRoute.Chat
                         } == true,

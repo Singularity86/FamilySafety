@@ -29,6 +29,8 @@
         android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="tiramisu" />
+    <!-- Required for full-screen crash alert shown over lock screen (API 29+) -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <application
         android:name=".FamilySafetyApplication"
@@ -39,6 +41,15 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.FamilySafety">
         
+        <!-- Crash alert: shown over lock screen via full-screen intent notification -->
+        <activity
+            android:name=".crash.CrashAlertActivity"
+            android:exported="false"
+            android:showOnLockScreen="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.FamilySafety"
+            android:launchMode="singleTask" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

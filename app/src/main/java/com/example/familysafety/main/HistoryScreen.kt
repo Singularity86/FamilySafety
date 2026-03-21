@@ -3,10 +3,12 @@ package com.example.familysafety.main
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Color
+import android.graphics.Color as AndroidColor
 import android.graphics.Paint
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,11 +23,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.launch
+import android.widget.FrameLayout
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.graphics.Color
 import androidx.core.graphics.ColorUtils
 import com.example.familysafety.location.MemberLocation
+import com.example.familysafety.ui.theme.UnitPreference
+import com.example.familysafety.ui.theme.UnitSystem
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
@@ -82,9 +91,25 @@ fun HistoryScreen(
         SimpleDateFormat("EEEE, MMM d", Locale.getDefault()).format(Date(selectedDayStart))
     }
 
+    val context = LocalContext.current
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var showTimePicker by remember { mutableStateOf(false) }
+    var selectedLocation by remember { mutableStateOf<MemberLocation?>(null) }
+
+    // Clear selection when the day changes
+    LaunchedEffect(selectedDayStart) { selectedLocation = null }
+
+    // Re-read units when user returns from Settings
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var unitSystem by remember { mutableStateOf(UnitPreference.get(context)) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) unitSystem = UnitPreference.get(context)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val timePickerState = rememberTimePickerState(
         initialHour = 12,
         initialMinute = 0,
@@ -154,6 +179,7 @@ fun HistoryScreen(
             RouteMapView(
                 locationHistory = locationHistory,
                 accentColor = accentColor,
+                focusedLocation = selectedLocation,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(280.dp)
@@ -161,7 +187,12 @@ fun HistoryScreen(
 
             // Stats row
             val pointCount = locationHistory.size
-            val distanceKm = distanceMeters / 1000f
+            val imperial = unitSystem == UnitSystem.IMPERIAL
+            val distanceDisplay = if (imperial) {
+                "${"%.1f".format(distanceMeters / 1609.34f)} mi"
+            } else {
+                "${"%.1f".format(distanceMeters / 1000f)} km"
+            }
             val estimatedKb = (totalRecordCount * 120L) / 1024
             val storageLabel = when {
                 estimatedKb < 1 -> "<1 KB"
@@ -183,7 +214,7 @@ fun HistoryScreen(
                 ) {
                     Text(
                         text = if (pointCount == 0) "No location data for this day"
-                               else "$pointCount points · ${"%.1f".format(distanceKm)} km",
+                               else "$pointCount points · $distanceDisplay",
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (pointCount == 0) MaterialTheme.colorScheme.onSurfaceVariant
                                 else MaterialTheme.colorScheme.onSurface
@@ -201,11 +232,16 @@ fun HistoryScreen(
             // Timeline — newest first
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(bottom = 16.dp)
             ) {
-                items(locationHistory.asReversed(), key = { "${it.timestamp}_${it.latitude}_${it.longitude}" }) { loc ->
-                    LocationHistoryRow(location = loc)
+                items(locationHistory.asReversed()) { loc ->
+                    LocationHistoryRow(
+                        location = loc,
+                        imperial = imperial,
+                        isSelected = loc == selectedLocation,
+                        onClick = { selectedLocation = if (selectedLocation == loc) null else loc }
+                    )
                     HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
                 }
             }
@@ -256,6 +292,7 @@ fun HistoryScreen(
 private fun RouteMapView(
     locationHistory: List<MemberLocation>,
     accentColor: Int,
+    focusedLocation: MemberLocation? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -266,6 +303,33 @@ private fun RouteMapView(
             setMultiTouchControls(true)
             controller.setZoom(12.0)
             controller.setCenter(GeoPoint(37.7749, -122.4194))
+        }
+    }
+
+    // Track the focus marker separately so we can replace it without redrawing the route
+    val focusMarker = remember { mutableStateOf<Marker?>(null) }
+
+    LaunchedEffect(focusedLocation) {
+        // Remove previous focus marker
+        focusMarker.value?.let { mapView.overlays.remove(it) }
+        focusMarker.value = null
+
+        if (focusedLocation != null) {
+            val point = GeoPoint(focusedLocation.latitude, focusedLocation.longitude)
+            val marker = Marker(mapView).apply {
+                position = point
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                icon = coloredDotDrawable(context, AndroidColor.parseColor("#1A73E8"), large = true)
+                title = SimpleDateFormat("h:mm a", Locale.getDefault())
+                    .format(Date(focusedLocation.timestamp))
+            }
+            mapView.overlays.add(marker)
+            focusMarker.value = marker
+            mapView.post {
+                mapView.controller.animateTo(point)
+                mapView.controller.setZoom(16.0)
+            }
+            mapView.invalidate()
         }
     }
 
@@ -287,14 +351,14 @@ private fun RouteMapView(
                 position = points.first()
                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                 title = "Start"
-                icon = coloredDotDrawable(context, Color.parseColor("#34A853"))
+                icon = coloredDotDrawable(context, AndroidColor.parseColor("#34A853"))
             })
 
             mapView.overlays.add(Marker(mapView).apply {
                 position = points.last()
                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                 title = "Last known"
-                icon = coloredDotDrawable(context, Color.parseColor("#EA4335"))
+                icon = coloredDotDrawable(context, AndroidColor.parseColor("#EA4335"))
             })
 
             mapView.post {
@@ -325,19 +389,38 @@ private fun RouteMapView(
         }
     }
 
-    AndroidView(factory = { mapView }, modifier = modifier)
+    AndroidView(
+        factory = { ctx ->
+            // Wrap in a FrameLayout that absorbs requestLayout() calls from the MapView
+            // so osmdroid's internal pan/zoom layout requests don't propagate up into
+            // the Compose hierarchy and cause the surrounding UI to blink/re-layout.
+            object : FrameLayout(ctx) {
+                override fun requestLayout() {
+                    // forceLayout() remeasures our own children without telling our
+                    // Compose parent that a layout pass is needed.
+                    forceLayout()
+                }
+            }.apply {
+                addView(mapView, FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                ))
+            }
+        },
+        modifier = modifier
+    )
 }
 
-private fun coloredDotDrawable(context: Context, fillColor: Int): Drawable {
+private fun coloredDotDrawable(context: Context, fillColor: Int, large: Boolean = false): Drawable {
     val dp = context.resources.displayMetrics.density
-    val sizePx = (24 * dp).toInt()
+    val sizePx = ((if (large) 32 else 24) * dp).toInt()
     val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bmp)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     val r = sizePx / 2f
     paint.color = fillColor
     canvas.drawCircle(r, r, r, paint)
-    paint.color = Color.WHITE
+    paint.color = AndroidColor.WHITE
     canvas.drawCircle(r, r, r * 0.4f, paint)
     return BitmapDrawable(context.resources, bmp)
 }
@@ -347,15 +430,28 @@ private fun coloredDotDrawable(context: Context, fillColor: Int): Drawable {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun LocationHistoryRow(location: MemberLocation) {
+private fun LocationHistoryRow(
+    location: MemberLocation,
+    imperial: Boolean = true,
+    isSelected: Boolean = false,
+    onClick: () -> Unit = {}
+) {
     val time = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(location.timestamp))
-    val speedKmh = (location.speed ?: 0f) * 3.6f
-    val isMoving = speedKmh > 1f
-    val speedLabel = if (isMoving) "Moving ${speedKmh.toInt()} km/h" else "Stationary"
+    val speedMs = location.speed ?: 0f
+    val isMoving = speedMs > 0.5f
+    val speedLabel = if (isMoving) {
+        if (imperial) "Moving ${(speedMs * 2.237f).toInt()} mph"
+        else "Moving ${(speedMs * 3.6f).toInt()} km/h"
+    } else "Stationary"
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .background(
+                if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                else Color.Transparent
+            )
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween

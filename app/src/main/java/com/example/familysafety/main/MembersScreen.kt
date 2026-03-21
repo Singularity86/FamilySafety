@@ -44,23 +44,13 @@ fun MembersScreen(
     val memberAvatars by viewModel.memberAvatars.collectAsState()
     val myMemberId = viewModel.myMemberId
 
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onNavigateToInvite,
-                icon = { Icon(Icons.Default.PersonAdd, contentDescription = null) },
-                text = { Text("Invite") }
-            )
-        }
-    ) { paddingValues ->
+    Box(modifier = modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(vertical = 16.dp)
+            contentPadding = PaddingValues(top = 16.dp, bottom = 88.dp)
         ) {
             item {
                 Text(
@@ -121,6 +111,15 @@ fun MembersScreen(
                 }
             }
         }
+
+        ExtendedFloatingActionButton(
+            onClick = onNavigateToInvite,
+            icon = { Icon(Icons.Default.PersonAdd, contentDescription = null) },
+            text = { Text("Invite") },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp)
+        )
     }
 
 }

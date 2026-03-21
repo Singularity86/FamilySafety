@@ -42,6 +42,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.familysafety.ui.theme.ThemeMode
 import com.example.familysafety.ui.theme.ThemePreference
+import com.example.familysafety.ui.theme.UnitPreference
+import com.example.familysafety.ui.theme.UnitSystem
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -269,6 +271,47 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Units card
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Units",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+                var currentUnits by remember { mutableStateOf(UnitPreference.get(context)) }
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    UnitSystem.values().forEachIndexed { index, system ->
+                        SegmentedButton(
+                            selected = currentUnits == system,
+                            onClick = {
+                                currentUnits = system
+                                UnitPreference.set(context, system)
+                            },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = index,
+                                count = UnitSystem.values().size
+                            ),
+                            label = {
+                                Text(if (system == UnitSystem.IMPERIAL) "Imperial" else "Metric")
+                            }
+                        )
+                    }
+                }
+                Text(
+                    text = if (currentUnits == UnitSystem.IMPERIAL)
+                        "Speed in mph · distance in miles"
+                    else
+                        "Speed in km/h · distance in km",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
@@ -458,6 +501,80 @@ fun SettingsScreen(
                     ) {
                         Text("50 mph", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text("120 mph", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Crash Detection card
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Crash Detection",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                val crashPrefs = remember {
+                    context.getSharedPreferences("geofence_prefs", android.content.Context.MODE_PRIVATE)
+                }
+                var crashEnabled by remember {
+                    mutableStateOf(crashPrefs.getBoolean("crash_detection_enabled", false))
+                }
+                var crashSensitivity by remember {
+                    mutableStateOf(crashPrefs.getFloat("crash_detection_sensitivity", 30f))
+                }
+                Text(
+                    text = "Detects sudden deceleration consistent with a vehicle collision. " +
+                        "Only activates when you're in a moving vehicle (25+ mph). " +
+                        "Alerts your family if you don't respond within 60 seconds.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Enable Crash Detection")
+                    Switch(
+                        checked = crashEnabled,
+                        onCheckedChange = { enabled ->
+                            crashEnabled = enabled
+                            crashPrefs.edit().putBoolean("crash_detection_enabled", enabled).apply()
+                        }
+                    )
+                }
+                if (crashEnabled) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Sensitivity",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    val sensitivityOptions = listOf(
+                        "Low (severe crashes only)" to 40f,
+                        "Medium (recommended)" to 30f,
+                        "High (more sensitive)" to 20f
+                    )
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        sensitivityOptions.forEachIndexed { index, (label, value) ->
+                            SegmentedButton(
+                                selected = crashSensitivity == value,
+                                onClick = {
+                                    crashSensitivity = value
+                                    crashPrefs.edit()
+                                        .putFloat("crash_detection_sensitivity", value).apply()
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = sensitivityOptions.size
+                                ),
+                                label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                            )
+                        }
                     }
                 }
             }

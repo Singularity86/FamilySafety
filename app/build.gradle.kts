@@ -33,12 +33,16 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField("String", "MQTT_ENVIRONMENT", "\"DEVELOPMENT\"")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            buildConfigField("String", "MQTT_ENVIRONMENT", "\"PRODUCTION\"")
         }
     }
     compileOptions {
@@ -50,6 +54,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     packaging {
         resources {
