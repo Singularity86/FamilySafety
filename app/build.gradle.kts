@@ -137,6 +137,9 @@ dependencies {
     implementation("org.nanohttpd:nanohttpd:2.3.1")
 
 
+    // WorkManager — periodic watchdog to revive LocationService if killed by the OS
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+
     // Timber Logging
     implementation("com.jakewharton.timber:timber:5.0.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")

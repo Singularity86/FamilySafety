@@ -71,10 +71,11 @@ class LocationService : Service() {
         const val LOCATION_INTERVAL_NORMAL = 30_000L
         const val LOCATION_INTERVAL_STATIONARY = 5 * 60_000L
         private const val MOVEMENT_THRESHOLD_MS = 1.0f
-        private const val GPS_STILL_DEBOUNCE_COUNT = 3  // consecutive still readings needed
+        private const val GPS_STILL_DEBOUNCE_COUNT = 3
 
         const val PREFS_NAME = "location_service"
         const val PREFS_MEMBER_ID = "member_id"
+        const val PREF_SERVICE_ALIVE = "service_alive"
 
         const val ACTION_START_TRACKING = "com.example.familysafety.START_TRACKING"
         const val ACTION_STOP_TRACKING = "com.example.familysafety.STOP_TRACKING"
@@ -102,6 +103,7 @@ class LocationService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        Timber.i("LocationService: onCreate")
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         createNotificationChannel()
     }
@@ -109,15 +111,24 @@ class LocationService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START_TRACKING -> {
-                memberId = intent.getStringExtra(EXTRA_MEMBER_ID)
-                getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                    .edit().putString(PREFS_MEMBER_ID, memberId).apply()
+                val id = intent.getStringExtra(EXTRA_MEMBER_ID)
+                Timber.i("LocationService: START_TRACKING for member=${id?.take(8)}…")
+                memberId = id
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                    .putString(PREFS_MEMBER_ID, memberId)
+                    .putBoolean(PREF_SERVICE_ALIVE, true)
+                    .apply()
                 startForeground(NOTIFICATION_ID, createNotification())
                 startLocationUpdates()
+                LocationWatchdogWorker.schedule(this)
             }
             ACTION_STOP_TRACKING -> {
-                getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                    .edit().remove(PREFS_MEMBER_ID).apply()
+                Timber.i("LocationService: STOP_TRACKING (explicit user action)")
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                    .remove(PREFS_MEMBER_ID)
+                    .putBoolean(PREF_SERVICE_ALIVE, false)
+                    .apply()
+                LocationWatchdogWorker.cancel(this)
                 stopLocationUpdates()
                 stopSelf()
             }
@@ -125,11 +136,15 @@ class LocationService : Service() {
                 val savedId = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                     .getString(PREFS_MEMBER_ID, null)
                 if (savedId != null) {
+                    Timber.i("LocationService: restarted by OS — resuming tracking for ${savedId.take(8)}…")
                     memberId = savedId
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                        .putBoolean(PREF_SERVICE_ALIVE, true).apply()
                     startForeground(NOTIFICATION_ID, createNotification())
                     startLocationUpdates()
-                    Timber.i("Location service restarted, resumed tracking for $savedId")
+                    LocationWatchdogWorker.schedule(this)
                 } else {
+                    Timber.w("LocationService: restarted by OS but no saved member ID — idle")
                     startForeground(NOTIFICATION_ID, createNotification())
                 }
             }
@@ -168,24 +183,26 @@ class LocationService : Service() {
     }
 
     private fun startLocationUpdates() {
-        if (isTracking) return
+        if (isTracking) {
+            Timber.d("LocationService: startLocationUpdates called but already tracking — skipping")
+            return
+        }
+        Timber.i("LocationService: starting location updates (interval=${currentIntervalMs}ms)")
 
-        // Start Activity Recognition so we can adapt intervals to movement state
         activityRecognitionManager.startMonitoring()
 
-        // Observe AR movement state and adapt GPS interval + MQTT keepalive
         activityMonitoringJob = scope.launch {
             activityRecognitionManager.isMoving.collect { isMoving ->
                 applyMovementState(isMoving)
             }
         }
 
-        // Arm crash detection only when the user is confirmed to be in a vehicle
         val crashPrefs = getSharedPreferences(CrashDetectionMonitor.PREFS_NAME, MODE_PRIVATE)
         val crashEnabled = crashPrefs.getBoolean(CrashDetectionMonitor.PREF_ENABLED, false)
         val crashSensitivity = crashPrefs.getFloat(
             CrashDetectionMonitor.PREF_SENSITIVITY, CrashDetectionMonitor.SENSITIVITY_MEDIUM
         )
+        Timber.d("LocationService: crash detection enabled=$crashEnabled threshold=$crashSensitivity")
         crashDetectionMonitor.setThreshold(crashSensitivity)
         crashDetectionMonitor.setEnabled(crashEnabled)
         vehicleMonitoringJob = scope.launch {
@@ -194,16 +211,15 @@ class LocationService : Service() {
             }
         }
 
-        // When MQTT reconnects, immediately republish last known location so other
-        // members don't have to wait up to 5 minutes for the next GPS fix.
         reconnectObserverJob = scope.launch {
             var wasConnected = false
             mqttTransport.connectionState.collect { state ->
                 val isNowConnected = state is MqttTransport.ConnectionState.Connected
+                Timber.d("LocationService: MQTT state → $state")
                 if (isNowConnected && !wasConnected) {
                     val lastLocation = locationRepository.myLocation.value
                     if (lastLocation != null) {
-                        Timber.i("MQTT reconnected — republishing last known location")
+                        Timber.i("LocationService: MQTT reconnected — republishing last known location")
                         mqttTransport.publishLocation(lastLocation)
                     }
                 }
@@ -239,45 +255,41 @@ class LocationService : Service() {
                 Looper.getMainLooper()
             )
             isTracking = true
-            Timber.i("Started location updates (interval=${currentIntervalMs}ms)")
+            Timber.i("LocationService: GPS request registered (interval=${currentIntervalMs}ms)")
         } catch (e: SecurityException) {
-            Timber.e(e, "Missing location permission")
+            Timber.e(e, "LocationService: missing location permission — cannot start GPS")
         }
     }
 
     private fun stopLocationUpdates() {
-        if (!isTracking) return
+        if (!isTracking) {
+            Timber.d("LocationService: stopLocationUpdates called but not tracking — skipping")
+            return
+        }
+        Timber.i("LocationService: stopping location updates")
         fusedLocationClient.removeLocationUpdates(locationCallback)
         isTracking = false
-        activityMonitoringJob?.cancel()
-        activityMonitoringJob = null
-        vehicleMonitoringJob?.cancel()
-        vehicleMonitoringJob = null
-        reconnectObserverJob?.cancel()
-        reconnectObserverJob = null
+        activityMonitoringJob?.cancel(); activityMonitoringJob = null
+        vehicleMonitoringJob?.cancel(); vehicleMonitoringJob = null
+        reconnectObserverJob?.cancel(); reconnectObserverJob = null
         activityRecognitionManager.stopMonitoring()
         crashDetectionMonitor.setEnabled(false)
         if (wakeLock.isHeld) wakeLock.release()
-        Timber.i("Stopped location updates")
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .putBoolean(PREF_SERVICE_ALIVE, false).apply()
     }
 
-    /**
-     * Called when Activity Recognition reports a movement-state change.
-     * Updates the GPS polling interval and MQTT keepalive accordingly.
-     */
     private fun applyMovementState(isMoving: Boolean) {
         val newInterval = if (isMoving) LOCATION_INTERVAL_NORMAL else LOCATION_INTERVAL_STATIONARY
         if (newInterval != currentIntervalMs) {
             currentIntervalMs = newInterval
-            Timber.d("AR: movement=${isMoving}, new GPS interval=${currentIntervalMs}ms")
+            Timber.i("LocationService: movement=$isMoving → GPS interval=${currentIntervalMs / 1000}s")
             if (isTracking) {
                 fusedLocationClient.removeLocationUpdates(locationCallback)
                 isTracking = false
                 requestLocationUpdates()
             }
         }
-
-        // Notify MQTT transport so it adapts keepalive on next reconnect
         if (isMoving != lastReportedMoving) {
             lastReportedMoving = isMoving
             mqttTransport.notifyMovementState(isMoving)
@@ -287,8 +299,14 @@ class LocationService : Service() {
     private fun handleLocationUpdate(location: Location) {
         val id = memberId ?: return
 
-        // Hold a partial wake lock for up to 15 seconds to prevent the CPU from
-        // sleeping mid-publish on aggressive battery-managed devices (Samsung, etc.)
+        val speedMs = if (location.hasSpeed()) location.speed else 0f
+        val speedMph = (speedMs * 2.237f).toInt()
+        Timber.d(
+            "LocationService: GPS fix — lat=%.5f lon=%.5f acc=%.0fm speed=${speedMph}mph".format(
+                location.latitude, location.longitude, location.accuracy
+            )
+        )
+
         wakeLock.acquire(15_000L)
 
         scope.launch {
@@ -308,18 +326,18 @@ class LocationService : Service() {
 
                 when (val validationResult = DataValidator.validateLocation(memberLocation)) {
                     is ValidationResult.Invalid -> {
-                        Timber.w("Invalid location data: ${validationResult.errors.joinToString()}")
+                        Timber.w("LocationService: invalid location — ${validationResult.errors.joinToString()}")
                         return@safely
                     }
                     ValidationResult.Valid -> {}
                 }
 
                 locationRepository.updateMyLocation(memberLocation)
-                crashDetectionMonitor.feedSpeed(if (location.hasSpeed()) location.speed else 0f)
+                crashDetectionMonitor.feedSpeed(speedMs)
 
                 if (!RateLimiters.locationUpdates.allowRequest(id)) {
                     val retryAfter = RateLimiters.locationUpdates.getRetryAfterMs(id)
-                    Timber.d("Location update rate limited, retry after ${retryAfter}ms")
+                    Timber.d("LocationService: rate limited — retry in ${retryAfter}ms")
                     return@safely
                 }
 
@@ -327,16 +345,16 @@ class LocationService : Service() {
                     maxAttempts = 3,
                     initialDelayMs = 1000,
                     onError = { e, attempt ->
-                        Timber.w(e, "Failed to publish location (attempt $attempt)")
+                        Timber.w(e, "LocationService: publish failed (attempt $attempt/3)")
                     }
                 ) {
                     mqttTransport.publishLocation(memberLocation)
+                }.onSuccess {
+                    Timber.d("LocationService: published location to MQTT")
                 }.onFailure { e ->
-                    Timber.e(e, "Failed to publish location after retries")
+                    Timber.e(e, "LocationService: all publish attempts failed")
                 }
 
-                // GPS speed debounce: AR is the primary signal, but GPS speed acts as
-                // a fallback when AR confidence is low (e.g. first few minutes of tracking).
                 adjustIntervalFromGps(location)
             } } finally {
                 if (wakeLock.isHeld) wakeLock.release()
@@ -344,26 +362,21 @@ class LocationService : Service() {
         }
     }
 
-    /**
-     * Secondary movement signal based on GPS speed. Requires [GPS_STILL_DEBOUNCE_COUNT]
-     * consecutive "still" readings before reducing the interval, so brief stops (traffic
-     * lights, etc.) don't trigger unnecessary interval changes.
-     */
     private fun adjustIntervalFromGps(location: Location) {
         val speed = if (location.hasSpeed()) location.speed else 0f
         val gpsReportsMoving = speed > MOVEMENT_THRESHOLD_MS
 
         if (gpsReportsMoving) {
             consecutiveStillCount = 0
-            // GPS says moving — apply immediately (wake up if AR hasn't caught up yet)
             if (!activityRecognitionManager.isMoving.value) {
+                Timber.d("LocationService: GPS speed override → moving (AR not yet caught up)")
                 applyMovementState(true)
             }
         } else {
             consecutiveStillCount++
             if (consecutiveStillCount >= GPS_STILL_DEBOUNCE_COUNT) {
-                // GPS consistently says still — apply if AR hasn't already done so
                 if (activityRecognitionManager.isMoving.value) {
+                    Timber.d("LocationService: GPS debounce complete → stationary")
                     applyMovementState(false)
                 }
             }
@@ -371,8 +384,12 @@ class LocationService : Service() {
     }
 
     override fun onDestroy() {
+        Timber.w("LocationService: onDestroy — service is being killed")
         super.onDestroy()
         stopLocationUpdates()
         scope.cancel()
+        // Mark as not alive so the watchdog knows to restart on next run
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .putBoolean(PREF_SERVICE_ALIVE, false).apply()
     }
 }

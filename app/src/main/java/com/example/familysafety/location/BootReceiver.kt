@@ -19,5 +19,6 @@ class BootReceiver : BroadcastReceiver() {
             .getString(LocationService.PREFS_MEMBER_ID, null) ?: return
 
         LocationService.startTracking(context, memberId)
+        LocationWatchdogWorker.schedule(context)
     }
 }
