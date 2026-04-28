@@ -1,10 +1,7 @@
 package com.example.familysafety.sync
 
-import android.util.Log
 import com.example.familysafety.core.ErrorHandler
-import com.example.familysafety.core.GroupStateException
 import com.example.familysafety.crypto.E2EEManager
-import com.example.familysafety.crypto.RecipientKeys
 import com.example.familysafety.group.*
 import com.example.familysafety.transport.MqttConfig
 import kotlinx.coroutines.*
@@ -13,8 +10,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
-import org.eclipse.paho.client.mqttv3.*
 import timber.log.Timber
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -23,22 +20,27 @@ class GroupSyncManager @Inject constructor(
     private val e2eeManager: E2EEManager,
     private val cryptoProvider: LazysodiumCryptoProvider
 ) {
-    private val json = Json { 
+    private val json = Json {
         ignoreUnknownKeys = true
         prettyPrint = false
     }
-    
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    
-    private var mqttClient: MqttAsyncClient? = null
+
     private var groupStateManager: GroupStateManager? = null
     private var currentMemberId: String? = null
-    
+
+    // MQTT publisher callback supplied by transport layer to avoid a hard dependency
+    // on MqttAsyncClient (which would also let us clobber MqttTransport's callback).
+    private var mqttPublisher: (suspend (topic: String, payload: ByteArray, qos: Int) -> Boolean)? = null
+
     private val _syncState = MutableStateFlow<SyncState>(SyncState.Idle)
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
-    
-    private val versionAcks = mutableMapOf<Int, MutableSet<String>>()
-    private val conflictQueue = mutableListOf<GroupDefinition>()
+
+    // Concurrent maps so concurrent ack arrivals + waitForAcknowledgments polling
+    // can't trip a CME / lose entries.
+    private val versionAcks = ConcurrentHashMap<Int, MutableSet<String>>()
+    private val conflictQueue = java.util.Collections.synchronizedList(mutableListOf<GroupDefinition>())
 
     sealed class SyncState {
         data object Idle : SyncState()
@@ -48,84 +50,24 @@ class GroupSyncManager @Inject constructor(
         data class Error(val message: String) : SyncState()
     }
 
+    /**
+     * Wire up the MQTT publisher callback. Called by AppInitializer after
+     * MqttTransport is constructed, before the first sync broadcast.
+     */
+    fun setMqttPublisher(
+        publisher: suspend (topic: String, payload: ByteArray, qos: Int) -> Boolean
+    ) {
+        mqttPublisher = publisher
+    }
+
     fun initialize(
         memberId: String,
-        mqttClient: MqttAsyncClient,
         groupStateManager: GroupStateManager
     ) {
         this.currentMemberId = memberId
-        this.mqttClient = mqttClient
         this.groupStateManager = groupStateManager
-        
-        subscribeToGroupSync()
-        subscribeToAcknowledgments()
         observeGroupChanges()
-    }
-
-    private fun subscribeToGroupSync() {
-        scope.launch {
-            val groupDef = groupStateManager?.groupDefinition?.value ?: return@launch
-            val topic = MqttConfig.getGroupSyncTopic(groupDef.groupId)
-            
-            ErrorHandler.withRetry(
-                maxAttempts = 3,
-                initialDelayMs = 1000
-            ) {
-                suspendCancellableCoroutine { continuation ->
-                    mqttClient?.subscribe(topic, MqttConfig.DEFAULT_QOS, null, object : IMqttActionListener {
-                        override fun onSuccess(asyncActionToken: IMqttToken?) {
-                            Timber.i("Subscribed to group sync topic")
-                            continuation.resume(Unit) {}
-                        }
-
-                        override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
-                            Timber.e(exception, "Failed to subscribe to group sync")
-                            continuation.resumeWith(Result.failure(exception ?: Exception("Subscribe failed")))
-                        }
-                    })
-                }
-            }
-            
-            setupSyncMessageHandler()
-        }
-    }
-
-    private fun subscribeToAcknowledgments() {
-        scope.launch {
-            val groupDef = groupStateManager?.groupDefinition?.value ?: return@launch
-            val topic = MqttConfig.getGroupAckTopic(groupDef.groupId)
-            
-            mqttClient?.subscribe(topic, MqttConfig.DEFAULT_QOS)
-            setupAckMessageHandler()
-        }
-    }
-
-    private fun setupSyncMessageHandler() {
-        mqttClient?.setCallback(object : MqttCallback {
-            override fun connectionLost(cause: Throwable?) {
-                Timber.w(cause, "MQTT connection lost in GroupSyncManager")
-            }
-
-            override fun deliveryComplete(token: IMqttDeliveryToken?) {
-                // Delivery complete
-            }
-
-            override fun messageArrived(topic: String?, message: MqttMessage?) {
-                val groupDef = groupStateManager?.groupDefinition?.value
-                if (groupDef != null && topic == MqttConfig.getGroupSyncTopic(groupDef.groupId)) {
-                    message?.let {
-                        scope.launch {
-                            handleGroupSyncMessage(String(it.payload))
-                        }
-                    }
-                }
-            }
-        })
-    }
-
-    private fun setupAckMessageHandler() {
-        scope.launch {
-        }
+        Timber.i("GroupSyncManager initialized for member ${memberId.take(8)}…")
     }
 
     private fun observeGroupChanges() {
@@ -135,7 +77,6 @@ class GroupSyncManager @Inject constructor(
                     if (_syncState.value is SyncState.Syncing) {
                         return@collect
                     }
-                    
                     Timber.d("Group definition changed to version ${it.version}")
                 }
             }
@@ -149,14 +90,12 @@ class GroupSyncManager @Inject constructor(
     ) {
         withContext(Dispatchers.IO) {
             try {
-                // GroupSyncManager.initialize() hasn't been called yet (MQTT not ready).
-                // Silently skip rather than surface an error indicator to the user.
                 val myMemberId = currentMemberId ?: run {
                     Timber.d("GroupSyncManager not initialized, skipping broadcast")
                     return@withContext
                 }
-                val client = mqttClient ?: run {
-                    Timber.d("GroupSyncManager MQTT client not available, skipping broadcast")
+                val publisher = mqttPublisher ?: run {
+                    Timber.d("GroupSyncManager publisher not wired, skipping broadcast")
                     return@withContext
                 }
 
@@ -172,46 +111,31 @@ class GroupSyncManager @Inject constructor(
                     timestamp = System.currentTimeMillis(),
                     signature = ""
                 )
-                
+
                 val payload = createSyncSignaturePayload(syncMessage)
                 val signature = cryptoProvider.signMessage(payload.toByteArray())
-                
+
                 val signedMessage = syncMessage.copy(signature = signature.toHexString())
                 val messageJson = json.encodeToString(signedMessage)
-                
+
                 val topic = MqttConfig.getGroupSyncTopic(groupDefinition.groupId)
-                
+
                 val publishResult = ErrorHandler.withRetry(
                     maxAttempts = 3,
                     initialDelayMs = 1000
                 ) {
-                    suspendCancellableCoroutine { continuation ->
-                        val message = MqttMessage(messageJson.toByteArray()).apply {
-                            qos = MqttConfig.QOS_AT_LEAST_ONCE
-                            isRetained = false
-                        }
-                        
-                        client.publish(topic, message, null, object : IMqttActionListener {
-                            override fun onSuccess(asyncActionToken: IMqttToken?) {
-                                Timber.i("Broadcasted group update v${groupDefinition.version}")
-                                continuation.resume(Unit) {}
-                            }
-
-                            override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
-                                Timber.e(exception, "Failed to broadcast group update")
-                                continuation.resumeWith(Result.failure(exception ?: Exception("Publish failed")))
-                            }
-                        })
-                    }
+                    val ok = publisher(topic, messageJson.toByteArray(), MqttConfig.QOS_AT_LEAST_ONCE)
+                    if (!ok) throw Exception("publishRaw returned false")
                 }
-                
+
                 if (publishResult.isSuccess) {
+                    Timber.i("Broadcasted group update v${groupDefinition.version}")
                     _syncState.value = SyncState.Synced(groupDefinition.version.toInt())
                     waitForAcknowledgments(groupDefinition.version.toInt(), groupDefinition.members.size)
                 } else {
                     _syncState.value = SyncState.Error("Failed to broadcast update")
                 }
-                
+
             } catch (e: Exception) {
                 Timber.e(e, "Error broadcasting group update")
                 _syncState.value = SyncState.Error(e.message ?: "Unknown error")
@@ -219,12 +143,33 @@ class GroupSyncManager @Inject constructor(
         }
     }
 
-    private suspend fun handleGroupSyncMessage(encryptedPayload: String) {
+    /**
+     * Called by MqttTransport when a message arrives on the group sync topic.
+     */
+    suspend fun handleSyncMessage(payload: String) {
         ErrorHandler.safely(
             tag = "GroupSyncManager",
             operation = "handling group sync message"
         ) {
-            handleGroupSyncMessageInternal(encryptedPayload)
+            handleGroupSyncMessageInternal(payload)
+        }
+    }
+
+    /**
+     * Called by MqttTransport when a message arrives on the group ack topic.
+     */
+    suspend fun handleAckMessage(payload: String) {
+        try {
+            val ack = json.decodeFromString<GroupUpdateAck>(payload)
+            val myMemberId = currentMemberId
+            if (ack.memberId == myMemberId) return // ignore our own
+            val set = versionAcks.computeIfAbsent(ack.version) {
+                java.util.Collections.synchronizedSet(mutableSetOf())
+            }
+            set.add(ack.memberId)
+            Timber.d("Received ack for v${ack.version} from ${ack.memberId.take(8)} (${set.size} total)")
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to parse ack message")
         }
     }
 
@@ -232,41 +177,41 @@ class GroupSyncManager @Inject constructor(
         val manager = groupStateManager ?: return
         val currentGroup = manager.groupDefinition.value ?: return
         val myMemberId = currentMemberId ?: return
-        
+
         val syncMessage = try {
             json.decodeFromString<GroupSyncMessage>(encryptedPayload)
         } catch (e: Exception) {
             Timber.w(e, "Failed to parse sync message")
             return
         }
-        
+
         val isValidSignature = verifyGroupSyncSignature(syncMessage)
         if (!isValidSignature) {
             Timber.e("Invalid signature on group sync message")
             return
         }
-        
+
         if (syncMessage.updaterMemberId == myMemberId) {
             Timber.d("Ignoring our own sync message")
             return
         }
-        
+
         when {
             syncMessage.version < currentGroup.version -> {
                 Timber.w("Received outdated version")
                 broadcastGroupUpdate(currentGroup, ChangeType.VERSION_SYNC)
             }
-            
+
             syncMessage.version == currentGroup.version.toInt() -> {
                 Timber.d("Received same version")
                 sendAcknowledgment(syncMessage.groupId, syncMessage.version)
             }
-            
+
             syncMessage.version == currentGroup.version.toInt() + 1 -> {
                 Timber.i("Applying group update")
                 applyGroupUpdate(syncMessage)
             }
-            
+
             syncMessage.version > currentGroup.version.toInt() + 1 -> {
                 Timber.w("Version jump detected")
                 _syncState.value = SyncState.Conflict(currentGroup.version.toInt(), syncMessage.version)
@@ -279,18 +224,17 @@ class GroupSyncManager @Inject constructor(
         withContext(Dispatchers.IO) {
             try {
                 val manager = groupStateManager ?: return@withContext
-                
-                // Apply the remote group state - signature already verified
+
                 manager.applyRemoteGroupState(
                     syncMessage.groupDefinition,
                     syncMessage.signature.hexToByteArray(),
                     syncMessage.updaterMemberId
                 )
                 sendAcknowledgment(syncMessage.groupId, syncMessage.version)
-                
+
                 _syncState.value = SyncState.Synced(syncMessage.version)
                 Timber.i("Applied group update: ${syncMessage.changeType}")
-                
+
             } catch (e: Exception) {
                 Timber.e(e, "Failed to apply group update")
                 _syncState.value = SyncState.Error(e.message ?: "Failed to apply update")
@@ -302,24 +246,21 @@ class GroupSyncManager @Inject constructor(
         withContext(Dispatchers.IO) {
             try {
                 val myMemberId = currentMemberId ?: return@withContext
-                
+                val publisher = mqttPublisher ?: return@withContext
+
                 val ack = GroupUpdateAck(
                     groupId = groupId,
                     version = version,
                     memberId = myMemberId,
                     timestamp = System.currentTimeMillis()
                 )
-                
+
                 val ackJson = json.encodeToString(ack)
                 val topic = MqttConfig.getGroupAckTopic(groupId)
-                
-                val message = MqttMessage(ackJson.toByteArray()).apply {
-                    qos = MqttConfig.DEFAULT_QOS
-                }
-                
-                mqttClient?.publish(topic, message)
+
+                publisher(topic, ackJson.toByteArray(), MqttConfig.DEFAULT_QOS)
                 Timber.d("Sent acknowledgment for version $version")
-                
+
             } catch (e: Exception) {
                 Timber.e(e, "Failed to send acknowledgment")
             }
@@ -330,9 +271,13 @@ class GroupSyncManager @Inject constructor(
         withContext(Dispatchers.IO) {
             val timeout = 30_000L
             val startTime = System.currentTimeMillis()
-            
-            versionAcks[version] = mutableSetOf()
-            
+
+            // Initialize the bucket so handleAckMessage has somewhere to write into
+            // even if it arrives before this function gets a chance to look.
+            versionAcks.computeIfAbsent(version) {
+                java.util.Collections.synchronizedSet(mutableSetOf())
+            }
+
             while ((versionAcks[version]?.size ?: 0) < memberCount - 1) {
                 if (System.currentTimeMillis() - startTime > timeout) {
                     Timber.w("Timeout waiting for acks")
@@ -345,18 +290,18 @@ class GroupSyncManager @Inject constructor(
         }
     }
 
-    private suspend fun verifyGroupSyncSignature(syncMessage: GroupSyncMessage): Boolean {
+    private fun verifyGroupSyncSignature(syncMessage: GroupSyncMessage): Boolean {
         return try {
             val manager = groupStateManager ?: return false
             val currentGroup = manager.groupDefinition.value ?: return false
-            
+
             val updater = currentGroup.members.find { it.memberId == syncMessage.updaterMemberId }
                 ?: syncMessage.groupDefinition.members.find { it.memberId == syncMessage.updaterMemberId }
                 ?: return false
-            
+
             val payload = createSyncSignaturePayload(syncMessage)
             val signature = syncMessage.signature.hexToByteArray()
-            
+
             cryptoProvider.verifySignature(
                 message = payload.toByteArray(),
                 signature = signature,

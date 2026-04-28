@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import com.example.familysafety.crash.CrashDetectionMonitor
 import com.example.familysafety.location.LocationService
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -53,6 +54,7 @@ fun SettingsScreen(
     viewModel: MainViewModel,
     onThemeChanged: (ThemeMode) -> Unit = {},
     onNavigateToCrop: () -> Unit = {},
+    onReplayTutorial: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -338,6 +340,50 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Tips & Help card
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Tips & Help",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+                var tipsEnabled by remember {
+                    mutableStateOf(
+                        context.getSharedPreferences("familysafety_prefs", android.content.Context.MODE_PRIVATE)
+                            .getBoolean("tips_enabled", true)
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Show tips on startup",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Switch(
+                        checked = tipsEnabled,
+                        onCheckedChange = { enabled ->
+                            tipsEnabled = enabled
+                            context.getSharedPreferences("familysafety_prefs", android.content.Context.MODE_PRIVATE)
+                                .edit().putBoolean("tips_enabled", enabled).apply()
+                        }
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onReplayTutorial,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Replay Introduction")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
@@ -587,13 +633,21 @@ fun SettingsScreen(
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
                 val crashPrefs = remember {
-                    context.getSharedPreferences("geofence_prefs", android.content.Context.MODE_PRIVATE)
+                    context.getSharedPreferences(
+                        CrashDetectionMonitor.PREFS_NAME,
+                        android.content.Context.MODE_PRIVATE
+                    )
                 }
                 var crashEnabled by remember {
-                    mutableStateOf(crashPrefs.getBoolean("crash_detection_enabled", false))
+                    mutableStateOf(crashPrefs.getBoolean(CrashDetectionMonitor.PREF_ENABLED, false))
                 }
                 var crashSensitivity by remember {
-                    mutableStateOf(crashPrefs.getFloat("crash_detection_sensitivity", 30f))
+                    mutableStateOf(
+                        crashPrefs.getFloat(
+                            CrashDetectionMonitor.PREF_SENSITIVITY,
+                            CrashDetectionMonitor.SENSITIVITY_MEDIUM
+                        )
+                    )
                 }
                 Text(
                     text = "Detects sudden deceleration consistent with a vehicle collision. " +
@@ -613,7 +667,8 @@ fun SettingsScreen(
                         checked = crashEnabled,
                         onCheckedChange = { enabled ->
                             crashEnabled = enabled
-                            crashPrefs.edit().putBoolean("crash_detection_enabled", enabled).apply()
+                            crashPrefs.edit()
+                                .putBoolean(CrashDetectionMonitor.PREF_ENABLED, enabled).apply()
                         }
                     )
                 }
@@ -636,7 +691,7 @@ fun SettingsScreen(
                                 onClick = {
                                     crashSensitivity = value
                                     crashPrefs.edit()
-                                        .putFloat("crash_detection_sensitivity", value).apply()
+                                        .putFloat(CrashDetectionMonitor.PREF_SENSITIVITY, value).apply()
                                 },
                                 shape = SegmentedButtonDefaults.itemShape(
                                     index = index,

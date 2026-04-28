@@ -22,7 +22,12 @@ import com.example.familysafety.group.AndroidKeyStoreLocalKeyStore
 import com.example.familysafety.group.LocalMemberId
 import com.example.familysafety.location.LocationService
 import com.example.familysafety.onboarding.OnboardingNavigation
+import com.example.familysafety.onboarding.TutorialScreen
+import com.example.familysafety.onboarding.isTutorialShown
 import com.example.familysafety.main.MainScreen
+import com.example.familysafety.main.TipWindow
+import com.example.familysafety.main.disableTips
+import com.example.familysafety.main.shouldShowTip
 import com.example.familysafety.ui.theme.FamilySafetyTheme
 import com.example.familysafety.ui.theme.ThemeMode
 import com.example.familysafety.ui.theme.ThemePreference
@@ -108,13 +113,38 @@ class MainActivity : ComponentActivity() {
                             requestBatteryOptimizationExemptionIfNeeded()
                         }
 
+                        var showTip by remember { mutableStateOf(shouldShowTip(this@MainActivity)) }
+                        var showTutorialOverlay by remember { mutableStateOf(false) }
+                        var navigateToSettings by remember { mutableStateOf(false) }
+
                         MainScreen(
-                            navigateTo = navigateTo.value,
+                            navigateTo = if (navigateToSettings) {
+                                navigateToSettings = false
+                                "settings"
+                            } else navigateTo.value,
                             onThemeChanged = { mode ->
                                 ThemePreference.set(this@MainActivity, mode)
                                 themeMode = mode
-                            }
+                            },
+                            onReplayTutorial = { showTutorialOverlay = true }
                         )
+
+                        if (showTip) {
+                            TipWindow(
+                                onDismiss = { showTip = false },
+                                onDisableTips = {
+                                    disableTips(this@MainActivity)
+                                    showTip = false
+                                },
+                                onOpenSettings = { navigateToSettings = true }
+                            )
+                        }
+
+                        if (showTutorialOverlay) {
+                            TutorialScreen(
+                                onFinish = { showTutorialOverlay = false }
+                            )
+                        }
                     } else {
                         OnboardingNavigation(
                             onOnboardingComplete = {

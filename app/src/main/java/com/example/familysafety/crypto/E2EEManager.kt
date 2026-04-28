@@ -18,7 +18,7 @@ class E2EEManager @Inject constructor(
     private val cryptoProvider: LazysodiumCryptoProvider
 ) {
     private val lazySodium = LazySodiumAndroid(SodiumAndroid())
-    private val sharedSecretCache = mutableMapOf<String, ByteArray>()
+    private val sharedSecretCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
 
     @Serializable
     data class EncryptedMessage(

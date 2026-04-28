@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.Looper
 import androidx.core.app.NotificationCompat
+import com.example.familysafety.AppInitializer
 import com.example.familysafety.MainActivity
 import com.example.familysafety.R
 import com.example.familysafety.core.ErrorHandler
@@ -37,6 +38,9 @@ class LocationService : Service() {
 
     @Inject
     lateinit var crashDetectionMonitor: CrashDetectionMonitor
+
+    @Inject
+    lateinit var appInitializer: AppInitializer
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
@@ -72,6 +76,11 @@ class LocationService : Service() {
         const val LOCATION_INTERVAL_STATIONARY = 5 * 60_000L
         private const val MOVEMENT_THRESHOLD_MS = 1.0f
         private const val GPS_STILL_DEBOUNCE_COUNT = 3
+
+        // Safety timeout for the publish wakelock. With 3 retries × ~1–4 s backoff,
+        // worst-case publish can take ~15 s; double it to be safe but still bounded
+        // so a runaway coroutine can't pin the CPU forever.
+        private const val WAKELOCK_TIMEOUT_MS = 60_000L
 
         const val PREFS_NAME = "location_service"
         const val PREFS_MEMBER_ID = "member_id"
@@ -141,6 +150,10 @@ class LocationService : Service() {
                     getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
                         .putBoolean(PREF_SERVICE_ALIVE, true).apply()
                     startForeground(NOTIFICATION_ID, createNotification())
+                    // Process was killed → MqttTransport singleton is fresh and uninitialized.
+                    // Re-wire keys + family members + MQTT before any GPS fix arrives so
+                    // publishes don't silently no-op against an empty familyMemberKeys map.
+                    appInitializer.initialize()
                     startLocationUpdates()
                     LocationWatchdogWorker.schedule(this)
                 } else {
@@ -239,8 +252,16 @@ class LocationService : Service() {
     }
 
     private fun requestLocationUpdates() {
+        // While the device is in motion, prioritize accuracy so the family-sharing
+        // map shows fresh, precise positions; when stationary, drop to balanced
+        // power to save battery (the user isn't going anywhere).
+        val priority = if (currentIntervalMs == LOCATION_INTERVAL_NORMAL) {
+            Priority.PRIORITY_HIGH_ACCURACY
+        } else {
+            Priority.PRIORITY_BALANCED_POWER_ACCURACY
+        }
         val locationRequest = LocationRequest.Builder(
-            Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+            priority,
             currentIntervalMs
         ).apply {
             setMinUpdateIntervalMillis(currentIntervalMs / 2)
@@ -307,7 +328,11 @@ class LocationService : Service() {
             )
         )
 
-        wakeLock.acquire(15_000L)
+        // Hold the wakelock with a generous safety timeout, but release it
+        // explicitly in the coroutine's finally block so the device can sleep
+        // as soon as the publish coroutine actually completes (success or failure).
+        // The previous fixed 15s timeout could expire mid-publish on slow links.
+        wakeLock.acquire(WAKELOCK_TIMEOUT_MS)
 
         scope.launch {
             try { ErrorHandler.safely(

@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew compileDebugKotlin)",
+      "Bash(dir \"D:\\\\AndroidSDK\")",
+      "Bash(cmd /c \"gradlew.bat assembleDebug 2>&1\")",
+      "Bash(dir *)",
+      "Read(//d D:/AndroidSDK/FamilySafety/.claude/worktrees/**)",
+      "Bash(ANDROID_HOME=\"C:/Users/omarj/AppData/Local/Android/Sdk\" JAVA_HOME=\"C:/Program Files/Android/Android Studio/jbr\" ./gradlew assembleDebug)",
+      "Bash(./gradlew *)",
+      "Bash(ANDROID_HOME=\"C:/Users/omarj/AppData/Local/Android/Sdk\" JAVA_HOME=\"C:/Program Files/Android/Android Studio/jbr\" ./gradlew assembleDebug *)",
+      "Bash(adb devices *)",
+      "Bash(C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb devices *)",
+      "Bash(C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb install *)",
+      "Bash(C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb *)",
+      "Bash(where gh *)",
+      "Bash(where.exe gh *)",
+      "Bash(\"C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb\" -s 55534343444b3498 uninstall com.example.familysafety)",
+      "Bash(\"C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb\" -s 55534343444b3498 install \"app/build/outputs/apk/debug/app-debug.apk\")",
+      "Bash(\"C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb\" -s 55534343444b3498 logcat -d -b crash)",
+      "Bash(\"C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb\" -s 55534343444b3498 logcat -d -t 500)",
+      "Bash(\"C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb\" -s 55534343444b3498 logcat -d)",
+      "Bash(choco install *)",
+      "Bash(winget install *)",
+      "Bash(echo \"done: $?\")",
+      "Read(//c/Users/omarj/AppData/Local/Temp/**)",
+      "Bash(cmd *)",
+      "Bash(powershell -Command \"& 'C:\\\\Users\\\\omarj\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\platform-tools\\\\adb' -s 55534343444b3498 logcat -d -b crash\")",
+      "Bash(powershell *)",
+      "Bash(\"C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb\" -s R5GYB0J8XDD uninstall com.example.familysafety)",
+      "Bash(\"C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb\" -s R5GYB0J8XDD install \"app/build/outputs/apk/debug/app-debug.apk\")",
+      "Bash(\"C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb.exe\" -s 55534343444b3498 logcat -d -b crash)",
+      "Bash(C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb.exe devices *)",
+      "Bash(C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb.exe *)",
+      "Bash(\"C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb.exe\" -s R5GYB0J8XDD logcat -d)",
+      "Bash(\"C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb.exe\" -s R5GYB0J8XDD uninstall com.example.familysafety)",
+      "Bash(\"C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb.exe\" -s R5GYB0J8XDD install \"app/build/outputs/apk/debug/app-debug.apk\")",
+      "Bash(\"C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb.exe\" -s 55534343444b3498 uninstall com.example.familysafety)",
+      "Bash(\"C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb.exe\" -s 55534343444b3498 install \"app/build/outputs/apk/debug/app-debug.apk\")",
+      "Bash(ANDROID_HOME=\"C:/Users/omarj/AppData/Local/Android/Sdk\" JAVA_HOME=\"C:/Program Files/Android/Android Studio/jbr\" ./gradlew compileDebugKotlin --no-daemon)"
+    ]
+  }
+}

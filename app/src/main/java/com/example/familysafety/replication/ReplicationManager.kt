@@ -195,7 +195,8 @@ class ReplicationManager @Inject constructor(
 
         try {
             val topic = MqttConfig.getReplicationRequestTopic(peer.memberId)
-            val payload = json.encodeToString(request).toByteArray()
+            val plaintext = json.encodeToString(request)
+            val payload = encryptForPeer(plaintext, peer) ?: return
 
             // Track pending request
             pendingRequests[request.requestId] = PendingRequest(
@@ -216,6 +217,51 @@ class ReplicationManager @Inject constructor(
         }
     }
 
+    /**
+     * Encrypt a plaintext string for a specific peer using their X25519 public key.
+     * Returns the encrypted JSON envelope as bytes, or null if encryption failed
+     * (e.g., the peer's keys aren't known to us).
+     */
+    private fun encryptForPeer(plaintext: String, peer: FamilyMember): ByteArray? {
+        return try {
+            val encrypted = e2eeManager.encryptMessage(
+                plaintext = plaintext,
+                recipientMemberId = peer.memberId,
+                recipientX25519PublicKey = peer.x25519PublicKey.hexToBytes()
+            )
+            encrypted.toByteArray()
+        } catch (e: Exception) {
+            Timber.e(e, "$TAG: Encryption failed for peer ${peer.memberId.take(8)}")
+            null
+        }
+    }
+
+    /**
+     * Decrypt an incoming replication payload from a known peer. Returns the
+     * plaintext string, or null if decryption fails (sender unknown / signature
+     * invalid / key mismatch).
+     */
+    private fun decryptFromPeer(encryptedJson: String, senderMemberId: String): String? {
+        val sender = groupStateManager.groupDefinition.value
+            ?.findMemberById(senderMemberId) ?: run {
+                Timber.w("$TAG: Unknown sender for decryption: ${senderMemberId.take(8)}")
+                return null
+            }
+        return try {
+            e2eeManager.decryptMessage(
+                encryptedMessageJson = encryptedJson,
+                senderX25519PublicKey = sender.x25519PublicKey.hexToBytes(),
+                senderEd25519PublicKey = sender.ed25519PublicKey.hexToBytes()
+            )
+        } catch (e: Exception) {
+            Timber.w(e, "$TAG: Decryption failed for sender ${senderMemberId.take(8)}")
+            null
+        }
+    }
+
+    private fun String.hexToBytes(): ByteArray =
+        chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
     // =========================================================================
     // INCOMING MESSAGE HANDLING
     // =========================================================================
@@ -228,7 +274,8 @@ class ReplicationManager @Inject constructor(
         senderMemberId: String
     ) {
         try {
-            val request = json.decodeFromString<ReplicationRequest>(requestJson)
+            val plaintext = decryptFromPeer(requestJson, senderMemberId) ?: return
+            val request = json.decodeFromString<ReplicationRequest>(plaintext)
             Timber.d("$TAG: Received replication request ${request.requestId} from $senderMemberId")
 
             when (request.dataType) {
@@ -329,7 +376,8 @@ class ReplicationManager @Inject constructor(
 
         try {
             val topic = MqttConfig.getReplicationDataTopic(peer.memberId)
-            val payload = json.encodeToString(response).toByteArray()
+            val plaintext = json.encodeToString(response)
+            val payload = encryptForPeer(plaintext, peer) ?: return
 
             publisher(topic, payload, MqttConfig.DEFAULT_QOS)
             Timber.d("$TAG: Sent replication response ${response.requestId} to ${peer.memberId}")
@@ -354,7 +402,8 @@ class ReplicationManager @Inject constructor(
         senderMemberId: String
     ) {
         try {
-            val response = json.decodeFromString<ReplicationResponse>(responseJson)
+            val plaintext = decryptFromPeer(responseJson, senderMemberId) ?: return
+            val response = json.decodeFromString<ReplicationResponse>(plaintext)
             Timber.d("$TAG: Received replication response ${response.requestId} from $senderMemberId")
 
             // Remove from pending
@@ -468,11 +517,19 @@ class ReplicationManager @Inject constructor(
                 chatDataSummary = chatSummary
             )
 
-            val topic = MqttConfig.getReplicationAnnounceTopic(group.groupId)
-            val payload = json.encodeToString(announcement).toByteArray()
+            val plaintext = json.encodeToString(announcement)
 
-            publisher(topic, payload, MqttConfig.QOS_AT_MOST_ONCE)
-            Timber.d("$TAG: Announced data availability")
+            // NaCl box is per-pair: one ciphertext can't be decrypted by every member.
+            // Send the announcement to each peer's announcement inbox individually,
+            // encrypted under their key, rather than to a shared group topic in plaintext.
+            group.members
+                .filter { it.memberId != localMemberId }
+                .forEach { peer ->
+                    val payload = encryptForPeer(plaintext, peer) ?: return@forEach
+                    val topic = MqttConfig.getReplicationAnnounceInboxTopic(peer.memberId)
+                    publisher(topic, payload, MqttConfig.QOS_AT_MOST_ONCE)
+                }
+            Timber.d("$TAG: Announced data availability to ${group.members.size - 1} peer(s)")
         } catch (e: Exception) {
             Timber.e(e, "$TAG: Failed to announce data availability")
         }
@@ -486,7 +543,8 @@ class ReplicationManager @Inject constructor(
         senderMemberId: String
     ) {
         try {
-            val announcement = json.decodeFromString<DataAvailabilityAnnouncement>(announcementJson)
+            val plaintext = decryptFromPeer(announcementJson, senderMemberId) ?: return
+            val announcement = json.decodeFromString<DataAvailabilityAnnouncement>(plaintext)
             Timber.d("$TAG: Received data availability from $senderMemberId")
 
             val localMemberId = groupStateManager.localMember.value?.memberId ?: return
@@ -553,12 +611,13 @@ class ReplicationManager @Inject constructor(
         )
 
         // Send to all other members
+        val plaintext = json.encodeToString(response)
         group.members
             .filter { it.memberId != localMemberId }
             .forEach { peer ->
                 try {
                     val topic = MqttConfig.getReplicationDataTopic(peer.memberId)
-                    val payload = json.encodeToString(response).toByteArray()
+                    val payload = encryptForPeer(plaintext, peer) ?: return@forEach
                     publisher(topic, payload, MqttConfig.QOS_AT_MOST_ONCE)
                 } catch (e: Exception) {
                     Timber.e(e, "$TAG: Failed to replicate location to ${peer.memberId}")
@@ -583,12 +642,13 @@ class ReplicationManager @Inject constructor(
         )
 
         // Send to all other members (for backup, not direct chat)
+        val plaintext = json.encodeToString(response)
         group.members
             .filter { it.memberId != localMemberId }
             .forEach { peer ->
                 try {
                     val topic = MqttConfig.getReplicationDataTopic(peer.memberId)
-                    val payload = json.encodeToString(response).toByteArray()
+                    val payload = encryptForPeer(plaintext, peer) ?: return@forEach
                     publisher(topic, payload, MqttConfig.QOS_AT_MOST_ONCE)
                 } catch (e: Exception) {
                     Timber.e(e, "$TAG: Failed to replicate message to ${peer.memberId}")

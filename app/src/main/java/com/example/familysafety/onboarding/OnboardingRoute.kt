@@ -1,6 +1,7 @@
 package com.example.familysafety.onboarding
 
 sealed class OnboardingRoute(val route: String) {
+    data object Tutorial : OnboardingRoute("tutorial")
     data object Welcome : OnboardingRoute("welcome")
     data object GenerateMnemonic : OnboardingRoute("generate_mnemonic")
     data object ConfirmMnemonic : OnboardingRoute("confirm_mnemonic")

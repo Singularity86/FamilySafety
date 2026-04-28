@@ -78,9 +78,21 @@ object MqttConfig {
     /**
      * Topic for broadcasting data availability to all group members.
      * "I have data for memberX from timestamp Y to Z"
+     *
+     * Legacy plaintext topic, retained for backward compatibility with older
+     * peers but no longer used for new announcements (which go per-peer to
+     * [getReplicationAnnounceInboxTopic] so they can be E2E-encrypted).
      */
     fun getReplicationAnnounceTopic(groupId: String): String {
         return "familysafe/group/$groupId/replication/announce"
+    }
+
+    /**
+     * Per-peer encrypted announcement inbox. Each peer subscribes to their own
+     * inbox; announcers publish one ciphertext per recipient.
+     */
+    fun getReplicationAnnounceInboxTopic(memberId: String): String {
+        return "familysafe/$memberId/replication/announce"
     }
 
     // =========================================================================

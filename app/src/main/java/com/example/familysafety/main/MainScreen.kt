@@ -78,6 +78,7 @@ fun MainScreen(
     filesViewModel: FilesViewModel = hiltViewModel(),
     geofenceViewModel: GeofenceViewModel = hiltViewModel(),
     onThemeChanged: (ThemeMode) -> Unit = {},
+    onReplayTutorial: () -> Unit = {},
     navigateTo: String? = null
 ) {
     val syncManager = viewModel.groupSyncManager
@@ -105,27 +106,34 @@ fun MainScreen(
     }
 
     // Show an in-app snackbar when a join request arrives while the app is in the foreground.
-    var prevJoinCount by remember { mutableIntStateOf(pendingJoinCount.size) }
-    LaunchedEffect(pendingJoinCount) {
-        val newCount = pendingJoinCount.size
-        if (newCount > prevJoinCount) {
-            val newest = pendingJoinCount.lastOrNull()
-            if (newest != null) {
-                val result = snackbarHostState.showSnackbar(
-                    message = "${newest.displayName} wants to join your family",
-                    actionLabel = "View",
-                    duration = SnackbarDuration.Long
-                )
-                if (result == SnackbarResult.ActionPerformed) {
-                    navController.navigate(MainRoute.Members.route) {
-                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                        launchSingleTop = true
-                        restoreState = true
+    // Use LaunchedEffect(Unit) + collect so the coroutine lives for the full lifetime of
+    // MainScreen and is never cancelled mid-showSnackbar by a list change (which was the
+    // bug with LaunchedEffect(pendingJoinCount) — any re-emit while the snackbar was
+    // waiting for user input would cancel the coroutine, so tapping "View" dismissed
+    // the snackbar but triggered no navigation).
+    LaunchedEffect(Unit) {
+        var prevCount = 0
+        viewModel.pendingJoinRequests.collect { requests ->
+            val newCount = requests.size
+            if (newCount > prevCount) {
+                val newest = requests.lastOrNull()
+                if (newest != null) {
+                    val result = snackbarHostState.showSnackbar(
+                        message = "${newest.displayName} wants to join your family",
+                        actionLabel = "View",
+                        duration = SnackbarDuration.Long
+                    )
+                    if (result == SnackbarResult.ActionPerformed) {
+                        navController.navigate(MainRoute.Members.route) {
+                            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
                     }
                 }
             }
+            prevCount = newCount
         }
-        prevJoinCount = newCount
     }
 
     Scaffold(
@@ -261,7 +269,8 @@ fun MainScreen(
                 SettingsScreen(
                     viewModel = viewModel,
                     onThemeChanged = onThemeChanged,
-                    onNavigateToCrop = { navController.navigate("avatar_crop") }
+                    onNavigateToCrop = { navController.navigate("avatar_crop") },
+                    onReplayTutorial = onReplayTutorial
                 )
             }
 

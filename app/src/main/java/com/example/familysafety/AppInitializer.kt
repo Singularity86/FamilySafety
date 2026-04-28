@@ -81,6 +81,7 @@ class AppInitializer @Inject constructor(
                 mqttTransport.setInviteManager(inviteManager)
                 mqttTransport.setFileRepository(sharedFileRepository)
                 mqttTransport.setLocalTransport(localTransport)
+                mqttTransport.setGroupSyncManager(groupSyncManager)
                 inviteManager.setMqttTransport(mqttTransport)
                 Timber.d("$TAG: MQTT transport wired up")
 
@@ -106,6 +107,10 @@ class AppInitializer @Inject constructor(
                 // 7. Initialize InviteManager (needs member ID + state refs)
                 inviteManager.initialize(localMember.memberId, groupStateManager, groupSyncManager)
                 Timber.d("$TAG: InviteManager initialized")
+
+                // 7b. Initialize GroupSyncManager so member-change broadcasts actually propagate.
+                groupSyncManager.initialize(localMember.memberId, groupStateManager)
+                Timber.d("$TAG: GroupSyncManager initialized")
 
                 // 8. Initialize avatar sync (HTTP server + mDNS)
                 avatarRepository.initialize()

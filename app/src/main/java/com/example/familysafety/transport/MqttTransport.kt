@@ -13,6 +13,7 @@ import com.example.familysafety.group.LazysodiumCryptoProvider
 import com.example.familysafety.location.LocationRepository
 import com.example.familysafety.location.MemberLocation
 import com.example.familysafety.replication.ReplicationManager
+import com.example.familysafety.sync.GroupSyncManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -41,13 +42,14 @@ class MqttTransport @Inject constructor(
     private var inviteManager: InviteManager? = null
     private var fileRepository: SharedFileRepository? = null
     private var localTransport: LocalTransport? = null
+    private var groupSyncManager: GroupSyncManager? = null
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    private val familyMemberKeys = mutableMapOf<String, RecipientKeys>()
+    private val familyMemberKeys = java.util.concurrent.ConcurrentHashMap<String, RecipientKeys>()
     private val pendingMessages = ConcurrentLinkedQueue<PendingMessage>()
     
     private var reconnectJob: Job? = null
@@ -142,6 +144,18 @@ class MqttTransport @Inject constructor(
             }
         }
         Timber.d("LocalTransport wired up to MqttTransport")
+    }
+
+    /**
+     * Wire up GroupSyncManager so we can route group sync + ack messages to it
+     * and provide it with a publisher.
+     */
+    fun setGroupSyncManager(manager: GroupSyncManager) {
+        groupSyncManager = manager
+        manager.setMqttPublisher { topic, payload, qos ->
+            publishRaw(topic, payload, qos)
+        }
+        Timber.d("GroupSyncManager wired up to MqttTransport")
     }
 
     /**
@@ -419,10 +433,23 @@ class MqttTransport @Inject constructor(
             topics.add(MqttConfig.getReplicationDataTopic(currentMemberId))
             qosLevels.add(MqttConfig.DEFAULT_QOS)
 
+            // Per-peer encrypted announcement inbox (replaces the legacy plaintext
+            // group-wide announce topic).
+            topics.add(MqttConfig.getReplicationAnnounceInboxTopic(currentMemberId))
+            qosLevels.add(MqttConfig.QOS_AT_MOST_ONCE)
+
             // Group-level replication announcement topic
             if (currentGroupId != null) {
                 topics.add(MqttConfig.getReplicationAnnounceTopic(currentGroupId))
                 qosLevels.add(MqttConfig.QOS_AT_MOST_ONCE)
+
+                // Group state sync — broadcasts membership/name/color changes
+                topics.add(MqttConfig.getGroupSyncTopic(currentGroupId))
+                qosLevels.add(MqttConfig.DEFAULT_QOS)
+
+                // Group acks for sync messages we broadcast
+                topics.add(MqttConfig.getGroupAckTopic(currentGroupId))
+                qosLevels.add(MqttConfig.DEFAULT_QOS)
             }
 
             // Shared file topics
@@ -695,8 +722,10 @@ class MqttTransport @Inject constructor(
                 }
 
                 // Replication requests: familysafe/{memberId}/replication/request
+                // (memberId here is the *recipient* — us — so the sender comes from
+                // the encrypted envelope, not the topic prefix.)
                 topic.endsWith("/replication/request") -> {
-                    val senderId = extractSenderFromTopic(topic)
+                    val senderId = extractSenderFromEncryptedEnvelope(payload)
                     if (senderId != null) {
                         replicationManager?.handleReplicationRequest(payload, senderId)
                     }
@@ -704,18 +733,40 @@ class MqttTransport @Inject constructor(
 
                 // Replication data: familysafe/{memberId}/replication/data
                 topic.endsWith("/replication/data") -> {
-                    val senderId = extractSenderFromTopic(topic)
+                    val senderId = extractSenderFromEncryptedEnvelope(payload)
                     if (senderId != null) {
                         replicationManager?.handleReplicationResponse(payload, senderId)
                     }
                 }
 
-                // Replication announcements: familysafe/group/{groupId}/replication/announce
+                // Per-peer encrypted announcement inbox: familysafe/{memberId}/replication/announce
+                topic.endsWith("/replication/announce") &&
+                    !topic.contains("/group/") -> {
+                    // Sender isn't in the topic (the topic addresses the recipient).
+                    // The encrypted envelope's senderMemberId field carries it; the
+                    // decrypt path resolves the sender from group state.
+                    val senderId = extractSenderFromEncryptedEnvelope(payload)
+                    if (senderId != null) {
+                        replicationManager?.handleDataAvailabilityAnnouncement(payload, senderId)
+                    }
+                }
+
+                // Legacy plaintext group announcement (kept for backward compat).
                 topic.contains("/replication/announce") -> {
                     val senderId = extractSenderFromAnnounceTopic(payload)
                     if (senderId != null) {
                         replicationManager?.handleDataAvailabilityAnnouncement(payload, senderId)
                     }
+                }
+
+                // Group sync: familysafe/group/{groupId}/sync — membership/name/color updates
+                topic.contains("/group/") && topic.endsWith("/sync") -> {
+                    groupSyncManager?.handleSyncMessage(payload)
+                }
+
+                // Group ack: familysafe/group/{groupId}/ack — acks of sync broadcasts
+                topic.contains("/group/") && topic.endsWith("/ack") -> {
+                    groupSyncManager?.handleAckMessage(payload)
                 }
 
                 // Join requests: familysafe/{inviterMemberId}/join_request
@@ -841,6 +892,19 @@ class MqttTransport @Inject constructor(
         }
     }
 
+    /**
+     * Extract the senderMemberId field from an E2EEManager.EncryptedMessage JSON
+     * envelope. Used for per-peer inbox topics where the sender isn't in the topic.
+     */
+    private fun extractSenderFromEncryptedEnvelope(payload: String): String? {
+        return try {
+            val regex = """"senderMemberId"\s*:\s*"([^"]+)"""".toRegex()
+            regex.find(payload)?.groupValues?.getOrNull(1)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun createOfflineWillMessage(memberId: String): String {
         return MessageProtocol.encodePresenceUpdate(memberId, isOnline = false)
     }
@@ -948,25 +1012,15 @@ class MqttTransport @Inject constructor(
      * Switches the MQTT keepalive interval to save battery when stationary:
      *   - Moving  → 60 s  (broker pings every minute, fast reconnect detection)
      *   - Still   → 300 s (broker pings every 5 min, minimal radio wakeups)
-     * The new keepalive takes effect on the next reconnect.
+     * The new keepalive is applied lazily on the next natural reconnect — we
+     * do NOT disconnect the live session, because every transition cycle would
+     * otherwise drop in-flight publishes during the reconnect window.
      */
     fun notifyMovementState(isMoving: Boolean) {
         val newKeepAlive = if (isMoving) MqttConfig.KEEP_ALIVE_MOVING else MqttConfig.KEEP_ALIVE_STATIONARY
         if (newKeepAlive == currentKeepAlive) return
         currentKeepAlive = newKeepAlive
         Timber.d("Movement state changed: keepalive will be ${currentKeepAlive}s on next connect")
-
-        // Reconnect immediately so the new keepalive is negotiated with the broker now.
-        if (_connectionState.value == ConnectionState.Connected) {
-            scope.launch {
-                ErrorHandler.safely("MqttTransport", "reconnect for keepalive change") {
-                    mqttClient?.disconnect()
-                    _connectionState.value = ConnectionState.Disconnected
-                    reconnectAttempts = 0
-                    reconnect()
-                }
-            }
-        }
     }
 
     /**

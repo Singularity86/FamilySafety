@@ -15,8 +15,12 @@ class FamilySafetyApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        // Initialize Timber for logging
-        Timber.plant(Timber.DebugTree())
+        // Initialize Timber for logging. Only plant the verbose DebugTree in
+        // debug builds — in release we'd otherwise leak location coords, member
+        // IDs, and other PII to logcat.
+        if (BuildConfig.DEBUG) {
+            Timber.plant(Timber.DebugTree())
+        }
 
         // Configure osmdroid (OpenStreetMap tile library).
         // userAgentValue is required by OSM tile servers to identify the app.

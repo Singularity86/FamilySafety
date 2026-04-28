@@ -13,6 +13,7 @@ fun WelcomeScreen(
     onCreateNew: () -> Unit,
     onRestore: () -> Unit,
     onJoinExisting: () -> Unit,
+    onReplayTutorial: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -71,6 +72,16 @@ fun WelcomeScreen(
                 .height(56.dp)
         ) {
             Text("Join Existing Family")
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        TextButton(onClick = onReplayTutorial) {
+            Text(
+                text = "How does this app work?",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

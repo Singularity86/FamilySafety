@@ -150,7 +150,12 @@ class CrashDetectionMonitor @Inject constructor(
         const val SENSITIVITY_MEDIUM = 30f  // ~3g — default
         const val SENSITIVITY_HIGH = 20f    // ~2g — catches moderate impacts
 
-        const val PREFS_NAME = "geofence_prefs"
+        // Dedicated prefs file for crash detection. Previously this was set to
+        // "geofence_prefs" (copy-paste bug) — those keys cohabited the geofence
+        // settings file. Users who toggled crash detection in older builds may
+        // have their flag stored under "geofence_prefs"; settings UI is the
+        // canonical writer and will repopulate this file on next toggle.
+        const val PREFS_NAME = "crash_detection_prefs"
         const val PREF_ENABLED = "crash_detection_enabled"
         const val PREF_SENSITIVITY = "crash_detection_sensitivity"
     }
