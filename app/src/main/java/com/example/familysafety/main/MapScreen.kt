@@ -289,9 +289,11 @@ fun MapScreen(
     // Download-confirmation dialog
     if (showDownloadDialog) {
         val bbox = mapView.boundingBox
-        // Download all zoom levels (0–17) for the visible area so the map works
-        // offline whether zoomed all the way out or in to street level.
-        val zoomMin = 0
+        // Start 3 zoom levels above the current view (enough context to pan around)
+        // down to full street detail. Anchoring to the current zoom instead of 0
+        // keeps tile counts manageable — zoom 0–current adds millions of useless
+        // global tiles the user will never need offline.
+        val zoomMin = (mapView.zoomLevel - 3).coerceAtLeast(5)
         val zoomMax = 17
         val tileCount = cacheManager.possibleTilesInArea(bbox, zoomMin, zoomMax)
         // Rough estimate: OSM tiles average ~15 KB each.
