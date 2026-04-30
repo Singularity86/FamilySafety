@@ -221,7 +221,24 @@ class InviteManager @Inject constructor(
             val approvalMessage = "ADD:${currentGroup.groupId}:${currentGroup.version}:${newMember.ed25519PublicKey}"
                 .toByteArray(Charsets.UTF_8)
             val signature = cryptoProvider.signMessage(approvalMessage)
-            stateManager.addMember(newMember, signature, inviterMemberId)
+
+            // Clear the retained join_request from the broker so it doesn't re-fire on reconnect
+            val requestTopic = MqttConfig.getJoinRequestTopic(inviterMemberId)
+            mqttTransport?.publishRaw(
+                topic = requestTopic,
+                payload = ByteArray(0),
+                qos = MqttConfig.DEFAULT_QOS,
+                retained = true
+            )
+            Timber.i("InviteManager: cleared retained join_request from $requestTopic")
+
+            Timber.i("InviteManager: calling addMember for ${request.displayName} (${request.requesterId.take(8)})")
+            val addResult = stateManager.addMember(newMember, signature, inviterMemberId)
+            if (addResult is GroupOperationResult.Failure) {
+                Timber.e("InviteManager: addMember failed — ${addResult.error}")
+                return Result.failure(IllegalStateException("addMember failed: ${addResult.error}"))
+            }
+            Timber.i("InviteManager: addMember succeeded")
 
             // Broadcast updated group state to existing members
             val updatedGroupDef = stateManager.groupDefinition.value
@@ -230,15 +247,24 @@ class InviteManager @Inject constructor(
                     updatedGroupDef, ChangeType.MEMBER_ADDED, newMember.memberId
                 )
 
-                // Send group definition directly to the joiner's join_approval topic
+                // Send group definition directly to the joiner's join_approval topic.
+                // Use retained=true so the message survives a brief joiner disconnect/reconnect.
                 val approvalTopic = MqttConfig.getJoinApprovalTopic(request.requesterId)
                 val groupDefJson = json.encodeToString(updatedGroupDef)
-                mqttTransport?.publishRaw(
+                Timber.i("InviteManager: publishing approval to $approvalTopic (${groupDefJson.length} bytes, retained=true)")
+                val published = mqttTransport?.publishRaw(
                     topic = approvalTopic,
                     payload = groupDefJson.toByteArray(Charsets.UTF_8),
-                    qos = MqttConfig.DEFAULT_QOS
+                    qos = MqttConfig.DEFAULT_QOS,
+                    retained = true
                 )
-                Timber.i("Sent group definition to joiner at $approvalTopic")
+                if (published == true) {
+                    Timber.i("InviteManager: approval published successfully")
+                } else {
+                    Timber.e("InviteManager: approval publish returned false — joiner may not receive it")
+                }
+            } else {
+                Timber.e("InviteManager: updatedGroupDef is null after addMember — cannot send approval")
             }
 
             Timber.i("Approved join request from ${request.displayName}")
@@ -259,6 +285,16 @@ class InviteManager @Inject constructor(
             }
             NotificationManagerCompat.from(context)
                 .cancel(NOTIFICATION_BASE_ID + request.requestId.hashCode())
+            // Clear the retained join_request from the broker
+            val inviterMemberId = currentMemberId
+            if (inviterMemberId != null) {
+                mqttTransport?.publishRaw(
+                    topic = MqttConfig.getJoinRequestTopic(inviterMemberId),
+                    payload = ByteArray(0),
+                    qos = MqttConfig.DEFAULT_QOS,
+                    retained = true
+                )
+            }
             Timber.i("Rejected join request from ${request.displayName}")
             Result.success(Unit)
         } catch (e: Exception) {

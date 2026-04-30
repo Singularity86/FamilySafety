@@ -10,9 +10,11 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -25,6 +27,7 @@ import org.eclipse.paho.client.mqttv3.MqttCallback
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
+import timber.log.Timber
 import java.util.*
 import javax.inject.Inject
 
@@ -196,8 +199,11 @@ class OnboardingViewModel @Inject constructor(
 
             mqttClient.setCallback(object : MqttCallback {
                 override fun connectionLost(cause: Throwable?) {
-                    // Complete with null so joinFamily() doesn't hang on disconnect
-                    if (!approvalDeferred.isCompleted) approvalDeferred.complete(null)
+                    // Log the disconnect but DO NOT complete the deferred with null.
+                    // The Paho client will auto-reconnect if keepAliveInterval is set;
+                    // once reconnected it will re-deliver any retained approval message.
+                    // withTimeoutOrNull handles the overall deadline.
+                    Timber.w("joinFamily: MQTT connection lost — ${cause?.message}. Waiting for reconnect.")
                 }
 
                 override fun deliveryComplete(token: IMqttDeliveryToken?) {}
@@ -206,10 +212,12 @@ class OnboardingViewModel @Inject constructor(
                     if (topic?.endsWith("/join_approval") == true) {
                         try {
                             val payload = String(message!!.payload, Charsets.UTF_8)
+                            Timber.i("joinFamily: approval message arrived (${payload.length} bytes)")
                             val groupDef = json.decodeFromString<GroupDefinition>(payload)
+                            Timber.i("joinFamily: decoded GroupDefinition — group=${groupDef.groupName}, members=${groupDef.members.size}")
                             approvalDeferred.complete(groupDef)
                         } catch (e: Exception) {
-                            // Not a valid GroupDefinition — ignore
+                            Timber.e(e, "joinFamily: failed to decode GroupDefinition from approval message")
                         }
                     }
                 }
@@ -218,29 +226,54 @@ class OnboardingViewModel @Inject constructor(
             // 5. Connect, subscribe, and send the join request (blocking IO calls)
             withContext(Dispatchers.IO) {
                 val options = MqttConnectOptions().apply {
-                    isCleanSession = true
+                    isCleanSession = false   // false = broker re-delivers missed messages on reconnect
                     connectionTimeout = 30
-                    keepAliveInterval = 60
+                    keepAliveInterval = 30
+                    isAutomaticReconnect = true
                 }
+                Timber.i("joinFamily: connecting to broker…")
                 mqttClient.connect(options).waitForCompletion(30_000)
+                Timber.i("joinFamily: connected")
 
-                mqttClient.subscribe(
-                    MqttConfig.getJoinApprovalTopic(memberId),
-                    MqttConfig.DEFAULT_QOS
-                ).waitForCompletion(5_000)
+                val approvalTopic = MqttConfig.getJoinApprovalTopic(memberId)
+                mqttClient.subscribe(approvalTopic, MqttConfig.DEFAULT_QOS).waitForCompletion(5_000)
+                Timber.i("joinFamily: subscribed to $approvalTopic")
 
-                val joinMsg = MqttMessage(
-                    json.encodeToString(joinRequest).toByteArray(Charsets.UTF_8)
-                ).apply { qos = MqttConfig.DEFAULT_QOS }
+                val joinRequestBytes = json.encodeToString(joinRequest).toByteArray(Charsets.UTF_8)
+                val joinMsg = MqttMessage(joinRequestBytes).apply {
+                    qos = MqttConfig.DEFAULT_QOS
+                    isRetained = true  // retained so inviter receives it even if their app reconnects
+                }
 
-                mqttClient.publish(
-                    MqttConfig.getJoinRequestTopic(inviterMemberId),
-                    joinMsg
-                ).waitForCompletion(5_000)
+                val requestTopic = MqttConfig.getJoinRequestTopic(inviterMemberId)
+                mqttClient.publish(requestTopic, joinMsg).waitForCompletion(5_000)
+                Timber.i("joinFamily: join request published (retained) to $requestTopic")
             }
 
-            // 6. Wait for the inviter to approve (suspends, does not block a thread)
-            val groupDefinition = withTimeoutOrNull(60_000) { approvalDeferred.await() }
+            // 6. Wait for the inviter to approve (suspends, does not block a thread).
+            // 5 minutes gives the inviter time to see the notification and tap Approve.
+            // Re-publish the join request every 30 s so a brief inviter disconnect is recovered.
+            Timber.i("joinFamily: waiting up to 5 minutes for approval…")
+            val republishJob = viewModelScope.launch(Dispatchers.IO) {
+                val joinRequestBytes = json.encodeToString(joinRequest).toByteArray(Charsets.UTF_8)
+                val requestTopic = MqttConfig.getJoinRequestTopic(inviterMemberId)
+                delay(30_000)
+                while (isActive && !approvalDeferred.isCompleted) {
+                    try {
+                        val msg = MqttMessage(joinRequestBytes).apply {
+                            qos = MqttConfig.DEFAULT_QOS; isRetained = true
+                        }
+                        mqttClient.publish(requestTopic, msg).waitForCompletion(5_000)
+                        Timber.d("joinFamily: re-published join request")
+                    } catch (e: Exception) {
+                        Timber.w("joinFamily: re-publish failed — ${e.message}")
+                    }
+                    delay(30_000)
+                }
+            }
+            val groupDefinition = withTimeoutOrNull(5 * 60_000L) { approvalDeferred.await() }
+            republishJob.cancel()
+            if (groupDefinition == null) Timber.w("joinFamily: timed out waiting for approval")
 
             // 7. Disconnect the one-time client
             withContext(Dispatchers.IO) {
@@ -249,14 +282,17 @@ class OnboardingViewModel @Inject constructor(
 
             // 8. Save group state and complete onboarding
             if (groupDefinition != null) {
+                Timber.i("joinFamily: received approval — saving group '${groupDefinition.groupName}'")
                 val persistence = EncryptedGroupStatePersistence.getInstance(context)
                 persistence.saveGroupDefinition(groupDefinition)
                 saveOnboardingComplete()
                 true
             } else {
+                Timber.e("joinFamily: no approval received — returning false")
                 false
             }
         } catch (e: Exception) {
+            Timber.e(e, "joinFamily: unexpected exception")
             false
         } finally {
             _isLoading.value = false

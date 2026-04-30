@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">FamilySafety</string>
+    <string name="app_name">Family Safety</string>
     
     <!-- Onboarding -->
     <string name="welcome_title">Welcome to FamilySafety</string>
