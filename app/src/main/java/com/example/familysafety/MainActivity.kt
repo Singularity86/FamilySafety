@@ -28,7 +28,7 @@ import com.example.familysafety.main.MainScreen
 import com.example.familysafety.main.TipWindow
 import com.example.familysafety.main.disableTips
 import com.example.familysafety.main.shouldShowTip
-import com.example.familysafety.ui.theme.FamilySafetyTheme
+import com.example.familysafety.ui.theme.AppTheme
 import com.example.familysafety.ui.theme.ThemeMode
 import com.example.familysafety.ui.theme.ThemePreference
 import androidx.core.view.WindowCompat
@@ -96,7 +96,7 @@ class MainActivity : ComponentActivity() {
                 ThemeMode.SYSTEM -> systemDark
             }
 
-            FamilySafetyTheme(darkTheme = darkTheme) {
+            AppTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
