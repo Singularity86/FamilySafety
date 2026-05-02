@@ -4,8 +4,13 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -21,7 +26,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -29,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.familysafety.invite.JoinRequest
 import com.example.familysafety.ui.components.ShimmerBox
+import kotlinx.coroutines.delay
 
 
 @Composable
@@ -44,6 +52,7 @@ fun MembersScreen(
     val pendingRequests by viewModel.pendingJoinRequests.collectAsState()
     val memberAvatars by viewModel.memberAvatars.collectAsState()
     val myMemberId = viewModel.myMemberId
+    val haptic = LocalHapticFeedback.current
 
     Box(modifier = modifier.fillMaxSize()) {
         LazyColumn(
@@ -95,26 +104,42 @@ fun MembersScreen(
                     }
                 }
             } else {
-                items(familyMembers, key = { it.memberId }) { member ->
-                    MemberCard(
-                        member = member,
-                        location = memberLocations[member.memberId],
-                        avatar = memberAvatars[member.memberId],
-                        isMe = member.memberId == myMemberId,
-                        onShowOnMap = {
-                            viewModel.focusOnMember(member.memberId)
-                            onNavigateToMap()
-                        },
-                        onShowHistory = { onNavigateToHistory(member.memberId) },
-                        onRemove = { viewModel.removeMember(member.memberId) },
-                        colorHue = member.colorHue
-                    )
+                itemsIndexed(familyMembers, key = { _, member -> member.memberId }) { index, member ->
+                    var visible by remember { mutableStateOf(false) }
+                    LaunchedEffect(index) {
+                        delay(minOf(index, 7) * 40L)
+                        visible = true
+                    }
+                    AnimatedVisibility(
+                        visible = visible,
+                        enter = fadeIn(tween(150)) + slideInVertically(
+                            initialOffsetY = { it / 4 },
+                            animationSpec = tween(150)
+                        )
+                    ) {
+                        MemberCard(
+                            member = member,
+                            location = memberLocations[member.memberId],
+                            avatar = memberAvatars[member.memberId],
+                            isMe = member.memberId == myMemberId,
+                            onShowOnMap = {
+                                viewModel.focusOnMember(member.memberId)
+                                onNavigateToMap()
+                            },
+                            onShowHistory = { onNavigateToHistory(member.memberId) },
+                            onRemove = { viewModel.removeMember(member.memberId) },
+                            colorHue = member.colorHue
+                        )
+                    }
                 }
             }
         }
 
         ExtendedFloatingActionButton(
-            onClick = onNavigateToInvite,
+            onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onNavigateToInvite()
+            },
             icon = { Icon(Icons.Default.PersonAdd, contentDescription = null) },
             text = { Text("Invite") },
             modifier = Modifier
@@ -133,6 +158,7 @@ private fun JoinRequestCard(
     modifier: Modifier = Modifier
 ) {
     var isApproving by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
 
     if (isApproving) {
         ShimmerBox(modifier = modifier.fillMaxWidth().height(72.dp))
@@ -172,6 +198,7 @@ private fun JoinRequestCard(
                     )
                 }
                 IconButton(onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     isApproving = true
                     onApprove()
                 }) {
@@ -249,6 +276,7 @@ private fun MemberCard(
 ) {
     var showDialog by remember { mutableStateOf(false) }
     var showRemoveDialog by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
 
     if (showRemoveDialog) {
         AlertDialog(
@@ -270,6 +298,7 @@ private fun MemberCard(
             confirmButton = {
                 TextButton(
                     onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         showRemoveDialog = false
                         onRemove()
                     },
@@ -302,6 +331,7 @@ private fun MemberCard(
             confirmButton = {
                 if (location != null) {
                     TextButton(onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         showDialog = false
                         onShowOnMap()
                     }) {

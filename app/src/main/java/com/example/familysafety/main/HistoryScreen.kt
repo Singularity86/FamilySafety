@@ -10,8 +10,13 @@ import android.graphics.drawable.Drawable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -22,11 +27,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import android.widget.FrameLayout
 import androidx.compose.ui.viewinterop.AndroidView
@@ -96,6 +104,7 @@ fun HistoryScreen(
     val scope = rememberCoroutineScope()
     var showTimePicker by remember { mutableStateOf(false) }
     var selectedLocation by remember { mutableStateOf<MemberLocation?>(null) }
+    val haptic = LocalHapticFeedback.current
 
     // Clear selection when the day changes
     LaunchedEffect(selectedDayStart) { selectedLocation = null }
@@ -235,13 +244,29 @@ fun HistoryScreen(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(bottom = 16.dp)
             ) {
-                items(locationHistory.asReversed()) { loc ->
-                    LocationHistoryRow(
-                        location = loc,
-                        imperial = imperial,
-                        isSelected = loc == selectedLocation,
-                        onClick = { selectedLocation = if (selectedLocation == loc) null else loc }
-                    )
+                itemsIndexed(locationHistory.asReversed()) { index, loc ->
+                    var visible by remember { mutableStateOf(false) }
+                    LaunchedEffect(index) {
+                        delay(minOf(index, 7) * 40L)
+                        visible = true
+                    }
+                    AnimatedVisibility(
+                        visible = visible,
+                        enter = fadeIn(tween(150)) + slideInVertically(
+                            initialOffsetY = { it / 4 },
+                            animationSpec = tween(150)
+                        )
+                    ) {
+                        LocationHistoryRow(
+                            location = loc,
+                            imperial = imperial,
+                            isSelected = loc == selectedLocation,
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                selectedLocation = if (selectedLocation == loc) null else loc
+                            }
+                        )
+                    }
                     HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
                 }
             }

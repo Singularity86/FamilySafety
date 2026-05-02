@@ -1,5 +1,11 @@
 package com.example.familysafety.main
 
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -210,7 +216,31 @@ fun MainScreen(
         NavHost(
             navController = navController,
             startDestination = MainRoute.Map.route,
-            modifier = Modifier.padding(paddingValues)
+            modifier = Modifier.padding(paddingValues),
+            enterTransition = {
+                slideIntoContainer(
+                    towards = AnimatedContentTransitionScope.SlideDirection.Left,
+                    animationSpec = tween(220)
+                )
+            },
+            exitTransition = {
+                slideOutOfContainer(
+                    towards = AnimatedContentTransitionScope.SlideDirection.Left,
+                    animationSpec = tween(220)
+                )
+            },
+            popEnterTransition = {
+                slideIntoContainer(
+                    towards = AnimatedContentTransitionScope.SlideDirection.Right,
+                    animationSpec = tween(220)
+                )
+            },
+            popExitTransition = {
+                slideOutOfContainer(
+                    towards = AnimatedContentTransitionScope.SlideDirection.Right,
+                    animationSpec = tween(220)
+                )
+            }
         ) {
             composable(MainRoute.Map.route) {
                 val geofences by geofenceViewModel.geofences.collectAsState()
@@ -320,7 +350,17 @@ fun MainScreen(
                 )
             }
 
-            composable("privacy") {
+            composable(
+                "privacy",
+                enterTransition = {
+                    scaleIn(initialScale = 0.92f, animationSpec = tween(200)) +
+                    fadeIn(tween(200))
+                },
+                exitTransition = {
+                    scaleOut(targetScale = 0.92f, animationSpec = tween(200)) +
+                    fadeOut(tween(200))
+                }
+            ) {
                 PrivacyScreen(navController = navController)
             }
 
