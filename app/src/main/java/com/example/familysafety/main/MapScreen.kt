@@ -31,6 +31,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.LocationCity
 import com.example.familysafety.geofence.GeofenceZone
 import kotlinx.coroutines.launch
 import org.osmdroid.tileprovider.cachemanager.CacheManager
@@ -66,7 +67,8 @@ fun MapScreen(
     viewModel: MainViewModel,
     modifier: Modifier = Modifier,
     geofences: List<GeofenceZone> = emptyList(),
-    onLongPressMap: (GeoPoint) -> Unit = {}
+    onLongPressMap: (GeoPoint) -> Unit = {},
+    onNavigateToZones: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -450,6 +452,16 @@ fun MapScreen(
             ) {
                 Icon(Icons.Default.FileDownload, contentDescription = "Download for offline")
             }
+        }
+
+        SmallFloatingActionButton(
+            onClick = onNavigateToZones,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 80.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        ) {
+            Icon(Icons.Default.LocationCity, contentDescription = "Manage zones")
         }
 
         // Brief error banner shown when some tiles fail to download

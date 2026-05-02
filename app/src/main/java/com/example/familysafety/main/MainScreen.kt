@@ -273,6 +273,9 @@ fun MainScreen(
                                     geoPoint.longitude
                                 )
                                 navController.navigate("geofence_editor/new")
+                            },
+                            onNavigateToZones = {
+                                navController.navigate(MainRoute.Zones.route)
                             }
                         )
                         1 -> MembersScreen(
@@ -283,6 +286,9 @@ fun MainScreen(
                             onNavigateToInvite = { navController.navigate("invite") },
                             onNavigateToHistory = { memberId ->
                                 navController.navigate(HistoryRoute.route(memberId))
+                            },
+                            onNavigateToFiles = {
+                                navController.navigate(MainRoute.Files.route)
                             }
                         )
                         2 -> ChatScreen(
