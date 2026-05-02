@@ -9,8 +9,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.*
+import com.example.familysafety.ui.components.AppButton
+import com.example.familysafety.ui.components.ButtonState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -141,21 +142,15 @@ fun InviteScreen(
                             )
                         }
 
-                        Button(
+                        AppButton(
+                            label = "Copy Code",
+                            state = if (copied) ButtonState.Success("Copied!") else ButtonState.Idle,
                             onClick = {
                                 clipboard.setText(AnnotatedString(code))
                                 copied = true
                             },
                             modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(
-                                Icons.Default.ContentCopy,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(if (copied) "Copied!" else "Copy Code")
-                        }
+                        )
                     }
                 }
             }

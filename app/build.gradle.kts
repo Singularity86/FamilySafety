@@ -78,6 +78,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.navigation:navigation-compose:2.7.6")
+    implementation("com.google.accompanist:accompanist-permissions:0.36.0")
     
     // Hilt Dependency Injection
     implementation("com.google.dagger:hilt-android:2.48.1")

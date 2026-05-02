@@ -12,9 +12,11 @@ import com.example.familysafety.backup.BackupManager
 import com.example.familysafety.group.AndroidKeyStoreLocalKeyStore
 import com.example.familysafety.group.Bip39
 import com.example.familysafety.group.EncryptedGroupStatePersistence
+import com.example.familysafety.group.ConnectionState
 import com.example.familysafety.group.GroupDefinition
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.group.LocalMemberId
+import com.example.familysafety.transport.MqttTransport
 import com.example.familysafety.invite.InviteManager
 import com.example.familysafety.invite.JoinRequest
 import com.example.familysafety.location.LocationRepository
@@ -40,8 +42,11 @@ class MainViewModel @Inject constructor(
     private val inviteManager: InviteManager,
     private val localMemberId: LocalMemberId,
     private val avatarRepository: AvatarRepository,
+    private val mqttTransport: MqttTransport,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
+
+    enum class ConnectionMode { LAN, RELAY, OFFLINE }
 
     val familyMembers: StateFlow<List<FamilyMember>> = groupStateManager.groupDefinition
         .map { it?.members?.toList() ?: emptyList() }
@@ -77,6 +82,24 @@ class MainViewModel @Inject constructor(
 
     // The local device's member ID — used by the UI to label "You"
     val myMemberId: String get() = localMemberId.value
+
+    val connectionMode: StateFlow<ConnectionMode> = combine(
+        groupStateManager.memberStates,
+        mqttTransport.connectionState
+    ) { members, mqttState ->
+        val hasLanPeer = members.values
+            .filter { it.member.memberId != localMemberId.value }
+            .any { it.connectionState is ConnectionState.Local }
+        when {
+            hasLanPeer -> ConnectionMode.LAN
+            mqttState is MqttTransport.ConnectionState.Connected -> ConnectionMode.RELAY
+            else -> ConnectionMode.OFFLINE
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = ConnectionMode.OFFLINE
+    )
 
     // Pending join requests from other users wanting to join this family
     val pendingJoinRequests: StateFlow<List<JoinRequest>> = inviteManager.pendingJoinRequests

@@ -29,6 +29,7 @@ import com.example.familysafety.geofence.GeofenceEditorScreen
 import com.example.familysafety.geofence.GeofenceListScreen
 import com.example.familysafety.geofence.GeofenceViewModel
 import com.example.familysafety.ui.theme.ThemeMode
+import com.example.familysafety.ui.screens.PrivacyScreen
 import androidx.compose.ui.unit.dp
 
 sealed class MainRoute(val route: String, val label: String, val icon: ImageVector) {
@@ -144,6 +145,11 @@ fun MainScreen(
                     Text("FamilySafety")
                 },
                 actions = {
+                    EncryptionChip(modifier = Modifier.padding(end = 4.dp))
+                    ConnectionBadge(
+                        viewModel = viewModel,
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
                     SyncIndicator(
                         syncManager = syncManager,
                         modifier = Modifier.padding(end = 8.dp)
@@ -270,7 +276,8 @@ fun MainScreen(
                     viewModel = viewModel,
                     onThemeChanged = onThemeChanged,
                     onNavigateToCrop = { navController.navigate("avatar_crop") },
-                    onReplayTutorial = onReplayTutorial
+                    onReplayTutorial = onReplayTutorial,
+                    onNavigateToPrivacy = { navController.navigate("privacy") }
                 )
             }
 
@@ -311,6 +318,10 @@ fun MainScreen(
                     onBack = { navController.popBackStack() },
                     viewModel = chatViewModel
                 )
+            }
+
+            composable("privacy") {
+                PrivacyScreen(navController = navController)
             }
 
             // History detail screen

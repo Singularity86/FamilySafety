@@ -58,9 +58,17 @@ private val tips = listOf(
     )
 )
 
-fun shouldShowTip(context: Context): Boolean =
-    context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)
-        .getBoolean("tips_enabled", true)
+fun shouldShowTip(context: Context): Boolean {
+    val prefs = context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)
+    val tipsEnabled = prefs.getBoolean("tips_enabled", true)
+    val sessionCount = prefs.getInt("app_session_count", 0)
+    return tipsEnabled && sessionCount > 1
+}
+
+fun incrementSessionCount(context: Context) {
+    val prefs = context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)
+    prefs.edit().putInt("app_session_count", prefs.getInt("app_session_count", 0) + 1).apply()
+}
 
 fun disableTips(context: Context) {
     context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)

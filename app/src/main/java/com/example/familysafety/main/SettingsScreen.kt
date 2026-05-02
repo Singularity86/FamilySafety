@@ -42,19 +42,24 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.window.Dialog
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.rememberPermissionState
+import com.example.familysafety.ui.components.PermissionRationaleCard
 import com.example.familysafety.ui.theme.ThemeMode
 import com.example.familysafety.ui.theme.ThemePreference
 import com.example.familysafety.ui.theme.UnitPreference
 import com.example.familysafety.ui.theme.UnitSystem
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
 fun SettingsScreen(
     viewModel: MainViewModel,
     onThemeChanged: (ThemeMode) -> Unit = {},
     onNavigateToCrop: () -> Unit = {},
     onReplayTutorial: () -> Unit = {},
+    onNavigateToPrivacy: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -97,6 +102,9 @@ fun SettingsScreen(
     // Leave family dialog state
     var showLeaveDialog by remember { mutableStateOf(false) }
     var isLeaving by remember { mutableStateOf(false) }
+
+    val bgPermissionState = rememberPermissionState(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+    var showBgRationaleCard by remember { mutableStateOf(false) }
 
     val importFilePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -446,9 +454,6 @@ fun SettingsScreen(
                 val appSettingsLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.StartActivityForResult()
                 ) { /* permission re-check happens via ON_RESUME */ }
-                val bgPermLauncher = rememberLauncherForActivityResult(
-                    ActivityResultContracts.RequestPermission()
-                ) { granted -> hasBackgroundLocation = granted }
 
                 PermissionStatusRow(
                     label = "Location while using app",
@@ -476,8 +481,8 @@ fun SettingsScreen(
                                     )
                                 )
                             } else {
-                                // Android 10: permission dialog still works
-                                bgPermLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                // Android 10: show rationale card before the system dialog
+                                showBgRationaleCard = true
                             }
                         }
                     )
@@ -797,12 +802,52 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Privacy",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                TextButton(
+                    onClick = onNavigateToPrivacy,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Privacy & Data")
+                        Icon(imageVector = Icons.Default.KeyboardArrowRight, contentDescription = null)
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         Text(
             text = "Version 1.0.0",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.align(Alignment.CenterHorizontally)
         )
+    }
+
+    if (showBgRationaleCard) {
+        Dialog(onDismissRequest = { showBgRationaleCard = false }) {
+            PermissionRationaleCard(
+                permission = Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+                title = "Background Location",
+                rationale = "Background location allows your family to see your location when the app is not open. This only activates if you choose to share continuously. Your location is sent directly to your family circle — never to a server, never stored beyond 24 hours on your device.",
+                onRequestPermission = {
+                    showBgRationaleCard = false
+                    bgPermissionState.launchPermissionRequest()
+                },
+                onDismiss = { showBgRationaleCard = false }
+            )
+        }
     }
 
     // Step 1 — Security warning before revealing the phrase

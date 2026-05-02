@@ -14,12 +14,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.GlossaryTerm
 
 private data class TutorialSlide(
-    val emoji: String,
     val title: String,
     val body: String,
     /** Words in [body] that should be rendered as tappable GlossaryTerms. */
@@ -28,39 +28,34 @@ private data class TutorialSlide(
 
 private val slides = listOf(
     TutorialSlide(
-        emoji = "🛡️",
         title = "Welcome to FamilySafety",
         body = "Private location sharing for the people who matter most. " +
             "All data is end-to-end encrypted — nobody but your family can ever read it.",
         glossaryTerms = listOf("end-to-end encrypted")
     ),
     TutorialSlide(
-        emoji = "🗺️",
         title = "Live Family Map",
         body = "See everyone's location in real time. " +
-            "Create geofence zones and get notified the moment a family member arrives or leaves.",
-        glossaryTerms = listOf("geofence zones")
+            "Create Geofence Zones and get notified the moment a family member arrives or leaves.",
+        glossaryTerms = listOf("Geofence Zones")
     ),
     TutorialSlide(
-        emoji = "📶",
         title = "Works Without Internet",
-        body = "Download offline maps for travel or poor-signal areas. " +
-            "On the same WiFi, phones use local WiFi mode and talk directly — no internet needed.",
-        glossaryTerms = listOf("offline maps", "local WiFi mode")
+        body = "Download Offline Maps for travel or poor-signal areas. " +
+            "On the same WiFi, phones use Local WiFi Mode and talk directly — no internet needed.",
+        glossaryTerms = listOf("Offline Maps", "Local WiFi Mode")
     ),
     TutorialSlide(
-        emoji = "🚨",
         title = "Built-in Safety Features",
-        body = "Crash detection monitors your motion sensor while driving and alerts your family " +
-            "if something goes wrong. Speed alerts and group chat are included too — all encrypted.",
-        glossaryTerms = listOf("crash detection")
+        body = "Crash Detection monitors your motion sensor while driving and alerts your family " +
+            "if something goes wrong. Speed Alerts and Group Chat are included too — all encrypted.",
+        glossaryTerms = listOf("Crash Detection")
     ),
     TutorialSlide(
-        emoji = "🔑",
         title = "Your Account, Your Keys",
-        body = "Your identity is protected by a recovery phrase — 12 ordinary words " +
+        body = "Your identity is protected by a Recovery Phrase — 12 ordinary words " +
             "that only you have. We don't store them. Write them down somewhere safe.",
-        glossaryTerms = listOf("recovery phrase")
+        glossaryTerms = listOf("Recovery Phrase")
     )
 )
 
@@ -167,12 +162,8 @@ private fun SlideContent(slide: TutorialSlide) {
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
-            text = slide.emoji,
-            style = MaterialTheme.typography.displayLarge
-        )
-        Text(
             text = slide.title,
-            style = MaterialTheme.typography.headlineSmall,
+            style = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Monospace),
             textAlign = TextAlign.Center
         )
         // Render body with glossary terms replaced by tappable GlossaryTerm composables

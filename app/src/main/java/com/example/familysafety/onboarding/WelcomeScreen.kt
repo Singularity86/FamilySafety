@@ -24,12 +24,6 @@ fun WelcomeScreen(
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "🛡️",
-            style = MaterialTheme.typography.displayLarge,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-        
-        Text(
             text = "FamilySafety",
             style = MaterialTheme.typography.displayMedium,
             modifier = Modifier.padding(bottom = 8.dp)

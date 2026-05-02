@@ -28,6 +28,9 @@ import coil.compose.AsyncImage
 import com.example.familysafety.files.FilesViewModel
 import com.example.familysafety.files.SharedFileRepository
 import com.example.familysafety.storage.SharedFileEntity
+import com.example.familysafety.ui.components.AppButton
+import com.example.familysafety.ui.components.ButtonState
+import com.example.familysafety.ui.components.ShimmerBox
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -118,9 +121,16 @@ fun FilesScreen(
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "Tap + to share a file with your family",
+                            "Share a file with your family",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(24.dp))
+                        AppButton(
+                            label = "Add File",
+                            state = if (uploadProgress != null) ButtonState.Loading else ButtonState.Idle,
+                            onClick = { filePicker.launch("*/*") },
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }
@@ -230,16 +240,17 @@ private fun FileCard(
         shape = RoundedCornerShape(12.dp)
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            // Thumbnail or icon
-            if (file.mimeType.startsWith("image/") && isComplete && file.localPath != null) {
-                AsyncImage(
-                    model = File(file.localPath),
-                    contentDescription = file.name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Box(
+            // Background layer — shimmer while downloading, thumbnail/icon when ready
+            when {
+                isDownloading -> ShimmerBox(modifier = Modifier.fillMaxSize())
+                file.mimeType.startsWith("image/") && isComplete && file.localPath != null ->
+                    AsyncImage(
+                        model = File(file.localPath),
+                        contentDescription = file.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                else -> Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(MaterialTheme.colorScheme.surfaceVariant),
@@ -254,12 +265,12 @@ private fun FileCard(
                 }
             }
 
-            // Download progress overlay
+            // Progress ring overlaid on shimmer — shows actual chunk completion
             if (isDownloading) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.45f)),
+                        .background(Color.Black.copy(alpha = 0.3f)),
                     contentAlignment = Alignment.Center
                 ) {
                     CircularProgressIndicator(

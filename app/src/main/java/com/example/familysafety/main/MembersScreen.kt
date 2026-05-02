@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.familysafety.invite.JoinRequest
+import com.example.familysafety.ui.components.ShimmerBox
 
 
 @Composable
@@ -131,6 +132,13 @@ private fun JoinRequestCard(
     onReject: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var isApproving by remember { mutableStateOf(false) }
+
+    if (isApproving) {
+        ShimmerBox(modifier = modifier.fillMaxWidth().height(72.dp))
+        return
+    }
+
     Card(
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -163,7 +171,10 @@ private fun JoinRequestCard(
                         tint = MaterialTheme.colorScheme.error
                     )
                 }
-                IconButton(onClick = onApprove) {
+                IconButton(onClick = {
+                    isApproving = true
+                    onApprove()
+                }) {
                     Icon(
                         imageVector = Icons.Default.Check,
                         contentDescription = "Approve",

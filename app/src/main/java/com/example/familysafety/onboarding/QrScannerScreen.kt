@@ -1,9 +1,6 @@
 package com.example.familysafety.onboarding
 
 import android.Manifest
-import android.content.pm.PackageManager
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -21,10 +18,15 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.common.InputImage
+import com.example.familysafety.ui.components.PermissionRationaleCard
+import com.example.familysafety.ui.theme.Spacing
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
 fun QrScannerScreen(
     onCodeScanned: (String) -> Unit,
@@ -32,21 +34,9 @@ fun QrScannerScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    var hasCameraPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        )
-    }
+    val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
     // Track whether we've already reported a result so we don't fire twice
     var scanned by remember { mutableStateOf(false) }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted -> hasCameraPermission = granted }
-
-    LaunchedEffect(Unit) {
-        if (!hasCameraPermission) permissionLauncher.launch(Manifest.permission.CAMERA)
-    }
 
     Scaffold(
         topBar = {
@@ -66,20 +56,15 @@ fun QrScannerScreen(
                 .padding(padding),
             contentAlignment = Alignment.Center
         ) {
-            if (!hasCameraPermission) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                    modifier = Modifier.padding(32.dp)
-                ) {
-                    Text(
-                        "Camera permission is required to scan QR codes.",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
-                        Text("Grant Permission")
-                    }
-                }
+            if (!cameraPermissionState.status.isGranted) {
+                PermissionRationaleCard(
+                    permission = Manifest.permission.CAMERA,
+                    title = "QR Code Scanner",
+                    rationale = "The camera is used only to scan a setup QR code when adding a family member or configuring your broker. No photos are taken, stored, or transmitted. The camera turns off immediately after the scan.",
+                    onRequestPermission = { cameraPermissionState.launchPermissionRequest() },
+                    onDismiss = onBack,
+                    modifier = Modifier.padding(horizontal = Spacing.md)
+                )
             } else {
                 // Camera preview
                 val previewView = remember { PreviewView(context) }
