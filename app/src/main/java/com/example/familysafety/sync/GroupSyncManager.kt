@@ -120,22 +120,15 @@ class GroupSyncManager @Inject constructor(
 
                 val topic = MqttConfig.getGroupSyncTopic(groupDefinition.groupId)
 
-                val publishResult = ErrorHandler.withRetry(
-                    maxAttempts = 5,
-                    initialDelayMs = 2000,
-                    maxDelayMs = 15000
-                ) {
-                    val ok = publisher(topic, messageJson.toByteArray(), MqttConfig.QOS_AT_LEAST_ONCE)
-                    if (!ok) throw Exception("publishRaw returned false")
-                }
+                // Publish once — if offline, the transport queues and retries on reconnect.
+                val published = publisher(topic, messageJson.toByteArray(), MqttConfig.QOS_AT_LEAST_ONCE)
 
-                if (publishResult.isSuccess) {
+                if (published) {
                     Timber.i("Broadcasted group update v${groupDefinition.version}")
                     _syncState.value = SyncState.Synced(groupDefinition.version.toInt())
                     waitForAcknowledgments(groupDefinition.version.toInt(), groupDefinition.members.size)
                 } else {
-                    // Message was queued by the transport layer and will be delivered on reconnect.
-                    Timber.w("Broadcast failed after retries — message queued for delivery")
+                    Timber.w("Broadcast queued for delivery on reconnect")
                     _syncState.value = SyncState.Error("Failed to broadcast update")
                 }
 
