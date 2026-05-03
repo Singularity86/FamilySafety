@@ -4,6 +4,7 @@ import com.example.familysafety.avatar.AvatarRepository
 import com.example.familysafety.chat.ChatRepository
 import com.example.familysafety.files.SharedFileRepository
 import com.example.familysafety.group.GroupStateManager
+import com.example.familysafety.group.LocalMemberId
 import com.example.familysafety.invite.InviteManager
 import com.example.familysafety.location.LocationRepository
 import com.example.familysafety.replication.ReplicationManager
@@ -29,6 +30,7 @@ import javax.inject.Singleton
 @Singleton
 class AppInitializer @Inject constructor(
     private val groupStateManager: GroupStateManager,
+    private val localMemberId: LocalMemberId,
     private val locationRepository: LocationRepository,
     private val mqttTransport: MqttTransport,
     private val localTransport: LocalTransport,
@@ -88,28 +90,27 @@ class AppInitializer @Inject constructor(
                 // 5. Set group ID for group-level subscriptions
                 mqttTransport.setGroupId(groupDef.groupId)
 
-                // 6. Initialize MQTT connection
-                val localMember = withTimeoutOrNull(10_000) {
-                    groupStateManager.localMember.first { it != null }
-                } ?: throw IllegalStateException("No local member after initialization")
+                // 6. Initialize MQTT connection - Use the member ID injected from Hilt directly.
+                val localMember = groupDef.findMemberById(localMemberId.value)
+                    ?: throw IllegalStateException("Local member ${localMemberId.value} not found in group ${groupDef.groupId}")
 
                 mqttTransport.initialize(
-                    memberIdParam = localMember.memberId,
+                    memberIdParam = localMemberId.value,
                     familyMembers = groupDef.members.toList(),
                     groupIdParam = groupDef.groupId
                 )
                 Timber.d("$TAG: MQTT transport initialized")
 
                 // 6b. Start local WiFi transport (NSD registration + TCP server)
-                localTransport.start(localMember.memberId)
+                localTransport.start(localMemberId.value)
                 Timber.d("$TAG: LocalTransport started")
 
                 // 7. Initialize InviteManager (needs member ID + state refs)
-                inviteManager.initialize(localMember.memberId, groupStateManager, groupSyncManager)
+                inviteManager.initialize(localMemberId.value, groupStateManager, groupSyncManager)
                 Timber.d("$TAG: InviteManager initialized")
 
                 // 7b. Initialize GroupSyncManager so member-change broadcasts actually propagate.
-                groupSyncManager.initialize(localMember.memberId, groupStateManager)
+                groupSyncManager.initialize(localMemberId.value, groupStateManager)
                 Timber.d("$TAG: GroupSyncManager initialized")
 
                 // 8. Initialize avatar sync (HTTP server + mDNS)

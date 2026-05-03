@@ -12,7 +12,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.activity.ComponentActivity
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.launch
 
@@ -26,7 +28,9 @@ fun JoinFamilyScreen(
     navController: NavController = rememberNavController(),
     modifier: Modifier = Modifier
 ) {
-    val membershipViewModel: MembershipViewModel = hiltViewModel()
+    // Use Activity scope so this shares the same instance MainActivity observes.
+    val activity = LocalContext.current as ComponentActivity
+    val membershipViewModel: MembershipViewModel = hiltViewModel(activity)
 
     var inviteCode by remember { mutableStateOf("") }
     var joinFailed by remember { mutableStateOf(false) }
