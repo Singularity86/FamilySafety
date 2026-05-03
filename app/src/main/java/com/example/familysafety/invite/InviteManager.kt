@@ -174,10 +174,14 @@ class InviteManager @Inject constructor(
             val groupDef = groupStateManager?.groupDefinition?.value
                 ?: return Result.failure(IllegalStateException("No group state available"))
 
+            val inviterName = groupDef.members
+                .find { it.memberId == currentMemberId }
+                ?.displayName ?: ""
             val inviteData = mapOf(
                 "groupId" to groupDef.groupId,
                 "groupName" to groupDef.groupName,
                 "inviterMemberId" to (currentMemberId ?: ""),
+                "inviterName" to inviterName,
                 "timestamp" to System.currentTimeMillis().toString()
             )
 

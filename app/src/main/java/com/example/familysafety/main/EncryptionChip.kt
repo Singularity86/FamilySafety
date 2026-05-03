@@ -20,7 +20,10 @@ import com.example.familysafety.ui.theme.Spacing
 import com.example.familysafety.ui.theme.TealPrimary
 
 @Composable
-fun EncryptionChip(modifier: Modifier = Modifier) {
+fun EncryptionChip(
+    modifier: Modifier = Modifier,
+    isLocalOnly: Boolean = false
+) {
     Row(
         modifier = modifier
             .background(color = MaterialTheme.colorScheme.surfaceVariant, shape = ChipShape)
@@ -35,7 +38,7 @@ fun EncryptionChip(modifier: Modifier = Modifier) {
         )
         Spacer(modifier = Modifier.width(4.dp))
         Text(
-            text = "E2EE",
+            text = if (isLocalOnly) "Local E2EE" else "E2EE",
             style = MaterialTheme.typography.labelSmall,
             color = TealPrimary
         )

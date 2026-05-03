@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -25,8 +26,11 @@ fun JoinFamilyScreen(
     navController: NavController = rememberNavController(),
     modifier: Modifier = Modifier
 ) {
+    val membershipViewModel: MembershipViewModel = hiltViewModel()
+
     var inviteCode by remember { mutableStateOf("") }
     var joinFailed by remember { mutableStateOf(false) }
+    var joinFailedReason by remember { mutableStateOf("") }
 
     // Receive QR scan result from QrScannerScreen via savedStateHandle
     val currentBackStack by navController.currentBackStackEntryAsState()
@@ -89,27 +93,24 @@ fun JoinFamilyScreen(
             if (isLoading) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp)
                 ) {
                     Text(
-                        text = "Waiting for approval…",
+                        text = "Sending request…",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
-                    )
-                    Text(
-                        text = "The family member who shared the code needs to approve your request in the app.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(top = 4.dp)
                     )
                 }
             }
 
             if (joinFailed) {
                 Text(
-                    text = "Request timed out or was rejected. Check the invite code and try again.",
+                    text = joinFailedReason.ifBlank {
+                        "Could not send request. Check the invite code and try again."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     textAlign = TextAlign.Center,
@@ -121,11 +122,23 @@ fun JoinFamilyScreen(
                 onClick = {
                     joinFailed = false
                     scope.launch {
-                        val joined = viewModel.joinFamily(inviteCode)
-                        if (joined) {
-                            onComplete()
-                        } else {
-                            joinFailed = true
+                        val result = viewModel.sendJoinRequest(inviteCode)
+                        when (result) {
+                            is OnboardingViewModel.JoinSubmitResult.Submitted -> {
+                                membershipViewModel.setPendingApproval(
+                                    familyName = result.familyName,
+                                    inviterName = result.inviterName,
+                                    memberId = result.memberId,
+                                    inviterMemberId = result.inviterMemberId,
+                                    groupId = result.groupId,
+                                    joinRequestJson = result.joinRequestJson
+                                )
+                                // State change drives navigation — no explicit call needed.
+                            }
+                            is OnboardingViewModel.JoinSubmitResult.Failed -> {
+                                joinFailed = true
+                                joinFailedReason = result.reason
+                            }
                         }
                     }
                 },
