@@ -17,6 +17,7 @@ import android.view.MotionEvent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.*
@@ -393,8 +394,8 @@ fun MapScreen(
         }
     }
 
-    Box(modifier = modifier) {
-        AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
+    Box(modifier = modifier.clipToBounds()) {
+        AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize().clipToBounds())
 
         if (isDownloading) {
             Surface(
