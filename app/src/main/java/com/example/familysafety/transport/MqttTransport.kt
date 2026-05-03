@@ -67,6 +67,7 @@ class MqttTransport @Inject constructor(
         val topic: String,
         val payload: ByteArray,
         val qos: Int,
+        val retained: Boolean = false,
         val timestamp: Long = System.currentTimeMillis()
     )
 
@@ -596,8 +597,8 @@ class MqttTransport @Inject constructor(
         }
     }
 
-    private fun queueMessage(topic: String, payload: ByteArray, qos: Int) {
-        val message = PendingMessage(topic, payload, qos)
+    private fun queueMessage(topic: String, payload: ByteArray, qos: Int, retained: Boolean = false) {
+        val message = PendingMessage(topic, payload, qos, retained)
         pendingMessages.offer(message)
         
         while (pendingMessages.size > 100) {
@@ -625,6 +626,7 @@ class MqttTransport @Inject constructor(
                 try {
                     val mqttMessage = MqttMessage(message.payload).apply {
                         qos = message.qos
+                        isRetained = message.retained
                     }
                     
                     suspendCancellableCoroutine { continuation ->
@@ -975,7 +977,7 @@ class MqttTransport @Inject constructor(
         return withContext(Dispatchers.IO) {
             if (_connectionState.value != ConnectionState.Connected) {
                 Timber.w("Not connected, queueing raw message")
-                queueMessage(topic, payload, qos)
+                queueMessage(topic, payload, qos, retained)
                 return@withContext false
             }
 
@@ -994,14 +996,14 @@ class MqttTransport @Inject constructor(
 
                         override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
                             Timber.w(exception, "Failed to publish raw message to $topic")
-                            queueMessage(topic, payload, qos)
+                            queueMessage(topic, payload, qos, retained)
                             continuation.resume(false) {}
                         }
                     })
                 }
             } catch (e: Exception) {
                 Timber.e(e, "Error publishing raw message")
-                queueMessage(topic, payload, qos)
+                queueMessage(topic, payload, qos, retained)
                 false
             }
         }
