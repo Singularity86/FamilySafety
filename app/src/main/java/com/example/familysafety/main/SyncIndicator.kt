@@ -34,7 +34,9 @@ fun SyncIndicator(
         }
         
         is GroupSyncManager.SyncState.Error -> {
-            ErrorIndicator(state.message, modifier)
+            ErrorIndicator(state.message, modifier) {
+                syncManager.clearError()
+            }
         }
     }
 }
@@ -139,24 +141,39 @@ private fun ConflictIndicator(
 }
 
 @Composable
-private fun ErrorIndicator(message: String, modifier: Modifier = Modifier) {
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer
-        )
-    ) {
-        Row(
-            modifier = Modifier.padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(text = "❌")
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer
+private fun ErrorIndicator(
+    message: String,
+    modifier: Modifier = Modifier,
+    onDismiss: () -> Unit = {}
+) {
+    var visible by remember { mutableStateOf(true) }
+
+    LaunchedEffect(message) {
+        visible = true
+        kotlinx.coroutines.delay(5_000)
+        visible = false
+        onDismiss()
+    }
+
+    if (visible) {
+        Card(
+            modifier = modifier,
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer
             )
+        ) {
+            Row(
+                modifier = Modifier.padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(text = "❌")
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
         }
     }
 }

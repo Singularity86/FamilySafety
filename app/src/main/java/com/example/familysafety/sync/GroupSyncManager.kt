@@ -121,8 +121,9 @@ class GroupSyncManager @Inject constructor(
                 val topic = MqttConfig.getGroupSyncTopic(groupDefinition.groupId)
 
                 val publishResult = ErrorHandler.withRetry(
-                    maxAttempts = 3,
-                    initialDelayMs = 1000
+                    maxAttempts = 5,
+                    initialDelayMs = 2000,
+                    maxDelayMs = 15000
                 ) {
                     val ok = publisher(topic, messageJson.toByteArray(), MqttConfig.QOS_AT_LEAST_ONCE)
                     if (!ok) throw Exception("publishRaw returned false")
@@ -133,6 +134,8 @@ class GroupSyncManager @Inject constructor(
                     _syncState.value = SyncState.Synced(groupDefinition.version.toInt())
                     waitForAcknowledgments(groupDefinition.version.toInt(), groupDefinition.members.size)
                 } else {
+                    // Message was queued by the transport layer and will be delivered on reconnect.
+                    Timber.w("Broadcast failed after retries — message queued for delivery")
                     _syncState.value = SyncState.Error("Failed to broadcast update")
                 }
 
@@ -315,6 +318,12 @@ class GroupSyncManager @Inject constructor(
 
     private fun createSyncSignaturePayload(syncMessage: GroupSyncMessage): String {
         return "${syncMessage.groupId}|${syncMessage.version}|${syncMessage.updaterMemberId}|${syncMessage.timestamp}"
+    }
+
+    fun clearError() {
+        if (_syncState.value is SyncState.Error) {
+            _syncState.value = SyncState.Idle
+        }
     }
 
     fun cleanup() {

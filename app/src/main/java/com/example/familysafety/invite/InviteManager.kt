@@ -9,6 +9,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.example.familysafety.R
+import com.example.familysafety.core.ErrorHandler
 import com.example.familysafety.group.*
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.sync.ChangeType
@@ -249,19 +250,33 @@ class InviteManager @Inject constructor(
 
                 // Send group definition directly to the joiner's join_approval topic.
                 // Use retained=true so the message survives a brief joiner disconnect/reconnect.
+                // Retry with backoff — important on power-saving devices where MQTT may be
+                // temporarily throttled.
                 val approvalTopic = MqttConfig.getJoinApprovalTopic(request.requesterId)
                 val groupDefJson = json.encodeToString(updatedGroupDef)
+                val approvalPayload = groupDefJson.toByteArray(Charsets.UTF_8)
                 Timber.i("InviteManager: publishing approval to $approvalTopic (${groupDefJson.length} bytes, retained=true)")
-                val published = mqttTransport?.publishRaw(
-                    topic = approvalTopic,
-                    payload = groupDefJson.toByteArray(Charsets.UTF_8),
-                    qos = MqttConfig.DEFAULT_QOS,
-                    retained = true
-                )
-                if (published == true) {
+                val transport = mqttTransport
+                val approvalResult = if (transport != null) {
+                    ErrorHandler.withRetry(
+                        maxAttempts = 5,
+                        initialDelayMs = 2000,
+                        maxDelayMs = 15000
+                    ) {
+                        val ok = transport.publishRaw(
+                            topic = approvalTopic,
+                            payload = approvalPayload,
+                            qos = MqttConfig.DEFAULT_QOS,
+                            retained = true
+                        )
+                        if (!ok) throw Exception("publishRaw returned false")
+                    }
+                } else null
+
+                if (approvalResult?.isSuccess == true) {
                     Timber.i("InviteManager: approval published successfully")
                 } else {
-                    Timber.e("InviteManager: approval publish returned false — joiner may not receive it")
+                    Timber.e("InviteManager: approval publish failed after retries — joiner may need to retry scan")
                 }
             } else {
                 Timber.e("InviteManager: updatedGroupDef is null after addMember — cannot send approval")
