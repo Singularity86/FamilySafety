@@ -30,7 +30,8 @@ import javax.inject.Singleton
 class InviteManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val cryptoProvider: LazysodiumCryptoProvider,
-    private val e2eeManager: E2EEManager
+    private val e2eeManager: E2EEManager,
+    private val transportProvider: com.example.familysafety.transport.TransportProvider
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -39,7 +40,6 @@ class InviteManager @Inject constructor(
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private var mqttTransport: MqttTransport? = null
     private var groupStateManager: GroupStateManager? = null
     private var groupSyncManager: GroupSyncManager? = null
     private var currentMemberId: String? = null
@@ -71,12 +71,11 @@ class InviteManager @Inject constructor(
     }
 
     /**
-     * Wire up MqttTransport for publishing join approvals back to the joiner.
-     * Must be called before initialize() to avoid circular dependency.
+     * Wire up MqttTransport.
+     * Legacy method - no longer used with TransportProvider.
      */
     fun setMqttTransport(transport: MqttTransport) {
-        this.mqttTransport = transport
-        Timber.d("MqttTransport wired up to InviteManager")
+        // No-op
     }
 
     /**
@@ -228,7 +227,8 @@ class InviteManager @Inject constructor(
 
             // Clear the retained join_request from the broker so it doesn't re-fire on reconnect
             val requestTopic = MqttConfig.getJoinRequestTopic(inviterMemberId)
-            mqttTransport?.publishRaw(
+            // Use broadcast with empty payload to clear retained message on MQTT (if reachable)
+            transportProvider.broadcastMessage(
                 topic = requestTopic,
                 payload = ByteArray(0),
                 qos = MqttConfig.DEFAULT_QOS,
@@ -252,22 +252,19 @@ class InviteManager @Inject constructor(
                 )
 
                 // Send group definition directly to the joiner's join_approval topic.
-                // Use retained=true so the message survives a brief joiner disconnect/reconnect.
-                // Retry with backoff — important on power-saving devices where MQTT may be
-                // temporarily throttled.
                 val approvalTopic = MqttConfig.getJoinApprovalTopic(request.requesterId)
                 val groupDefJson = json.encodeToString(updatedGroupDef)
                 val approvalPayload = groupDefJson.toByteArray(Charsets.UTF_8)
-                // Publish once — if offline, the transport queues with retained=true and
-                // delivers it when the connection is restored.
+                
                 Timber.i("InviteManager: publishing approval to $approvalTopic (${groupDefJson.length} bytes, retained=true)")
-                val published = mqttTransport?.publishRaw(
+                val published = transportProvider.sendMessage(
+                    recipientId = request.requesterId,
                     topic = approvalTopic,
                     payload = approvalPayload,
                     qos = MqttConfig.DEFAULT_QOS,
                     retained = true
                 )
-                if (published == true) {
+                if (published) {
                     Timber.i("InviteManager: approval published successfully")
                 } else {
                     Timber.w("InviteManager: approval queued for delivery on reconnect")
@@ -297,8 +294,9 @@ class InviteManager @Inject constructor(
             // Clear the retained join_request from the broker
             val inviterMemberId = currentMemberId
             if (inviterMemberId != null) {
-                mqttTransport?.publishRaw(
-                    topic = MqttConfig.getJoinRequestTopic(inviterMemberId),
+                val requestTopic = MqttConfig.getJoinRequestTopic(inviterMemberId)
+                transportProvider.broadcastMessage(
+                    topic = requestTopic,
                     payload = ByteArray(0),
                     qos = MqttConfig.DEFAULT_QOS,
                     retained = true

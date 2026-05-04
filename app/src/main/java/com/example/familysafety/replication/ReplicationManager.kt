@@ -7,6 +7,7 @@ import com.example.familysafety.location.LocationRepository
 import com.example.familysafety.storage.ChatMessageDao
 import com.example.familysafety.storage.LocationHistoryRepository
 import com.example.familysafety.transport.MqttConfig
+import com.example.familysafety.transport.TransportProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -45,7 +46,8 @@ class ReplicationManager @Inject constructor(
     private val locationRepository: LocationRepository,
     private val locationHistoryRepository: LocationHistoryRepository,
     private val chatMessageDao: ChatMessageDao,
-    private val e2eeManager: E2EEManager
+    private val e2eeManager: E2EEManager,
+    private val transportProvider: TransportProvider
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true }
@@ -53,9 +55,6 @@ class ReplicationManager @Inject constructor(
 
     // Pending requests waiting for response
     private val pendingRequests = ConcurrentHashMap<String, PendingRequest>()
-
-    // Callback for sending MQTT messages (set by transport layer)
-    private var mqttPublisher: (suspend (topic: String, payload: ByteArray, qos: Int) -> Boolean)? = null
 
     // Replication state
     private val _syncState = MutableStateFlow<SyncState>(SyncState.Idle)
@@ -70,16 +69,6 @@ class ReplicationManager @Inject constructor(
         private const val REQUEST_TIMEOUT_MS = 30_000L
         private const val SYNC_INTERVAL_MS = 5 * 60 * 1000L // 5 minutes
         private const val MAX_ITEMS_PER_REQUEST = 500
-    }
-
-    /**
-     * Set the MQTT publisher callback.
-     * Called by the transport layer to wire up message sending.
-     */
-    fun setMqttPublisher(
-        publisher: suspend (topic: String, payload: ByteArray, qos: Int) -> Boolean
-    ) {
-        mqttPublisher = publisher
     }
 
     // =========================================================================
@@ -188,11 +177,6 @@ class ReplicationManager @Inject constructor(
         peer: FamilyMember,
         request: ReplicationRequest
     ) {
-        val publisher = mqttPublisher ?: run {
-            Timber.w("$TAG: MQTT publisher not set")
-            return
-        }
-
         try {
             val topic = MqttConfig.getReplicationRequestTopic(peer.memberId)
             val plaintext = json.encodeToString(request)
@@ -204,7 +188,12 @@ class ReplicationManager @Inject constructor(
                 timestamp = System.currentTimeMillis()
             )
 
-            publisher(topic, payload, MqttConfig.DEFAULT_QOS)
+            transportProvider.sendMessage(
+                recipientId = peer.memberId,
+                topic = topic,
+                payload = payload,
+                qos = MqttConfig.DEFAULT_QOS
+            )
             Timber.d("$TAG: Sent replication request ${request.requestId} to ${peer.memberId}")
 
             // Set timeout to clean up
@@ -372,14 +361,17 @@ class ReplicationManager @Inject constructor(
         peer: FamilyMember,
         response: ReplicationResponse
     ) {
-        val publisher = mqttPublisher ?: return
-
         try {
             val topic = MqttConfig.getReplicationDataTopic(peer.memberId)
             val plaintext = json.encodeToString(response)
             val payload = encryptForPeer(plaintext, peer) ?: return
 
-            publisher(topic, payload, MqttConfig.DEFAULT_QOS)
+            transportProvider.sendMessage(
+                recipientId = peer.memberId,
+                topic = topic,
+                payload = payload,
+                qos = MqttConfig.DEFAULT_QOS
+            )
             Timber.d("$TAG: Sent replication response ${response.requestId} to ${peer.memberId}")
 
             _events.emit(
@@ -478,7 +470,6 @@ class ReplicationManager @Inject constructor(
      * Called periodically and when significant new data is received.
      */
     suspend fun announceDataAvailability() {
-        val publisher = mqttPublisher ?: return
         val group = groupStateManager.groupDefinition.value ?: return
         val localMemberId = groupStateManager.localMember.value?.memberId ?: return
 
@@ -527,7 +518,12 @@ class ReplicationManager @Inject constructor(
                 .forEach { peer ->
                     val payload = encryptForPeer(plaintext, peer) ?: return@forEach
                     val topic = MqttConfig.getReplicationAnnounceInboxTopic(peer.memberId)
-                    publisher(topic, payload, MqttConfig.QOS_AT_MOST_ONCE)
+                    transportProvider.sendMessage(
+                        recipientId = peer.memberId,
+                        topic = topic,
+                        payload = payload,
+                        qos = MqttConfig.QOS_AT_MOST_ONCE
+                    )
                 }
             Timber.d("$TAG: Announced data availability to ${group.members.size - 1} peer(s)")
         } catch (e: Exception) {
@@ -598,7 +594,6 @@ class ReplicationManager @Inject constructor(
      * Called when we receive a location update (own or from family member).
      */
     suspend fun replicateLocation(location: com.example.familysafety.location.MemberLocation) {
-        val publisher = mqttPublisher ?: return
         val group = groupStateManager.groupDefinition.value ?: return
         val localMemberId = groupStateManager.localMember.value?.memberId ?: return
 
@@ -618,7 +613,12 @@ class ReplicationManager @Inject constructor(
                 try {
                     val topic = MqttConfig.getReplicationDataTopic(peer.memberId)
                     val payload = encryptForPeer(plaintext, peer) ?: return@forEach
-                    publisher(topic, payload, MqttConfig.QOS_AT_MOST_ONCE)
+                    transportProvider.sendMessage(
+                        recipientId = peer.memberId,
+                        topic = topic,
+                        payload = payload,
+                        qos = MqttConfig.QOS_AT_MOST_ONCE
+                    )
                 } catch (e: Exception) {
                     Timber.e(e, "$TAG: Failed to replicate location to ${peer.memberId}")
                 }
@@ -629,7 +629,6 @@ class ReplicationManager @Inject constructor(
      * Replicate a new chat message to all peers.
      */
     suspend fun replicateChatMessage(message: com.example.familysafety.storage.ChatMessageEntity) {
-        val publisher = mqttPublisher ?: return
         val group = groupStateManager.groupDefinition.value ?: return
         val localMemberId = groupStateManager.localMember.value?.memberId ?: return
 
@@ -649,7 +648,12 @@ class ReplicationManager @Inject constructor(
                 try {
                     val topic = MqttConfig.getReplicationDataTopic(peer.memberId)
                     val payload = encryptForPeer(plaintext, peer) ?: return@forEach
-                    publisher(topic, payload, MqttConfig.QOS_AT_MOST_ONCE)
+                    transportProvider.sendMessage(
+                        recipientId = peer.memberId,
+                        topic = topic,
+                        payload = payload,
+                        qos = MqttConfig.QOS_AT_MOST_ONCE
+                    )
                 } catch (e: Exception) {
                     Timber.e(e, "$TAG: Failed to replicate message to ${peer.memberId}")
                 }

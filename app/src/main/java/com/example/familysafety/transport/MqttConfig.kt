@@ -26,7 +26,11 @@ object MqttConfig {
     fun getPresenceTopic(memberId: String): String {
         return "familysafe/$memberId/presence"
     }
-    
+
+    fun getMovementTopic(memberId: String): String {
+        return "familysafe/$memberId/movement"
+    }
+
     fun getGroupSyncTopic(groupId: String): String {
         return "familysafe/group/$groupId/sync"
     }

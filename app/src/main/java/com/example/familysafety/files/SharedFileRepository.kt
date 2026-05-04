@@ -39,13 +39,21 @@ import javax.inject.Singleton
 class SharedFileRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val sharedFileDao: SharedFileDao,
-    private val groupStateManager: GroupStateManager
+    private val groupStateManager: GroupStateManager,
+    private val transportProvider: com.example.familysafety.transport.TransportProvider
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
-    // Callback wired up by AppInitializer (same pattern as ChatRepository)
-    private var mqttPublisher: (suspend (topic: String, payload: ByteArray, qos: Int, retained: Boolean) -> Boolean)? = null
+    /**
+     * Wire up the MQTT publisher.
+     * Legacy method - no longer used with TransportProvider.
+     */
+    fun setMqttPublisher(
+        publisher: suspend (topic: String, payload: ByteArray, qos: Int, retained: Boolean) -> Boolean
+    ) {
+        // No-op
+    }
 
     private val _uploadProgress = MutableStateFlow<UploadProgress?>(null)
     val uploadProgress: StateFlow<UploadProgress?> = _uploadProgress.asStateFlow()
@@ -57,12 +65,6 @@ class SharedFileRepository @Inject constructor(
         private const val GCM_TAG_BITS = 128
         private const val NONCE_BYTES = 12
         private const val FILE_KEY_SALT = "familysafety-files-v1"
-    }
-
-    fun setMqttPublisher(
-        publisher: suspend (topic: String, payload: ByteArray, qos: Int, retained: Boolean) -> Boolean
-    ) {
-        mqttPublisher = publisher
     }
 
     // =========================================================================
@@ -126,7 +128,15 @@ class SharedFileRepository @Inject constructor(
                     data = Base64.getEncoder().encodeToString(encryptedChunk)
                 )
                 val topic = MqttConfig.getFileChunkTopic(groupId, fileId, index)
-                mqttPublisher?.invoke(topic, json.encodeToString(chunkMsg).toByteArray(), MqttConfig.QOS_AT_LEAST_ONCE, false)
+                
+                // Use unified transport broadcast
+                transportProvider.broadcastMessage(
+                    topic = topic,
+                    payload = json.encodeToString(chunkMsg).toByteArray(),
+                    qos = MqttConfig.QOS_AT_LEAST_ONCE,
+                    retained = false
+                )
+                
                 _uploadProgress.value = UploadProgress(fileId, fileName, index + 1, totalChunks)
             }
 
@@ -256,7 +266,7 @@ class SharedFileRepository @Inject constructor(
                             data = Base64.getEncoder().encodeToString(encryptedChunk)
                         )
                         val topic = MqttConfig.getFileChunkTopic(groupId, entity.fileId, index)
-                        mqttPublisher?.invoke(topic, json.encodeToString(chunkMsg).toByteArray(), MqttConfig.QOS_AT_LEAST_ONCE, false)
+                        transportProvider.broadcastMessage(topic, json.encodeToString(chunkMsg).toByteArray(), MqttConfig.QOS_AT_LEAST_ONCE, false)
                     }
                 }
                 Timber.i("$TAG: Re-broadcast all files in response to request")
@@ -313,7 +323,7 @@ class SharedFileRepository @Inject constructor(
                 .filter { it.memberId != myMemberId }
                 .forEach { member ->
                     val topic = MqttConfig.getFileRequestTopic(member.memberId)
-                    mqttPublisher?.invoke(topic, payload, MqttConfig.QOS_AT_LEAST_ONCE, false)
+                    transportProvider.sendMessage(member.memberId, topic, payload, MqttConfig.QOS_AT_LEAST_ONCE, false)
                 }
 
             Timber.d("$TAG: Requested file re-broadcast from ${groupDef.members.size - 1} peers")
@@ -348,7 +358,7 @@ class SharedFileRepository @Inject constructor(
         val files = sharedFileDao.getAllFiles().map { it.toSharedFile() }
         val manifest = FileManifest(groupId, files, System.currentTimeMillis())
         val topic = MqttConfig.getFileManifestTopic(groupId)
-        mqttPublisher?.invoke(
+        transportProvider.broadcastMessage(
             topic,
             json.encodeToString(manifest).toByteArray(),
             MqttConfig.QOS_AT_LEAST_ONCE,

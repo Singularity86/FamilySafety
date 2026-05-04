@@ -1,11 +1,18 @@
 package com.example.familysafety.transport
 
+import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import javax.inject.Singleton
 
 @Module
 @InstallIn(SingletonComponent::class)
-object TransportModule {
-    // MqttTransport is provided via its @Inject constructor — do not duplicate here.
+abstract class TransportModule {
+
+    @Binds
+    @Singleton
+    abstract fun bindTransportProvider(
+        transportManager: UnifiedTransportManager
+    ): TransportProvider
 }

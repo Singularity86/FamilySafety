@@ -10,6 +10,7 @@ import com.example.familysafety.storage.ConversationSummary
 import com.example.familysafety.storage.MessageStatus
 import com.example.familysafety.storage.MessageType
 import com.example.familysafety.transport.MqttConfig
+import com.example.familysafety.transport.TransportProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,13 +38,11 @@ class ChatRepository @Inject constructor(
     private val groupStateManager: GroupStateManager,
     private val e2eeManager: E2EEManager,
     private val replicationManager: ReplicationManager,
+    private val transportProvider: TransportProvider,
     private val notificationHelper: ChatNotificationHelper
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true }
-
-    // Callback for sending MQTT messages
-    private var mqttPublisher: (suspend (topic: String, payload: ByteArray, qos: Int) -> Boolean)? = null
 
     // Current active conversation (for UI state)
     private val _activeConversationId = MutableStateFlow<String?>(null)
@@ -51,15 +50,6 @@ class ChatRepository @Inject constructor(
 
     companion object {
         private const val TAG = "ChatRepository"
-    }
-
-    /**
-     * Wire up MQTT publisher.
-     */
-    fun setMqttPublisher(
-        publisher: suspend (topic: String, payload: ByteArray, qos: Int) -> Boolean
-    ) {
-        mqttPublisher = publisher
     }
 
     // =========================================================================
@@ -273,7 +263,7 @@ class ChatRepository @Inject constructor(
     }
 
     /**
-     * Send message over MQTT with E2E encryption.
+     * Send message over the best available transport with E2E encryption.
      * Pass [conversationId] for group messages (groupId); null uses the 1-to-1 default.
      */
     private suspend fun sendViaNetwork(
@@ -281,11 +271,6 @@ class ChatRepository @Inject constructor(
         recipient: FamilyMember,
         conversationId: String? = null
     ): Boolean {
-        val publisher = mqttPublisher ?: run {
-            Timber.w("$TAG: MQTT publisher not set")
-            return false
-        }
-
         return try {
             val recipientX25519Key = hexToByteArray(recipient.x25519PublicKey)
 
@@ -305,7 +290,12 @@ class ChatRepository @Inject constructor(
             )
 
             val topic = MqttConfig.getChatTopic(recipient.memberId)
-            publisher(topic, encryptedContent.toByteArray(), MqttConfig.DEFAULT_QOS)
+            transportProvider.sendMessage(
+                recipientId = recipient.memberId,
+                topic = topic,
+                payload = encryptedContent.toByteArray(),
+                qos = MqttConfig.DEFAULT_QOS
+            )
         } catch (e: Exception) {
             Timber.e(e, "$TAG: Failed to encrypt/send message")
             false
@@ -432,7 +422,6 @@ class ChatRepository @Inject constructor(
      * Send delivery receipt to sender.
      */
     private suspend fun sendDeliveryReceipt(sender: FamilyMember, messageId: String) {
-        val publisher = mqttPublisher ?: return
         val localMemberId = groupStateManager.localMember.value?.memberId ?: return
 
         try {
@@ -446,7 +435,12 @@ class ChatRepository @Inject constructor(
             val topic = MqttConfig.getChatReceiptTopic(sender.memberId)
             val payload = json.encodeToString(receipt).toByteArray()
 
-            publisher(topic, payload, MqttConfig.QOS_AT_LEAST_ONCE)
+            transportProvider.sendMessage(
+                recipientId = sender.memberId,
+                topic = topic,
+                payload = payload,
+                qos = MqttConfig.QOS_AT_LEAST_ONCE
+            )
         } catch (e: Exception) {
             Timber.e(e, "$TAG: Failed to send delivery receipt")
         }

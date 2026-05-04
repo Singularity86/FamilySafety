@@ -4,6 +4,7 @@ import com.example.familysafety.core.ErrorHandler
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.group.*
 import com.example.familysafety.transport.MqttConfig
+import com.example.familysafety.transport.TransportProvider
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.Serializable
@@ -18,7 +19,8 @@ import javax.inject.Singleton
 @Singleton
 class GroupSyncManager @Inject constructor(
     private val e2eeManager: E2EEManager,
-    private val cryptoProvider: LazysodiumCryptoProvider
+    private val cryptoProvider: LazysodiumCryptoProvider,
+    private val transportProvider: TransportProvider
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -29,10 +31,6 @@ class GroupSyncManager @Inject constructor(
 
     private var groupStateManager: GroupStateManager? = null
     private var currentMemberId: String? = null
-
-    // MQTT publisher callback supplied by transport layer to avoid a hard dependency
-    // on MqttAsyncClient (which would also let us clobber MqttTransport's callback).
-    private var mqttPublisher: (suspend (topic: String, payload: ByteArray, qos: Int) -> Boolean)? = null
 
     private val _syncState = MutableStateFlow<SyncState>(SyncState.Idle)
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
@@ -51,13 +49,13 @@ class GroupSyncManager @Inject constructor(
     }
 
     /**
-     * Wire up the MQTT publisher callback. Called by AppInitializer after
-     * MqttTransport is constructed, before the first sync broadcast.
+     * Wire up the MQTT publisher callback.
+     * Legacy method - no longer used with TransportProvider.
      */
     fun setMqttPublisher(
         publisher: suspend (topic: String, payload: ByteArray, qos: Int) -> Boolean
     ) {
-        mqttPublisher = publisher
+        // No-op
     }
 
     fun initialize(
@@ -94,10 +92,6 @@ class GroupSyncManager @Inject constructor(
                     Timber.d("GroupSyncManager not initialized, skipping broadcast")
                     return@withContext
                 }
-                val publisher = mqttPublisher ?: run {
-                    Timber.d("GroupSyncManager publisher not wired, skipping broadcast")
-                    return@withContext
-                }
 
                 _syncState.value = SyncState.Syncing
 
@@ -120,15 +114,15 @@ class GroupSyncManager @Inject constructor(
 
                 val topic = MqttConfig.getGroupSyncTopic(groupDefinition.groupId)
 
-                // Publish once — if offline, the transport queues and retries on reconnect.
-                val published = publisher(topic, messageJson.toByteArray(), MqttConfig.QOS_AT_LEAST_ONCE)
+                // Use broadcastMessage which will intelligently choose between P2P and Relay
+                val published = transportProvider.broadcastMessage(topic, messageJson.toByteArray(), MqttConfig.QOS_AT_LEAST_ONCE)
 
                 if (published) {
                     Timber.i("Broadcasted group update v${groupDefinition.version}")
                     _syncState.value = SyncState.Synced(groupDefinition.version.toInt())
                     waitForAcknowledgments(groupDefinition.version.toInt(), groupDefinition.members.size)
                 } else {
-                    Timber.w("Broadcast queued for delivery on reconnect")
+                    Timber.w("Broadcast failed or queued")
                     _syncState.value = SyncState.Error("Failed to broadcast update")
                 }
 
@@ -242,7 +236,6 @@ class GroupSyncManager @Inject constructor(
         withContext(Dispatchers.IO) {
             try {
                 val myMemberId = currentMemberId ?: return@withContext
-                val publisher = mqttPublisher ?: return@withContext
 
                 val ack = GroupUpdateAck(
                     groupId = groupId,
@@ -254,7 +247,8 @@ class GroupSyncManager @Inject constructor(
                 val ackJson = json.encodeToString(ack)
                 val topic = MqttConfig.getGroupAckTopic(groupId)
 
-                publisher(topic, ackJson.toByteArray(), MqttConfig.DEFAULT_QOS)
+                // Acks are broadcast to anyone watching for that version
+                transportProvider.broadcastMessage(topic, ackJson.toByteArray(), MqttConfig.DEFAULT_QOS)
                 Timber.d("Sent acknowledgment for version $version")
 
             } catch (e: Exception) {

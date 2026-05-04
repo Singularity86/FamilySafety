@@ -77,17 +77,7 @@ class AppInitializer @Inject constructor(
                 locationRepository.initialize()
                 Timber.d("$TAG: LocationRepository initialized")
 
-                // 4. Wire up MqttTransport with all dependent managers
-                mqttTransport.setReplicationManager(replicationManager)
-                mqttTransport.setChatRepository(chatRepository)
-                mqttTransport.setInviteManager(inviteManager)
-                mqttTransport.setFileRepository(sharedFileRepository)
-                mqttTransport.setLocalTransport(localTransport)
-                mqttTransport.setGroupSyncManager(groupSyncManager)
-                inviteManager.setMqttTransport(mqttTransport)
-                Timber.d("$TAG: MQTT transport wired up")
-
-                // 5. Set group ID for group-level subscriptions
+                // 5. Set group ID for group-level subscriptions (Still needed for MQTT internal routing)
                 mqttTransport.setGroupId(groupDef.groupId)
 
                 // 6. Initialize MQTT connection - Use the member ID injected from Hilt directly.

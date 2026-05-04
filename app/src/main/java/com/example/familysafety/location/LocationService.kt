@@ -17,6 +17,7 @@ import com.example.familysafety.core.DataValidator
 import com.example.familysafety.core.ValidationResult
 import com.example.familysafety.crash.CrashDetectionMonitor
 import com.example.familysafety.transport.MqttConfig
+import com.example.familysafety.transport.TransportProvider
 import com.example.familysafety.transport.MqttTransport
 import com.google.android.gms.location.*
 import dagger.hilt.android.AndroidEntryPoint
@@ -31,7 +32,19 @@ class LocationService : Service() {
     lateinit var locationRepository: LocationRepository
 
     @Inject
-    lateinit var mqttTransport: MqttTransport
+    lateinit var locationHistoryRepository: com.example.familysafety.storage.LocationHistoryRepository
+
+    @Inject
+    lateinit var mqttTransport: com.example.familysafety.transport.MqttTransport
+
+    @Inject
+    lateinit var transportProvider: com.example.familysafety.transport.TransportProvider
+
+    @Inject
+    lateinit var groupStateManager: com.example.familysafety.group.GroupStateManager
+
+    @Inject
+    lateinit var e2eeManager: com.example.familysafety.crypto.E2EEManager
 
     @Inject
     lateinit var activityRecognitionManager: ActivityRecognitionManager
@@ -78,7 +91,7 @@ class LocationService : Service() {
         private const val GPS_STILL_DEBOUNCE_COUNT = 3
 
         // Safety timeout for the publish wakelock. With 3 retries × ~1–4 s backoff,
-        // worst-case publish can take ~15 s; double it to be safe but still bounded
+        // worst-case publish take ~15 s; double it to be safe but still bounded
         // so a runaway coroutine can't pin the CPU forever.
         private const val WAKELOCK_TIMEOUT_MS = 60_000L
 
@@ -150,9 +163,6 @@ class LocationService : Service() {
                     getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
                         .putBoolean(PREF_SERVICE_ALIVE, true).apply()
                     startForeground(NOTIFICATION_ID, createNotification())
-                    // Process was killed → MqttTransport singleton is fresh and uninitialized.
-                    // Re-wire keys + family members + MQTT before any GPS fix arrives so
-                    // publishes don't silently no-op against an empty familyMemberKeys map.
                     appInitializer.initialize()
                     startLocationUpdates()
                     LocationWatchdogWorker.schedule(this)
@@ -233,7 +243,7 @@ class LocationService : Service() {
                     val lastLocation = locationRepository.myLocation.value
                     if (lastLocation != null) {
                         Timber.i("LocationService: MQTT reconnected — republishing last known location")
-                        mqttTransport.publishLocation(lastLocation)
+                        publishLocationToPeers(lastLocation)
                     }
                 }
                 wasConnected = isNowConnected
@@ -252,9 +262,6 @@ class LocationService : Service() {
     }
 
     private fun requestLocationUpdates() {
-        // While the device is in motion, prioritize accuracy so the family-sharing
-        // map shows fresh, precise positions; when stationary, drop to balanced
-        // power to save battery (the user isn't going anywhere).
         val priority = if (currentIntervalMs == LOCATION_INTERVAL_NORMAL) {
             Priority.PRIORITY_HIGH_ACCURACY
         } else {
@@ -313,7 +320,17 @@ class LocationService : Service() {
         }
         if (isMoving != lastReportedMoving) {
             lastReportedMoving = isMoving
-            mqttTransport.notifyMovementState(isMoving)
+            
+            scope.launch {
+                try {
+                    val id = memberId ?: return@launch
+                    val topic = MqttConfig.getMovementTopic(id)
+                    val payload = if (isMoving) "moving" else "stationary"
+                    transportProvider.broadcastMessage(topic, payload.toByteArray(), MqttConfig.QOS_AT_MOST_ONCE, true)
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to broadcast movement state")
+                }
+            }
         }
     }
 
@@ -328,10 +345,6 @@ class LocationService : Service() {
             )
         )
 
-        // Hold the wakelock with a generous safety timeout, but release it
-        // explicitly in the coroutine's finally block so the device can sleep
-        // as soon as the publish coroutine actually completes (success or failure).
-        // The previous fixed 15s timeout could expire mid-publish on slow links.
         wakeLock.acquire(WAKELOCK_TIMEOUT_MS)
 
         scope.launch {
@@ -373,9 +386,9 @@ class LocationService : Service() {
                         Timber.w(e, "LocationService: publish failed (attempt $attempt/3)")
                     }
                 ) {
-                    mqttTransport.publishLocation(memberLocation)
+                    publishLocationToPeers(memberLocation)
                 }.onSuccess {
-                    Timber.d("LocationService: published location to MQTT")
+                    Timber.d("LocationService: published location")
                 }.onFailure { e ->
                     Timber.e(e, "LocationService: all publish attempts failed")
                 }
@@ -386,6 +399,36 @@ class LocationService : Service() {
             }
         }
     }
+
+    private suspend fun publishLocationToPeers(location: MemberLocation) {
+        val group = groupStateManager.groupDefinition.value ?: return
+        val myId = memberId ?: return
+
+        group.members
+            .filter { it.memberId != myId }
+            .forEach { peer ->
+                try {
+                    val encryptedPayload = e2eeManager.encryptMessage(
+                        plaintext = kotlinx.serialization.json.Json.encodeToString(com.example.familysafety.location.MemberLocation.serializer(), location),
+                        recipientMemberId = peer.memberId,
+                        recipientX25519PublicKey = peer.x25519PublicKey.hexToByteArray()
+                    )
+                    
+                    val topic = MqttConfig.getLocationTopic(peer.memberId)
+                    transportProvider.sendMessage(
+                        recipientId = peer.memberId,
+                        topic = topic,
+                        payload = encryptedPayload.toByteArray(),
+                        qos = MqttConfig.QOS_AT_MOST_ONCE
+                    )
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to send location to ${peer.memberId.take(8)}")
+                }
+            }
+    }
+
+    private fun String.hexToByteArray(): ByteArray =
+        chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     private fun adjustIntervalFromGps(location: Location) {
         val speed = if (location.hasSpeed()) location.speed else 0f
@@ -413,7 +456,6 @@ class LocationService : Service() {
         super.onDestroy()
         stopLocationUpdates()
         scope.cancel()
-        // Mark as not alive so the watchdog knows to restart on next run
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
             .putBoolean(PREF_SERVICE_ALIVE, false).apply()
     }
