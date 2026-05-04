@@ -358,7 +358,12 @@ class MqttTransport @Inject constructor(
             return
         }
 
-        val envelope = MessageProtocol.decodeEnvelope(decryptedPayload)
+        val envelope = try {
+            MessageProtocol.decodeEnvelope(decryptedPayload)
+        } catch (e: Exception) {
+            Timber.w("$TAG: Failed to decode envelope from $senderId: ${e.message}")
+            return
+        }
         when (envelope.type) {
             "location_update" -> {
                 val locationUpdate = MessageProtocol.decodeLocationUpdate(envelope.payload)

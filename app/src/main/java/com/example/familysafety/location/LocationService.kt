@@ -403,23 +403,23 @@ class LocationService : Service() {
     private suspend fun publishLocationToPeers(location: MemberLocation) {
         val group = groupStateManager.groupDefinition.value ?: return
         val myId = memberId ?: return
+        // Publish to OUR OWN sender topic — peers subscribe to getLocationTopic(sender).
+        val topic = MqttConfig.getLocationTopic(myId)
 
         group.members
             .filter { it.memberId != myId }
             .forEach { peer ->
                 try {
                     val encryptedPayload = e2eeManager.encryptMessage(
-                        plaintext = kotlinx.serialization.json.Json.encodeToString(com.example.familysafety.location.MemberLocation.serializer(), location),
+                        plaintext = com.example.familysafety.transport.MessageProtocol.encodeLocationUpdate(location),
                         recipientMemberId = peer.memberId,
                         recipientX25519PublicKey = peer.x25519PublicKey.hexToByteArray()
                     )
-                    
-                    val topic = MqttConfig.getLocationTopic(peer.memberId)
-                    transportProvider.sendMessage(
-                        recipientId = peer.memberId,
+                    transportProvider.broadcastMessage(
                         topic = topic,
                         payload = encryptedPayload.toByteArray(),
-                        qos = MqttConfig.QOS_AT_MOST_ONCE
+                        qos = MqttConfig.QOS_AT_MOST_ONCE,
+                        retained = false
                     )
                 } catch (e: Exception) {
                     Timber.e(e, "Failed to send location to ${peer.memberId.take(8)}")
