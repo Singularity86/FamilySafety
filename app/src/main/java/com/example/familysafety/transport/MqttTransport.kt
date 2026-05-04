@@ -190,7 +190,9 @@ class MqttTransport @Inject constructor(
         topics.add(MqttConfig.getReplicationAnnounceInboxTopic(id))
         qosLevels.add(MqttConfig.DEFAULT_QOS)
 
-        // Join approvals
+        // Join requests (received by approvers) and approvals (received by joiners)
+        topics.add(MqttConfig.getJoinRequestTopic(id))
+        qosLevels.add(MqttConfig.DEFAULT_QOS)
         topics.add(MqttConfig.getJoinApprovalTopic(id))
         qosLevels.add(MqttConfig.DEFAULT_QOS)
 
