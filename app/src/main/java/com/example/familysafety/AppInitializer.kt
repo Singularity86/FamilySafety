@@ -77,10 +77,20 @@ class AppInitializer @Inject constructor(
                 locationRepository.initialize()
                 Timber.d("$TAG: LocationRepository initialized")
 
-                // 5. Set group ID for group-level subscriptions (Still needed for MQTT internal routing)
+                // 5. Wire up InviteManager and GroupSyncManager BEFORE MQTT connects so that
+                //    retained join_request messages delivered immediately on subscribe are not
+                //    dropped due to a null groupStateManager.
+                groupSyncManager.initialize(localMemberId.value, groupStateManager)
+                Timber.d("$TAG: GroupSyncManager initialized")
+
+                inviteManager.initialize(localMemberId.value, groupStateManager, groupSyncManager)
+                Timber.d("$TAG: InviteManager initialized")
+
+                // 6. Set group ID for group-level subscriptions (Still needed for MQTT internal routing)
                 mqttTransport.setGroupId(groupDef.groupId)
 
-                // 6. Initialize MQTT connection - Use the member ID injected from Hilt directly.
+                // 7. Initialize MQTT connection - retained messages (join_request etc.) arrive
+                //    immediately on subscribe, so InviteManager must be ready first (see above).
                 val localMember = groupDef.findMemberById(localMemberId.value)
                     ?: throw IllegalStateException("Local member ${localMemberId.value} not found in group ${groupDef.groupId}")
 
@@ -91,17 +101,9 @@ class AppInitializer @Inject constructor(
                 )
                 Timber.d("$TAG: MQTT transport initialized")
 
-                // 6b. Start local WiFi transport (NSD registration + TCP server)
+                // 7b. Start local WiFi transport (NSD registration + TCP server)
                 localTransport.start(localMemberId.value)
                 Timber.d("$TAG: LocalTransport started")
-
-                // 7. Initialize InviteManager (needs member ID + state refs)
-                inviteManager.initialize(localMemberId.value, groupStateManager, groupSyncManager)
-                Timber.d("$TAG: InviteManager initialized")
-
-                // 7b. Initialize GroupSyncManager so member-change broadcasts actually propagate.
-                groupSyncManager.initialize(localMemberId.value, groupStateManager)
-                Timber.d("$TAG: GroupSyncManager initialized")
 
                 // 8. Initialize avatar sync (HTTP server + mDNS)
                 avatarRepository.initialize()
