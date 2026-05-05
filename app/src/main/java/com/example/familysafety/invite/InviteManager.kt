@@ -238,24 +238,25 @@ class InviteManager @Inject constructor(
 
             Timber.i("InviteManager: calling addMember for ${request.displayName} (${request.requesterId.take(8)})")
             val addResult = stateManager.addMember(newMember, signature, inviterMemberId)
-            if (addResult is GroupOperationResult.Failure) {
+            val memberAlreadyExisted = addResult is GroupOperationResult.Failure &&
+                    addResult.error is GroupError.MemberAlreadyExists
+            if (addResult is GroupOperationResult.Failure && !memberAlreadyExisted) {
                 Timber.e("InviteManager: addMember failed — ${addResult.error}")
                 return Result.failure(IllegalStateException("addMember failed: ${addResult.error}"))
             }
-            Timber.i("InviteManager: addMember succeeded")
+            if (memberAlreadyExisted) {
+                Timber.w("InviteManager: member already exists — re-sending approval in case joiner missed it")
+            } else {
+                Timber.i("InviteManager: addMember succeeded")
+            }
 
-            // Broadcast updated group state to existing members
-            val updatedGroupDef = stateManager.groupDefinition.value
-            if (updatedGroupDef != null) {
-                groupSyncManager?.broadcastGroupUpdate(
-                    updatedGroupDef, ChangeType.MEMBER_ADDED, newMember.memberId
-                )
-
-                // Send group definition directly to the joiner's join_approval topic.
+            // Send approval immediately — before broadcastGroupUpdate which can block for
+            // up to 30 s waiting for acks, causing the UI to show the approve button too long.
+            val groupDefForApproval = stateManager.groupDefinition.value
+            if (groupDefForApproval != null) {
                 val approvalTopic = MqttConfig.getJoinApprovalTopic(request.requesterId)
-                val groupDefJson = json.encodeToString(updatedGroupDef)
+                val groupDefJson = json.encodeToString(groupDefForApproval)
                 val approvalPayload = groupDefJson.toByteArray(Charsets.UTF_8)
-                
                 Timber.i("InviteManager: publishing approval to $approvalTopic (${groupDefJson.length} bytes, retained=true)")
                 val published = transportProvider.sendMessage(
                     recipientId = request.requesterId,
@@ -270,7 +271,19 @@ class InviteManager @Inject constructor(
                     Timber.w("InviteManager: approval queued for delivery on reconnect")
                 }
             } else {
-                Timber.e("InviteManager: updatedGroupDef is null after addMember — cannot send approval")
+                Timber.e("InviteManager: groupDef is null after addMember — cannot send approval")
+            }
+
+            // Broadcast updated group state to existing members (fire-and-forget — can take up to 30 s).
+            if (!memberAlreadyExisted) {
+                val updatedGroupDef = stateManager.groupDefinition.value
+                if (updatedGroupDef != null) {
+                    scope.launch {
+                        groupSyncManager?.broadcastGroupUpdate(
+                            updatedGroupDef, ChangeType.MEMBER_ADDED, newMember.memberId
+                        )
+                    }
+                }
             }
 
             Timber.i("Approved join request from ${request.displayName}")
