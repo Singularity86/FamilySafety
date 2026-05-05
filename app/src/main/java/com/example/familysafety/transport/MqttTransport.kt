@@ -81,7 +81,7 @@ class MqttTransport @Inject constructor(
 
                 val connOpts = MqttConnectOptions().apply {
                     isCleanSession = false
-                    isAutomaticReconnect = true
+                    isAutomaticReconnect = false  // we handle reconnect via scheduleReconnect()
                     connectionTimeout = MqttConfig.CONNECTION_TIMEOUT
                     keepAliveInterval = currentKeepAlive
                     
@@ -302,9 +302,11 @@ class MqttTransport @Inject constructor(
 
     private suspend fun processPendingMessages() {
         while (pendingMessages.isNotEmpty()) {
+            if (_connectionState.value != ConnectionState.Connected) break
             val msg = pendingMessages.poll() ?: break
             if (System.currentTimeMillis() - msg.timestamp > 3600_000) continue
-            publishRaw(msg.topic, msg.payload, msg.qos, msg.retained)
+            val sent = publishRaw(msg.topic, msg.payload, msg.qos, msg.retained)
+            if (!sent) break  // connection dropped mid-drain; remaining stay queued
             delay(50)
         }
     }
