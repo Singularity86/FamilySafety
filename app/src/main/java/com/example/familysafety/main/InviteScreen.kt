@@ -12,7 +12,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import com.example.familysafety.ui.components.AppButton
 import com.example.familysafety.ui.components.ButtonState
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.*
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,6 +40,7 @@ fun InviteScreen(
     var inviteCode by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var copied by remember { mutableStateOf(false) }
+    val pendingRequests by viewModel.pendingJoinRequests.collectAsState()
 
     LaunchedEffect(Unit) {
         viewModel.generateInviteCode()
@@ -85,6 +88,25 @@ fun InviteScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
+            // Pending join requests — shown at the top when someone is waiting
+            if (pendingRequests.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Join Requests",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    pendingRequests.forEach { request ->
+                        JoinRequestCard(
+                            request = request,
+                            onApprove = { viewModel.approveJoinRequest(request) },
+                            onReject = { viewModel.rejectJoinRequest(request) }
+                        )
+                    }
+                    HorizontalDivider()
+                }
+            }
+
             Text(
                 text = "Share this with someone to invite them to your family.",
                 style = MaterialTheme.typography.bodyMedium,

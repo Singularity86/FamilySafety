@@ -116,6 +116,25 @@ fun SettingsScreen(
         }
     }
 
+    // Battery optimization state — declared before Column so the banner appears at the top
+    val batteryPowerManager = context.getSystemService(PowerManager::class.java)
+    var isBatteryOptimized by remember {
+        mutableStateOf(
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                !batteryPowerManager.isIgnoringBatteryOptimizations(context.packageName)
+        )
+    }
+    val batteryLifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(batteryLifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                isBatteryOptimized = !batteryPowerManager.isIgnoringBatteryOptimizations(context.packageName)
+            }
+        }
+        batteryLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { batteryLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -125,8 +144,61 @@ fun SettingsScreen(
         Text(
             text = "Settings",
             style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 24.dp)
+            modifier = Modifier.padding(bottom = 16.dp)
         )
+
+        // Battery optimization warning — shown at top so it's immediately visible
+        if (isBatteryOptimized) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.BatteryAlert,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                        Text(
+                            text = "Battery Optimization Active",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Android may pause location tracking in the background. " +
+                            "Tap below to keep FamilySafety running reliably.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                context.startActivity(
+                                    Intent(
+                                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
+                                )
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        )
+                    ) {
+                        Text("Fix Now")
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
         // Profile card — avatar + display name
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -491,75 +563,6 @@ fun SettingsScreen(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-
-        // Battery Optimization card
-        val powerManager = context.getSystemService(PowerManager::class.java)
-        var isBatteryOptimized by remember {
-            mutableStateOf(
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-                !powerManager.isIgnoringBatteryOptimizations(context.packageName)
-            )
-        }
-        // Re-check when screen resumes (user may have changed setting)
-        val lifecycleOwner = LocalLifecycleOwner.current
-        DisposableEffect(lifecycleOwner) {
-            val observer = LifecycleEventObserver { _, event ->
-                if (event == Lifecycle.Event.ON_RESUME && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    isBatteryOptimized = !powerManager.isIgnoringBatteryOptimizations(context.packageName)
-                }
-            }
-            lifecycleOwner.lifecycle.addObserver(observer)
-            onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-        }
-        if (isBatteryOptimized) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer
-                )
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.BatteryAlert,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.padding(end = 8.dp)
-                        )
-                        Text(
-                            text = "Battery Optimization Active",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Android may kill location tracking in the background. Tap below to keep Family Safety running reliably.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Button(
-                        onClick = {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                val intent = Intent(
-                                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                                    Uri.parse("package:${context.packageName}")
-                                )
-                                context.startActivity(intent)
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error,
-                            contentColor = MaterialTheme.colorScheme.onError
-                        )
-                    ) {
-                        Text("Disable Battery Optimization")
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-        }
 
         // Speed Alerts card
         Card(modifier = Modifier.fillMaxWidth()) {

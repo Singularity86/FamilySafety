@@ -6,5 +6,7 @@ sealed class MembershipState {
         val invitedByName: String,
         val familyName: String
     ) : MembershipState()
+    /** Approval received — show confirmation screen before restarting. */
+    data class ApprovalReceived(val familyName: String) : MembershipState()
     data object Approved : MembershipState()
 }

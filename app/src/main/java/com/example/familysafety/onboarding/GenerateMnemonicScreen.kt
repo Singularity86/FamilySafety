@@ -1,16 +1,17 @@
 package com.example.familysafety.onboarding
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.familysafety.ui.theme.TealPrimary
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -22,6 +23,7 @@ fun GenerateMnemonicScreen(
 ) {
     val mnemonic by viewModel.mnemonic.collectAsState()
 
+    // Generate silently in the background — user never sees the words here.
     LaunchedEffect(Unit) {
         if (mnemonic.isEmpty()) {
             viewModel.generateMnemonic()
@@ -31,10 +33,10 @@ fun GenerateMnemonicScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Recovery Phrase") },
+                title = { Text("Account Security") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -44,42 +46,64 @@ fun GenerateMnemonicScreen(
             modifier = modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(24.dp)
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(
-                text = "Write down your recovery phrase",
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.padding(bottom = 8.dp)
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Icon(
+                imageVector = Icons.Default.Security,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = TealPrimary
             )
 
+            Spacer(modifier = Modifier.height(24.dp))
+
             Text(
-                text = "This 12-word phrase is the only way to recover your account. Store it safely offline.",
+                text = "Your account is protected",
+                style = MaterialTheme.typography.headlineSmall,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "We've generated a secure recovery phrase and stored it safely on this device. " +
+                    "You won't need to write anything down right now.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 24.dp)
+                textAlign = TextAlign.Center
             )
 
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    contentPadding = PaddingValues(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    itemsIndexed(mnemonic) { index, word ->
-                        MnemonicWordCard(index + 1, word)
-                    }
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp).padding(top = 2.dp)
+                    )
+                    Text(
+                        text = "If you ever reinstall FamilySafety, your recovery phrase lets you " +
+                            "restore your account. Find it anytime under Settings → Recovery Phrase.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             Button(
                 onClick = onNext,
@@ -88,34 +112,15 @@ fun GenerateMnemonicScreen(
                     .height(56.dp),
                 enabled = mnemonic.isNotEmpty()
             ) {
-                Text("I've Written It Down")
+                if (mnemonic.isEmpty()) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                } else {
+                    Text("Continue")
+                }
             }
-        }
-    }
-}
-
-@Composable
-private fun MnemonicWordCard(
-    number: Int,
-    word: String,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = "$number",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = word,
-                style = MaterialTheme.typography.bodyMedium
-            )
         }
     }
 }

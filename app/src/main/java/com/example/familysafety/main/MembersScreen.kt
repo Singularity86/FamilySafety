@@ -51,8 +51,8 @@ fun MembersScreen(
 ) {
     val familyMembers by viewModel.familyMembers.collectAsState()
     val memberLocations by viewModel.memberLocations.collectAsState()
-    val pendingRequests by viewModel.pendingJoinRequests.collectAsState()
     val memberAvatars by viewModel.memberAvatars.collectAsState()
+    val groupName by viewModel.groupName.collectAsState()
     val myMemberId = viewModel.myMemberId
     val haptic = LocalHapticFeedback.current
 
@@ -73,7 +73,7 @@ fun MembersScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Family Members",
+                        text = groupName.ifEmpty { "Family Members" },
                         style = MaterialTheme.typography.headlineMedium
                     )
                     IconButton(onClick = onNavigateToFiles) {
@@ -83,28 +83,6 @@ fun MembersScreen(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                }
-            }
-
-            // Pending join requests section
-            if (pendingRequests.isNotEmpty()) {
-                item {
-                    Text(
-                        text = "Join Requests",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
-                    )
-                }
-                items(pendingRequests, key = { it.requestId }) { request ->
-                    JoinRequestCard(
-                        request = request,
-                        onApprove = { viewModel.approveJoinRequest(request) },
-                        onReject = { viewModel.rejectJoinRequest(request) }
-                    )
-                }
-                item {
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                 }
             }
 
@@ -167,7 +145,7 @@ fun MembersScreen(
 }
 
 @Composable
-private fun JoinRequestCard(
+internal fun JoinRequestCard(
     request: JoinRequest,
     onApprove: () -> Unit,
     onReject: () -> Unit,

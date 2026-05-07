@@ -71,18 +71,6 @@ fun OnboardingNavigation(
             GenerateMnemonicScreen(
                 viewModel = viewModel,
                 onNext = {
-                    navController.navigate(OnboardingRoute.ConfirmMnemonic.route)
-                },
-                onBack = {
-                    navController.popBackStack()
-                }
-            )
-        }
-
-        composable(OnboardingRoute.ConfirmMnemonic.route) {
-            ConfirmMnemonicScreen(
-                viewModel = viewModel,
-                onNext = {
                     navController.navigate(OnboardingRoute.EnterName.route)
                 },
                 onBack = {

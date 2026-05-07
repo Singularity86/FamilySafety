@@ -1,5 +1,6 @@
 package com.example.familysafety
 
+import android.content.Context
 import com.example.familysafety.avatar.AvatarRepository
 import com.example.familysafety.chat.ChatRepository
 import com.example.familysafety.files.SharedFileRepository
@@ -7,10 +8,12 @@ import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.group.LocalMemberId
 import com.example.familysafety.invite.InviteManager
 import com.example.familysafety.location.LocationRepository
+import com.example.familysafety.location.ServiceWatchdogWorker
 import com.example.familysafety.replication.ReplicationManager
 import com.example.familysafety.sync.GroupSyncManager
 import com.example.familysafety.transport.LocalTransport
 import com.example.familysafety.transport.MqttTransport
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,6 +32,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class AppInitializer @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val groupStateManager: GroupStateManager,
     private val localMemberId: LocalMemberId,
     private val locationRepository: LocationRepository,
@@ -123,6 +127,10 @@ class AppInitializer @Inject constructor(
                 isInitialized = true
                 Timber.i("$TAG: Initialization complete")
 
+                // Enqueue WorkManager watchdog — uses query-first logic to avoid
+                // REPLACE resetting a healthy worker's schedule.
+                ServiceWatchdogWorker.scheduleIfNeeded(context)
+
                 // Watch for membership changes (new members added/removed) and
                 // update MQTT subscriptions + encryption keys automatically.
                 var previousMemberIds: Set<String> = groupDef.members.map { it.memberId }.toSet()
@@ -180,6 +188,7 @@ class AppInitializer @Inject constructor(
         mqttTransport.cleanup()
         localTransport.stop()
         avatarRepository.cleanup()
+        ServiceWatchdogWorker.cancel(context)
         isInitialized = false
         Timber.d("$TAG: Cleanup complete")
     }

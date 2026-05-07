@@ -103,6 +103,11 @@ class LocationService : Service() {
         const val ACTION_STOP_TRACKING = "com.example.familysafety.STOP_TRACKING"
         const val EXTRA_MEMBER_ID = "member_id"
 
+        /** True while this service instance is alive; read by ServiceWatchdogReceiver. */
+        @Volatile
+        var isRunning = false
+            private set
+
         fun startTracking(context: Context, memberId: String) {
             val intent = Intent(context, LocationService::class.java).apply {
                 action = ACTION_START_TRACKING
@@ -126,8 +131,10 @@ class LocationService : Service() {
     override fun onCreate() {
         super.onCreate()
         Timber.i("LocationService: onCreate")
+        isRunning = true
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         createNotificationChannel()
+        ServiceWatchdogReceiver.schedule(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -141,6 +148,7 @@ class LocationService : Service() {
                     .putBoolean(PREF_SERVICE_ALIVE, true)
                     .apply()
                 startForeground(NOTIFICATION_ID, createNotification())
+                appInitializer.initialize()
                 startLocationUpdates()
                 LocationWatchdogWorker.schedule(this)
             }
@@ -151,6 +159,7 @@ class LocationService : Service() {
                     .putBoolean(PREF_SERVICE_ALIVE, false)
                     .apply()
                 LocationWatchdogWorker.cancel(this)
+                ServiceWatchdogReceiver.cancel(this)
                 stopLocationUpdates()
                 stopSelf()
             }
@@ -453,10 +462,13 @@ class LocationService : Service() {
 
     override fun onDestroy() {
         Timber.w("LocationService: onDestroy — service is being killed")
+        isRunning = false
         super.onDestroy()
         stopLocationUpdates()
         scope.cancel()
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
             .putBoolean(PREF_SERVICE_ALIVE, false).apply()
+        // Schedule a recovery alarm so the watchdog fires even if WorkManager is deferred
+        ServiceWatchdogReceiver.schedule(this)
     }
 }

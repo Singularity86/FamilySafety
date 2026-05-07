@@ -31,6 +31,9 @@
         tools:targetApi="tiramisu" />
     <!-- Required for full-screen crash alert shown over lock screen (API 29+) -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Required on Android 12+ to schedule exact AlarmManager alarms for the service watchdog.
+         Users must grant this via Settings → Special app access → Alarms & reminders. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <application
         android:name=".FamilySafetyApplication"
@@ -81,12 +84,41 @@
             android:exported="false" />
 
         <receiver
-            android:name=".location.BootReceiver"
+            android:name=".location.ServiceWatchdogReceiver"
             android:enabled="true"
-            android:exported="true">
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.familysafety.WATCHDOG_TICK" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+             BootRecoveryReceiver replaces the old BootReceiver and adds
+             LOCKED_BOOT_COMPLETED + MY_PACKAGE_REPLACED coverage.
+             directBootAware="true" allows Android to deliver LOCKED_BOOT_COMPLETED
+             before the user unlocks the device (direct boot mode).
+        -->
+        <receiver
+            android:name=".location.BootRecoveryReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:directBootAware="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Re-establishes exact alarm chains when the user grants SCHEDULE_EXACT_ALARM
+             in Settings → Special app access → Alarms & reminders (API 31+). -->
+        <receiver
+            android:name=".location.ExactAlarmPermissionReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
             </intent-filter>
         </receiver>
 

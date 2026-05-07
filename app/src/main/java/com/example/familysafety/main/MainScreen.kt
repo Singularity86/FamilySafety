@@ -41,6 +41,8 @@ import com.example.familysafety.ui.theme.TealPrimary
 import com.example.familysafety.ui.theme.TextDisabled
 import com.example.familysafety.ui.theme.ThemeMode
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import com.example.familysafety.onboarding.BatteryOptimizationScreen
 import kotlinx.coroutines.launch
 
 sealed class MainRoute(val route: String, val label: String, val icon: ImageVector) {
@@ -130,10 +132,15 @@ fun MainScreen(
             val pagerState = rememberPagerState(pageCount = { 4 })
             val scope = rememberCoroutineScope()
             val snackbarHostState = remember { SnackbarHostState() }
+            var showBatteryFixDialog by remember { mutableStateOf(false) }
 
             // When opened from a notification, map route string to pager page.
             LaunchedEffect(navigateTo) {
                 if (!navigateTo.isNullOrBlank()) {
+                    if (navigateTo == "battery_fix") {
+                        showBatteryFixDialog = true
+                        return@LaunchedEffect
+                    }
                     val page = when {
                         navigateTo == MainRoute.Map.route                         -> 0
                         navigateTo == MainRoute.Members.route                     -> 1
@@ -305,6 +312,15 @@ fun MainScreen(
                         )
                         else -> {}
                     }
+                }
+            }
+
+            if (showBatteryFixDialog) {
+                Dialog(onDismissRequest = { showBatteryFixDialog = false }) {
+                    BatteryOptimizationScreen(
+                        onAllowed = { showBatteryFixDialog = false },
+                        onSkip    = { showBatteryFixDialog = false }
+                    )
                 }
             }
         }

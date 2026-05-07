@@ -3,12 +3,9 @@ package com.example.familysafety.onboarding
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
-import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
@@ -97,10 +94,6 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
         ActivityResultContracts.RequestPermission()
     ) { step = nextStep(context, STEP_BATTERY) }
 
-    val batteryLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { step = STEP_DONE }
-
     if (step == STEP_DONE) {
         LaunchedEffect(Unit) {
             markPermissionsFlowShown(context)
@@ -170,26 +163,9 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
                 onDismiss = { step = nextStep(context, STEP_BATTERY) }
             )
 
-            STEP_BATTERY -> PermissionRationaleCard(
-                permission = "",
-                title = "Background Activity",
-                rationale = "Some Android devices aggressively stop background apps to save " +
-                    "battery. Exempting FamilySafety ensures your location is shared reliably — " +
-                    "especially on Samsung, Xiaomi, and Oppo devices.",
-                coaching = "On the next screen, tap the toggle to 'Not optimized' — " +
-                    "this prevents your phone from pausing FamilySafety in the background.",
-                onRequestPermission = {
-                    try {
-                        batteryLauncher.launch(
-                            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                                data = Uri.parse("package:${context.packageName}")
-                            }
-                        )
-                    } catch (_: Exception) {
-                        step = STEP_DONE
-                    }
-                },
-                onDismiss = { step = STEP_DONE }
+            STEP_BATTERY -> BatteryOptimizationScreen(
+                onAllowed = { step = STEP_DONE },
+                onSkip = { step = STEP_DONE }
             )
         }
     }

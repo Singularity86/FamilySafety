@@ -26,6 +26,7 @@ import com.example.familysafety.main.TipWindow
 import com.example.familysafety.main.disableTips
 import com.example.familysafety.main.incrementSessionCount
 import com.example.familysafety.main.shouldShowTip
+import com.example.familysafety.ui.screens.ApprovedScreen
 import com.example.familysafety.ui.screens.PendingMemberScreen
 import com.example.familysafety.ui.theme.AppTheme
 import com.example.familysafety.ui.theme.ThemeMode
@@ -154,6 +155,12 @@ class MainActivity : ComponentActivity() {
                                     onFinish = { showTutorialOverlay = false }
                                 )
                             }
+                        }
+                        is MembershipState.ApprovalReceived -> {
+                            ApprovedScreen(
+                                familyName = (membershipState as MembershipState.ApprovalReceived).familyName,
+                                onContinue = { membershipViewModel.confirmRestart() }
+                            )
                         }
                         is MembershipState.PendingApproval -> {
                             PendingMemberScreen(

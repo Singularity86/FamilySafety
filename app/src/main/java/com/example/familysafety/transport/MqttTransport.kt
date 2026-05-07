@@ -314,11 +314,21 @@ class MqttTransport @Inject constructor(
     private fun scheduleReconnect() {
         if (reconnectJob?.isActive == true) return
         reconnectJob = scope.launch {
-            delay(MqttConfig.RECONNECT_DELAY_MS)
+            reconnectAttempts++
+            // Exponential backoff: 5 s, 10 s, 20 s … capped at 5 minutes.
+            val delay = (MqttConfig.RECONNECT_DELAY_MS * reconnectAttempts).coerceAtMost(5 * 60_000L)
+            Timber.i("$TAG: Reconnect attempt $reconnectAttempts in ${delay / 1000}s")
+            delay(delay)
             val id = memberId ?: return@launch
             val gId = groupId ?: return@launch
-            Timber.i("$TAG: Attempting to reconnect...")
-            initialize(id, emptyList(), gId) // keys are already in familyMemberKeys
+            initialize(id, emptyList(), gId)
+            // initialize() called scheduleReconnect() in its catch block, but that call was a
+            // no-op because this job was still active. Self-schedule the next attempt now that
+            // we are about to complete, so the loop keeps going until connected.
+            if (_connectionState.value != ConnectionState.Connected) {
+                reconnectJob = null  // release the guard so the next call proceeds
+                scheduleReconnect()
+            }
         }
     }
 
@@ -342,6 +352,9 @@ class MqttTransport @Inject constructor(
             }
         }
     }
+
+    suspend fun handleLocationOrPresencePublic(topic: String, encryptedPayload: String) =
+        handleLocationOrPresence(topic, encryptedPayload)
 
     private suspend fun handleLocationOrPresence(topic: String, encryptedPayload: String) {
         val senderId = topic.split("/").getOrNull(1) ?: return

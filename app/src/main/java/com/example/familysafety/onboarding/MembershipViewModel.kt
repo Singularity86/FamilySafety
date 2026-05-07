@@ -103,6 +103,11 @@ class MembershipViewModel @Inject constructor(
         resumeApprovalListener()
     }
 
+    /** Called by ApprovedScreen (button tap or auto-delay) to trigger the process restart. */
+    fun confirmRestart() {
+        viewModelScope.launch { _approvedEvent.emit(Unit) }
+    }
+
     fun cancelPending() {
         listenerJob?.cancel()
         clearPendingPrefs()
@@ -201,9 +206,10 @@ class MembershipViewModel @Inject constructor(
                     persistence.saveGroupDefinition(groupDefinition)
                     prefs.edit().putBoolean(KEY_ONBOARDING_COMPLETE, true).commit()
                     clearPendingPrefs()
-                    _membershipState.value = MembershipState.Approved
-                    _approvedEvent.emit(Unit)
-                    Timber.i("Onboarding complete — approval saved, restart event emitted")
+                    // Show the approval confirmation screen first; restart fires when the
+                    // user taps "Open Now" or after a 3-second auto-delay (confirmRestart()).
+                    _membershipState.value = MembershipState.ApprovalReceived(groupDefinition.groupName)
+                    Timber.i("Onboarding complete — showing approval screen before restart")
                 }
             } catch (e: Exception) {
                 Timber.e(e, "Approval listener error")

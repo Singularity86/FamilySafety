@@ -204,11 +204,7 @@ class UnifiedTransportManager @Inject constructor(
     }
 
     private suspend fun handleEncryptedLocation(topic: String, encryptedPayload: String) {
-        // This still requires knowledge of recipient keys to decrypt.
-        // For simplicity during refactor, we can delegate back to a repository
-        // or implement the decryption logic here.
-        // Given that LocationRepository is a clean target, we'll keep it there if possible.
-        // Actually, the legacy MqttTransport had the logic. We'll move it to LocationRepository soon.
+        mqttTransport.handleLocationOrPresencePublic(topic, encryptedPayload)
     }
 
     private fun extractSenderFromTopic(topic: String): String? {
