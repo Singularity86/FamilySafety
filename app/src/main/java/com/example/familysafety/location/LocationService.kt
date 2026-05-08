@@ -75,6 +75,10 @@ class LocationService : Service() {
     private var activityMonitoringJob: Job? = null
     private var vehicleMonitoringJob: Job? = null
     private var reconnectObserverJob: Job? = null
+    private var heartbeatJob: Job? = null
+
+    // Updated each time we successfully publish a location.
+    @Volatile private var lastPublishedAt = 0L
 
     private val wakeLock by lazy {
         (getSystemService(POWER_SERVICE) as android.os.PowerManager)
@@ -253,6 +257,7 @@ class LocationService : Service() {
                     if (lastLocation != null) {
                         Timber.i("LocationService: MQTT reconnected — republishing last known location")
                         publishLocationToPeers(lastLocation)
+                        lastPublishedAt = System.currentTimeMillis()
                     }
                 }
                 wasConnected = isNowConnected
@@ -263,6 +268,24 @@ class LocationService : Service() {
             override fun onLocationResult(result: LocationResult) {
                 result.lastLocation?.let { location ->
                     handleLocationUpdate(location)
+                }
+            }
+        }
+
+        // Heartbeat: if GPS goes quiet for a full stationary interval (e.g. Doze mode,
+        // OEM battery management), republish the last known location so members don't
+        // see a growing stale "Updated Xh ago" with no explanation.
+        heartbeatJob = scope.launch {
+            while (isActive) {
+                delay(LOCATION_INTERVAL_STATIONARY)
+                val sinceLastPublish = System.currentTimeMillis() - lastPublishedAt
+                if (sinceLastPublish >= LOCATION_INTERVAL_STATIONARY) {
+                    val lastLocation = locationRepository.myLocation.value
+                    if (lastLocation != null) {
+                        Timber.i("LocationService: heartbeat — republishing last known location (${sinceLastPublish / 1000}s since last publish)")
+                        publishLocationToPeers(lastLocation)
+                        lastPublishedAt = System.currentTimeMillis()
+                    }
                 }
             }
         }
@@ -309,6 +332,7 @@ class LocationService : Service() {
         activityMonitoringJob?.cancel(); activityMonitoringJob = null
         vehicleMonitoringJob?.cancel(); vehicleMonitoringJob = null
         reconnectObserverJob?.cancel(); reconnectObserverJob = null
+        heartbeatJob?.cancel(); heartbeatJob = null
         activityRecognitionManager.stopMonitoring()
         crashDetectionMonitor.setEnabled(false)
         if (wakeLock.isHeld) wakeLock.release()
@@ -397,6 +421,7 @@ class LocationService : Service() {
                 ) {
                     publishLocationToPeers(memberLocation)
                 }.onSuccess {
+                    lastPublishedAt = System.currentTimeMillis()
                     Timber.d("LocationService: published location")
                 }.onFailure { e ->
                     Timber.e(e, "LocationService: all publish attempts failed")

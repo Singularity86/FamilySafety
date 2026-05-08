@@ -15,7 +15,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PersonAdd
@@ -65,25 +64,11 @@ fun MembersScreen(
             contentPadding = PaddingValues(top = 16.dp, bottom = 88.dp)
         ) {
             item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = groupName.ifEmpty { "Family Members" },
-                        style = MaterialTheme.typography.headlineMedium
-                    )
-                    IconButton(onClick = onNavigateToFiles) {
-                        Icon(
-                            imageVector = Icons.Default.Folder,
-                            contentDescription = "Shared files",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                Text(
+                    text = groupName.ifEmpty { "Family Members" },
+                    style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
             }
 
             if (familyMembers.isEmpty()) {

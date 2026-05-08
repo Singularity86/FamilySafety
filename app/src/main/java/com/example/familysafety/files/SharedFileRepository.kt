@@ -211,21 +211,28 @@ class SharedFileRepository @Inject constructor(
             try {
                 val groupId = groupStateManager.groupDefinition.value?.groupId ?: return@launch
                 val entity = sharedFileDao.getFileById(fileId) ?: return@launch
-                if (entity.downloadState == "COMPLETE") return@launch   // already have it
+                if (entity.downloadState == "COMPLETE") return@launch
 
                 val chunkMsg = json.decodeFromString<FileChunkMessage>(String(payload))
                 val encryptedBytes = Base64.getDecoder().decode(chunkMsg.data)
                 val fileKey = deriveFileKey(groupId)
                 val plainChunk = decrypt(encryptedBytes, fileKey)
 
-                // Write chunk to temp dir
                 writeTempChunk(fileId, chunkIndex, plainChunk)
 
-                val received = entity.chunksReceived + 1
+                // Count unique chunk files on disk — naturally handles concurrent coroutines
+                // and at-least-once redelivery (same chunk overwrites same file = still 1 count).
+                val tmpDir = File(filesDir(), "$fileId/.tmp")
+                val received = tmpDir.listFiles()?.size ?: 0
+
                 sharedFileDao.updateDownloadProgress(fileId, "DOWNLOADING", null, received)
 
                 if (received >= entity.chunkCount) {
-                    // All chunks received — assemble and verify
+                    // Re-fetch before assembling to guard against two coroutines both seeing
+                    // received == chunkCount simultaneously.
+                    val fresh = sharedFileDao.getFileById(fileId) ?: return@launch
+                    if (fresh.downloadState == "COMPLETE") return@launch
+
                     val assembled = assembleChunks(fileId, entity.chunkCount)
                     val hash = sha256Hex(assembled)
                     if (hash != entity.contentHash) {
@@ -394,7 +401,7 @@ class SharedFileRepository @Inject constructor(
             .joinToString("") { "%02x".format(it) }
 
     private fun filesDir(): File =
-        File(context.getExternalFilesDir(null), "familysafety_files")
+        File(context.getExternalFilesDir(null) ?: context.filesDir, "familysafety_files")
             .also { it.mkdirs() }
 
     private fun saveToLocalStorage(fileId: String, bytes: ByteArray): String {

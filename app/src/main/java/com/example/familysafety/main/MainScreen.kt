@@ -15,6 +15,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -48,7 +49,7 @@ import kotlinx.coroutines.launch
 sealed class MainRoute(val route: String, val label: String, val icon: ImageVector) {
     data object Map      : MainRoute("map",       "Map",      Icons.Default.Place)
     data object Members  : MainRoute("members",   "Members",  Icons.Default.People)
-    data object Chat     : MainRoute("chat",       "Chat",     Icons.Default.Chat)
+    data object Chat     : MainRoute("chat",       "Chat",     Icons.AutoMirrored.Filled.Chat)
     data object Files    : MainRoute("files",      "Files",    Icons.Default.Folder)
     data object Zones    : MainRoute("geofences",  "Zones",    Icons.Default.LocationCity)
     data object Settings : MainRoute("settings",   "Settings", Icons.Default.Settings)
@@ -74,7 +75,8 @@ private data class PagerTab(val label: String, val icon: ImageVector)
 private val pagerTabs = listOf(
     PagerTab("Home",     Icons.Default.Place),
     PagerTab("Family",   Icons.Default.People),
-    PagerTab("Alerts",   Icons.Default.Notifications),
+    PagerTab("Files",    Icons.Default.Folder),
+    PagerTab("Chat",     Icons.AutoMirrored.Filled.Chat),
     PagerTab("Settings", Icons.Default.Settings)
 )
 
@@ -129,7 +131,7 @@ fun MainScreen(
             val pendingJoinCount by viewModel.pendingJoinRequests.collectAsState()
             val geofences by geofenceViewModel.geofences.collectAsState()
 
-            val pagerState = rememberPagerState(pageCount = { 4 })
+            val pagerState = rememberPagerState(pageCount = { 5 })
             val scope = rememberCoroutineScope()
             val snackbarHostState = remember { SnackbarHostState() }
             var showBatteryFixDialog by remember { mutableStateOf(false) }
@@ -144,8 +146,9 @@ fun MainScreen(
                     val page = when {
                         navigateTo == MainRoute.Map.route                         -> 0
                         navigateTo == MainRoute.Members.route                     -> 1
-                        navigateTo.startsWith("chat")                             -> 2
-                        navigateTo == MainRoute.Settings.route                    -> 3
+                        navigateTo == MainRoute.Files.route                       -> 2
+                        navigateTo.startsWith("chat")                             -> 3
+                        navigateTo == MainRoute.Settings.route                    -> 4
                         else                                                      -> -1
                     }
                     if (page >= 0) {
@@ -200,7 +203,7 @@ fun MainScreen(
                     NavigationBar {
                         pagerTabs.forEachIndexed { index, tab ->
                             val selected = pagerState.currentPage == index
-                            val chatBadge   = index == 2 && totalUnreadCount > 0
+                            val chatBadge   = index == 3 && totalUnreadCount > 0
                             val familyBadge = index == 1 && pendingJoinCount.isNotEmpty()
 
                             // Local glow+icon lambda — avoids duplicating the Box tree.
@@ -295,15 +298,17 @@ fun MainScreen(
                                 navController.navigate(HistoryRoute.route(memberId))
                             },
                             onNavigateToFiles = {
-                                navController.navigate(MainRoute.Files.route)
+                                scope.launch { pagerState.animateScrollToPage(2) }
                             }
                         )
-                        2 -> ChatScreen(
+                        2 -> FilesScreen(viewModel = filesViewModel)
+                        3 -> ChatScreen(
                             memberId = "",
                             onBack = {},
-                            viewModel = chatViewModel
+                            viewModel = chatViewModel,
+                            showTopBar = false
                         )
-                        3 -> SettingsScreen(
+                        4 -> SettingsScreen(
                             viewModel = viewModel,
                             onThemeChanged = onThemeChanged,
                             onNavigateToCrop = { navController.navigate("avatar_crop") },

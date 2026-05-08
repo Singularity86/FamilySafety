@@ -70,7 +70,8 @@ import java.util.Locale
 fun ChatScreen(
     memberId: String,         // pass empty string for group chat
     onBack: () -> Unit,
-    viewModel: ChatViewModel = hiltViewModel()
+    viewModel: ChatViewModel = hiltViewModel(),
+    showTopBar: Boolean = true
 ) {
     val currentRecipient by viewModel.currentRecipient.collectAsState()
     val messages by viewModel.currentMessages.collectAsState()
@@ -99,36 +100,40 @@ fun ChatScreen(
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primaryContainer),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = if (isGroupChat) "G" else (currentRecipient?.displayName ?: "?").take(1).uppercase(),
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
+        topBar = if (showTopBar) {
+            {
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primaryContainer),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = if (isGroupChat) "G" else (currentRecipient?.displayName ?: "?").take(1).uppercase(),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(if (isGroupChat) "Family Chat" else currentRecipient?.displayName ?: "Chat")
                         }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(if (isGroupChat) "Family Chat" else currentRecipient?.displayName ?: "Chat")
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = {
+                            viewModel.closeConversation()
+                            onBack()
+                        }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
                     }
-                },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        viewModel.closeConversation()
-                        onBack()
-                    }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
+                )
+            }
+        } else {
+            {}
         }
     ) { paddingValues ->
         Column(
