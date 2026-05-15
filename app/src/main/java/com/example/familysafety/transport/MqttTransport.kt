@@ -290,6 +290,8 @@ class MqttTransport @Inject constructor(
                         override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
                             Timber.w(exception, "$TAG: Failed to publish to $topic")
                             queueMessage(topic, payload, qos, retained)
+                            _connectionState.value = ConnectionState.Disconnected
+                            scheduleReconnect()
                             continuation.resume(false)
                         }
                     })
@@ -297,6 +299,8 @@ class MqttTransport @Inject constructor(
             } catch (e: Exception) {
                 Timber.e(e, "$TAG: Error publishing to $topic")
                 queueMessage(topic, payload, qos, retained)
+                _connectionState.value = ConnectionState.Disconnected
+                scheduleReconnect()
                 false
             }
         }

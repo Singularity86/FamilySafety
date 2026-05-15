@@ -225,7 +225,7 @@ class LocationService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("FamilySafety — Location active")
-            .setContentText("Required for location sharing to work. Tap to open.")
+            .setContentText("Notification required for location sharing to work. Tap to open.")
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -276,9 +276,11 @@ class LocationService : Service() {
                     if (lastLocation != null) {
                         Timber.i("LocationService: MQTT reconnected — republishing last known location")
                         val heartbeatLocation = lastLocation.copy(timestamp = System.currentTimeMillis())
-                        locationRepository.updateMyLocation(heartbeatLocation)
-                        publishLocationToPeers(heartbeatLocation)
-                        lastPublishedAt = System.currentTimeMillis()
+                        if (publishLocationSnapshot(heartbeatLocation, updateRepository = true)) {
+                            lastPublishedAt = System.currentTimeMillis()
+                        } else {
+                            Timber.w("LocationService: reconnect publish did not reach any peers")
+                        }
                     }
                 }
                 wasConnected = isNowConnected
@@ -305,9 +307,11 @@ class LocationService : Service() {
                     if (lastLocation != null) {
                         Timber.i("LocationService: heartbeat — republishing last known location (${sinceLastPublish / 1000}s since last publish)")
                         val heartbeatLocation = lastLocation.copy(timestamp = System.currentTimeMillis())
-                        locationRepository.updateMyLocation(heartbeatLocation)
-                        publishLocationToPeers(heartbeatLocation)
-                        lastPublishedAt = System.currentTimeMillis()
+                        if (publishLocationSnapshot(heartbeatLocation, updateRepository = true)) {
+                            lastPublishedAt = System.currentTimeMillis()
+                        } else {
+                            Timber.w("LocationService: heartbeat publish did not reach any peers")
+                        }
                     }
                 }
             }
@@ -439,19 +443,11 @@ class LocationService : Service() {
                     return@safely
                 }
 
-                ErrorHandler.withRetry(
-                    maxAttempts = 3,
-                    initialDelayMs = 1000,
-                    onError = { e, attempt ->
-                        Timber.w(e, "LocationService: publish failed (attempt $attempt/3)")
-                    }
-                ) {
-                    publishLocationToPeers(memberLocation)
-                }.onSuccess {
+                if (publishLocationSnapshot(memberLocation, updateRepository = false)) {
                     lastPublishedAt = System.currentTimeMillis()
                     Timber.d("LocationService: published location")
-                }.onFailure { e ->
-                    Timber.e(e, "LocationService: all publish attempts failed")
+                } else {
+                    Timber.w("LocationService: location publish did not reach any peers")
                 }
 
                 adjustIntervalFromGps(location)
@@ -461,15 +457,25 @@ class LocationService : Service() {
         }
     }
 
-    private suspend fun publishLocationToPeers(location: MemberLocation) {
-        val group = groupStateManager.groupDefinition.value ?: return
-        val myId = memberId ?: return
+    private suspend fun publishLocationToPeers(location: MemberLocation): Boolean {
+        val group = groupStateManager.groupDefinition.value ?: run {
+            Timber.w("LocationService: no group available for location publish")
+            return false
+        }
+        val myId = memberId ?: run {
+            Timber.w("LocationService: no member id available for location publish")
+            return false
+        }
         // Publish to OUR OWN sender topic — peers subscribe to getLocationTopic(sender).
         val topic = MqttConfig.getLocationTopic(myId)
+        val peers = group.members.filter { it.memberId != myId }
+        if (peers.isEmpty()) {
+            Timber.d("LocationService: no peer recipients for location publish")
+            return true
+        }
+        var anySucceeded = false
 
-        group.members
-            .filter { it.memberId != myId }
-            .forEach { peer ->
+        peers.forEach { peer ->
                 try {
                     val encryptedPayload = e2eeManager.encryptMessage(
                         plaintext = com.example.familysafety.transport.MessageProtocol.encodeLocationUpdate(location),
@@ -481,11 +487,29 @@ class LocationService : Service() {
                         payload = encryptedPayload.toByteArray(),
                         qos = MqttConfig.QOS_AT_LEAST_ONCE,
                         retained = false
-                    )
+                    ).also { delivered ->
+                        anySucceeded = anySucceeded || delivered
+                    }
                 } catch (e: Exception) {
                     Timber.e(e, "Failed to send location to ${peer.memberId.take(8)}")
                 }
             }
+
+        if (!anySucceeded) {
+            Timber.w("LocationService: no location payload was delivered for ${location.memberId.take(8)}")
+        }
+        return anySucceeded
+    }
+
+    private suspend fun publishLocationSnapshot(
+        location: MemberLocation,
+        updateRepository: Boolean
+    ): Boolean {
+        val delivered = publishLocationToPeers(location)
+        if (delivered && updateRepository) {
+            locationRepository.updateMyLocation(location)
+        }
+        return delivered
     }
 
     private fun String.hexToByteArray(): ByteArray =
