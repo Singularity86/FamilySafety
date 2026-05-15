@@ -12,11 +12,11 @@ import timber.log.Timber
 /**
  * AlarmManager-based watchdog that ensures LocationService stays alive.
  *
- * Complements LocationWatchdogWorker (WorkManager) — AlarmManager alarms are more
- * precise and fire even during Doze idle windows when WorkManager jobs are deferred.
+ * Complements ServiceWatchdogWorker (WorkManager). AlarmManager alarms are more
+ * precise and can fire during Doze idle windows when WorkManager jobs are deferred.
  *
- * The receiver reschedules itself on every tick, so a single call to schedule() keeps
- * the chain going until cancel() is called or the session ends (no memberId).
+ * The receiver reschedules itself on every tick, so a single call to schedule()
+ * keeps the chain going until cancel() is called or the session ends.
  */
 class ServiceWatchdogReceiver : BroadcastReceiver() {
 
@@ -28,19 +28,19 @@ class ServiceWatchdogReceiver : BroadcastReceiver() {
             .getString(LocationService.PREFS_MEMBER_ID, null)
 
         if (memberId == null) {
-            Timber.d("ServiceWatchdog: no active session — stopping alarm chain")
+            Timber.d("ServiceWatchdog: no active session - stopping alarm chain")
             return
         }
 
         if (!LocationService.isRunning) {
-            Timber.w("ServiceWatchdog: LocationService not running — restarting for ${memberId.take(8)}")
+            Timber.w("ServiceWatchdog: LocationService not running - restarting for ${memberId.take(8)}")
             try {
                 LocationService.startTracking(context, memberId)
             } catch (e: Exception) {
                 Timber.e(e, "ServiceWatchdog: failed to restart LocationService")
             }
         } else {
-            Timber.d("ServiceWatchdog: LocationService alive — no action needed")
+            Timber.d("ServiceWatchdog: LocationService alive - no action needed")
         }
 
         schedule(context)
@@ -50,6 +50,7 @@ class ServiceWatchdogReceiver : BroadcastReceiver() {
         const val ACTION_WATCHDOG_TICK = "com.example.familysafety.WATCHDOG_TICK"
         private const val REQUEST_CODE = 0x5747 // "WG"
         private const val INTERVAL_MS = 15 * 60 * 1000L
+        private const val SOON_INTERVAL_MS = 30 * 1000L
 
         private fun buildPendingIntent(context: Context): PendingIntent {
             val intent = Intent(context, ServiceWatchdogReceiver::class.java).apply {
@@ -64,9 +65,17 @@ class ServiceWatchdogReceiver : BroadcastReceiver() {
         }
 
         fun schedule(context: Context) {
+            schedule(context, INTERVAL_MS)
+        }
+
+        fun scheduleSoon(context: Context) {
+            schedule(context, SOON_INTERVAL_MS)
+        }
+
+        private fun schedule(context: Context, delayMs: Long) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             val pi = buildPendingIntent(context)
-            val triggerAt = SystemClock.elapsedRealtime() + INTERVAL_MS
+            val triggerAt = SystemClock.elapsedRealtime() + delayMs
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 try {
@@ -75,15 +84,15 @@ class ServiceWatchdogReceiver : BroadcastReceiver() {
                         triggerAt,
                         pi
                     )
-                    Timber.i("ServiceWatchdog: exact alarm scheduled in 15 min")
+                    Timber.i("ServiceWatchdog: exact alarm scheduled in ${delayMs / 1000}s")
                 } catch (e: SecurityException) {
-                    // SCHEDULE_EXACT_ALARM not granted by user — use inexact fallback
+                    // SCHEDULE_EXACT_ALARM not granted by user - use inexact fallback.
                     alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
-                    Timber.w("ServiceWatchdog: exact alarm denied — using inexact fallback")
+                    Timber.w("ServiceWatchdog: exact alarm denied - using inexact fallback")
                 }
             } else {
                 alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
-                Timber.i("ServiceWatchdog: alarm scheduled in 15 min")
+                Timber.i("ServiceWatchdog: alarm scheduled in ${delayMs / 1000}s")
             }
         }
 

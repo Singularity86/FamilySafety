@@ -54,7 +54,6 @@ class BootRecoveryReceiver : BroadcastReceiver() {
         }
 
         ServiceWatchdogWorker.scheduleIfNeeded(context)
-        LocationWatchdogWorker.schedule(context)
     }
 
     private fun readMemberId(context: Context, lockedBoot: Boolean): String? {

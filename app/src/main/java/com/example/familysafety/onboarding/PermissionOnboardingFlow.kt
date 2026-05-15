@@ -3,9 +3,12 @@ package com.example.familysafety.onboarding
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
@@ -57,7 +60,20 @@ private fun nextStep(context: Context, from: Int): Int {
 
 fun isPermissionsFlowShown(context: Context): Boolean =
     context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)
-        .getBoolean("permissions_flow_shown", false)
+        .getBoolean("permissions_flow_shown", false) &&
+        hasAlwaysOnLocationPrerequisites(context)
+
+private fun hasAlwaysOnLocationPrerequisites(context: Context): Boolean {
+    val hasForeground =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    val hasBackground = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+    val batteryOk = Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+        (context.getSystemService(Context.POWER_SERVICE) as PowerManager)
+            .isIgnoringBatteryOptimizations(context.packageName)
+    return hasForeground && hasBackground && batteryOk
+}
 
 private fun markPermissionsFlowShown(context: Context) {
     context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)
@@ -84,7 +100,11 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
 
     val bgLocationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { step = nextStep(context, STEP_NOTIFICATIONS) }
+    ) { step = nextStep(context, STEP_BG_LOCATION) }
+
+    val appSettingsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { step = nextStep(context, STEP_BG_LOCATION) }
 
     val notificationsLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -133,7 +153,16 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
                 coaching = "On the next screen, choose 'Allow all the time' — " +
                     "this keeps your location visible when your phone is in your pocket.",
                 onRequestPermission = {
-                    bgLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        appSettingsLauncher.launch(
+                            Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:${context.packageName}")
+                            )
+                        )
+                    } else {
+                        bgLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                    }
                 },
                 onDismiss = { step = nextStep(context, STEP_NOTIFICATIONS) }
             )

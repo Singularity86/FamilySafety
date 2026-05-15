@@ -2,6 +2,7 @@ package com.example.familysafety.transport
 
 import android.content.Context
 import com.example.familysafety.core.*
+import com.example.familysafety.core.NetworkMonitor
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.crypto.RecipientKeys
 import com.example.familysafety.group.FamilyMember
@@ -24,7 +25,8 @@ class MqttTransport @Inject constructor(
     @ApplicationContext private val context: Context,
     private val locationRepository: LocationRepository,
     private val e2eeManager: E2EEManager,
-    private val cryptoProvider: LazysodiumCryptoProvider
+    private val cryptoProvider: LazysodiumCryptoProvider,
+    private val networkMonitor: NetworkMonitor
 ) {
     private var mqttClient: MqttAsyncClient? = null
     private var memberId: String? = null
@@ -33,7 +35,7 @@ class MqttTransport @Inject constructor(
     // Callback for incoming messages (set by UnifiedTransportManager)
     var onMessageReceived: (suspend (topic: String, payload: String) -> Unit)? = null
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var reconnectJob: Job? = null
     private var reconnectAttempts = 0
 
@@ -43,6 +45,7 @@ class MqttTransport @Inject constructor(
     private val pendingMessages = ConcurrentLinkedQueue<PendingMessage>()
     private var familyMemberKeys = mutableMapOf<String, RecipientKeys>()
     private var currentKeepAlive = MqttConfig.KEEP_ALIVE_MOVING
+    private var networkObserverJob: Job? = null
 
     sealed class ConnectionState {
         object Disconnected : ConnectionState()
@@ -60,9 +63,16 @@ class MqttTransport @Inject constructor(
         familyMembers: List<FamilyMember>,
         groupIdParam: String
     ) {
+        ensureActiveScope()
         this.memberId = memberIdParam
         this.groupId = groupIdParam
-        this.familyMemberKeys = familyMembers.associate { it.memberId to RecipientKeys(it.x25519PublicKey, it.ed25519PublicKey) }.toMutableMap()
+        if (familyMembers.isNotEmpty()) {
+            this.familyMemberKeys = familyMembers
+                .associate { it.memberId to RecipientKeys(it.x25519PublicKey, it.ed25519PublicKey) }
+                .toMutableMap()
+        }
+
+        startNetworkMonitoring()
 
         if (_connectionState.value == ConnectionState.Connected) {
             Timber.d("$TAG: already connected, skipping re-init")
@@ -114,8 +124,14 @@ class MqttTransport @Inject constructor(
                     _connectionState.value = ConnectionState.Connected
                     reconnectAttempts = 0
 
+                    val memberIdsForSubscriptions = if (familyMembers.isNotEmpty()) {
+                        familyMembers.map { it.memberId }
+                    } else {
+                        familyMemberKeys.keys.toList()
+                    }
+
                     subscribeToOwnTopics()
-                    subscribeToFamilyMembers(familyMembers.map { it.memberId })
+                    subscribeToFamilyMembers(memberIdsForSubscriptions)
                     processPendingMessages()
                     
                     // Announce online
@@ -311,7 +327,29 @@ class MqttTransport @Inject constructor(
         }
     }
 
+    private fun startNetworkMonitoring() {
+        ensureActiveScope()
+        if (networkObserverJob?.isActive == true) return
+        networkObserverJob = scope.launch {
+            var wasAvailable = networkMonitor.isCurrentlyConnected()
+            networkMonitor.isNetworkAvailable.collect { isAvailable ->
+                if (isAvailable && !wasAvailable
+                    && _connectionState.value != ConnectionState.Connected) {
+                    Timber.i("$TAG: Network restored — cancelling backoff, reconnecting immediately")
+                    reconnectJob?.cancel()
+                    reconnectJob = null
+                    reconnectAttempts = 0
+                    val id = memberId ?: return@collect
+                    val gId = groupId ?: return@collect
+                    initialize(id, emptyList(), gId)
+                }
+                wasAvailable = isAvailable
+            }
+        }
+    }
+
     private fun scheduleReconnect() {
+        ensureActiveScope()
         if (reconnectJob?.isActive == true) return
         reconnectJob = scope.launch {
             reconnectAttempts++
@@ -341,6 +379,7 @@ class MqttTransport @Inject constructor(
     }
 
     fun updateFamilyMembers(members: List<FamilyMember>) {
+        ensureActiveScope()
         scope.launch {
             val newKeys = members.associate {
                 it.memberId to RecipientKeys(it.x25519PublicKey, it.ed25519PublicKey)
@@ -394,9 +433,27 @@ class MqttTransport @Inject constructor(
 
     fun cleanup() {
         reconnectJob?.cancel()
-        mqttClient?.disconnect()
+        networkObserverJob?.cancel()
+        try {
+            mqttClient?.disconnect()
+        } catch (e: Exception) {
+            Timber.w(e, "$TAG: disconnect during cleanup failed")
+        }
+        mqttClient = null
         scope.cancel()
+        scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        reconnectJob = null
+        networkObserverJob = null
+        reconnectAttempts = 0
         _connectionState.value = ConnectionState.Disconnected
+    }
+
+    private fun ensureActiveScope() {
+        if (!scope.isActive) {
+            scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+            reconnectJob = null
+            networkObserverJob = null
+        }
     }
 }
 

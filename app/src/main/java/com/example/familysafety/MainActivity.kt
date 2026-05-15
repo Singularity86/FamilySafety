@@ -1,8 +1,6 @@
 package com.example.familysafety
 
-import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -12,10 +10,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.core.content.ContextCompat
 import com.example.familysafety.group.LocalMemberId
 import com.example.familysafety.group.MembershipState
 import com.example.familysafety.location.LocationService
+import com.example.familysafety.location.LocationPermissionHelper
 import com.example.familysafety.onboarding.MembershipViewModel
 import com.example.familysafety.onboarding.OnboardingNavigation
 import com.example.familysafety.onboarding.PermissionOnboardingFlow
@@ -106,13 +104,7 @@ class MainActivity : ComponentActivity() {
 
                             LaunchedEffect(showPermissionFlow) {
                                 if (!showPermissionFlow) {
-                                    val fineGranted = ContextCompat.checkSelfPermission(
-                                        this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION
-                                    ) == PackageManager.PERMISSION_GRANTED
-                                    val coarseGranted = ContextCompat.checkSelfPermission(
-                                        this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION
-                                    ) == PackageManager.PERMISSION_GRANTED
-                                    if (fineGranted || coarseGranted) startLocationService()
+                                    startLocationService()
                                 }
                             }
 
@@ -203,12 +195,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        if (isFinishing) {
-            appInitializer.cleanup()
-        }
+        // Activity teardown must not stop location sharing. The foreground service,
+        // transports, and watchdogs are intentionally app/session scoped so they
+        // survive normal UI closure, task removal, and configuration recreation.
     }
 
     private fun startLocationService() {
+        if (!LocationPermissionHelper.hasAlwaysOnLocationPrerequisites(this)) return
         LocationService.startTracking(this, localMemberId.value)
     }
 }

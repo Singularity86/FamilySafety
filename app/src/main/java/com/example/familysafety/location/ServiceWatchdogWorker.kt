@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit
  *  1. Restarts LocationService if it is not currently running (and a session exists).
  *  2. Checks whether the ServiceWatchdogReceiver alarm chain is still pending, and
  *     reschedules it if the alarm was cancelled (e.g., after a device reboot that
- *     wiped pending alarms before BootReceiver fired).
+ *     wiped pending alarms before BootRecoveryReceiver fired).
  *
  * Enqueued from AppInitializer.initialize() using a query-first pattern to avoid
  * the KEEP/REPLACE trap: we only call enqueueUniquePeriodicWork if no ENQUEUED or

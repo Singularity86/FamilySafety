@@ -154,7 +154,7 @@ class LocationService : Service() {
                 startForeground(NOTIFICATION_ID, createNotification())
                 appInitializer.initialize()
                 startLocationUpdates()
-                LocationWatchdogWorker.schedule(this)
+                ServiceWatchdogWorker.scheduleIfNeeded(this)
             }
             ACTION_STOP_TRACKING -> {
                 Timber.i("LocationService: STOP_TRACKING (explicit user action)")
@@ -162,7 +162,7 @@ class LocationService : Service() {
                     .remove(PREFS_MEMBER_ID)
                     .putBoolean(PREF_SERVICE_ALIVE, false)
                     .apply()
-                LocationWatchdogWorker.cancel(this)
+                ServiceWatchdogWorker.cancel(this)
                 ServiceWatchdogReceiver.cancel(this)
                 stopLocationUpdates()
                 stopSelf()
@@ -178,7 +178,7 @@ class LocationService : Service() {
                     startForeground(NOTIFICATION_ID, createNotification())
                     appInitializer.initialize()
                     startLocationUpdates()
-                    LocationWatchdogWorker.schedule(this)
+                    ServiceWatchdogWorker.scheduleIfNeeded(this)
                 } else {
                     Timber.w("LocationService: restarted by OS but no saved member ID — idle")
                     startForeground(NOTIFICATION_ID, createNotification())
@@ -189,6 +189,20 @@ class LocationService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Timber.w("LocationService: task removed - scheduling service recovery")
+        val savedId = memberId ?: getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getString(PREFS_MEMBER_ID, null)
+        if (savedId != null) {
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                .putString(PREFS_MEMBER_ID, savedId)
+                .apply()
+            ServiceWatchdogReceiver.scheduleSoon(this)
+            ServiceWatchdogWorker.scheduleIfNeeded(this)
+        }
+        super.onTaskRemoved(rootIntent)
+    }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -219,6 +233,11 @@ class LocationService : Service() {
     }
 
     private fun startLocationUpdates() {
+        if (!LocationPermissionHelper.hasAlwaysOnLocationPrerequisites(this)) {
+            Timber.w("LocationService: always-on location prerequisites missing - not starting tracking")
+            stopSelf()
+            return
+        }
         if (isTracking) {
             Timber.d("LocationService: startLocationUpdates called but already tracking — skipping")
             return
@@ -256,7 +275,9 @@ class LocationService : Service() {
                     val lastLocation = locationRepository.myLocation.value
                     if (lastLocation != null) {
                         Timber.i("LocationService: MQTT reconnected — republishing last known location")
-                        publishLocationToPeers(lastLocation)
+                        val heartbeatLocation = lastLocation.copy(timestamp = System.currentTimeMillis())
+                        locationRepository.updateMyLocation(heartbeatLocation)
+                        publishLocationToPeers(heartbeatLocation)
                         lastPublishedAt = System.currentTimeMillis()
                     }
                 }
@@ -283,7 +304,9 @@ class LocationService : Service() {
                     val lastLocation = locationRepository.myLocation.value
                     if (lastLocation != null) {
                         Timber.i("LocationService: heartbeat — republishing last known location (${sinceLastPublish / 1000}s since last publish)")
-                        publishLocationToPeers(lastLocation)
+                        val heartbeatLocation = lastLocation.copy(timestamp = System.currentTimeMillis())
+                        locationRepository.updateMyLocation(heartbeatLocation)
+                        publishLocationToPeers(heartbeatLocation)
                         lastPublishedAt = System.currentTimeMillis()
                     }
                 }
@@ -294,6 +317,10 @@ class LocationService : Service() {
     }
 
     private fun requestLocationUpdates() {
+        if (!LocationPermissionHelper.hasAlwaysOnLocationPrerequisites(this)) {
+            Timber.w("LocationService: missing foreground/background location permission - GPS request skipped")
+            return
+        }
         val priority = if (currentIntervalMs == LOCATION_INTERVAL_NORMAL) {
             Priority.PRIORITY_HIGH_ACCURACY
         } else {
@@ -452,7 +479,7 @@ class LocationService : Service() {
                     transportProvider.broadcastMessage(
                         topic = topic,
                         payload = encryptedPayload.toByteArray(),
-                        qos = MqttConfig.QOS_AT_MOST_ONCE,
+                        qos = MqttConfig.QOS_AT_LEAST_ONCE,
                         retained = false
                     )
                 } catch (e: Exception) {

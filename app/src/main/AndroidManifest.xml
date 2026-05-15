@@ -70,7 +70,7 @@
             android:foregroundServiceType="location" />
 
         <!-- WorkManager's SystemForegroundService must declare foregroundServiceType="location"
-             so that LocationWatchdogWorker.setForeground(FOREGROUND_SERVICE_TYPE_LOCATION)
+             so that ServiceWatchdogWorker.setForeground(FOREGROUND_SERVICE_TYPE_LOCATION)
              is a valid subset. Without this the worker crashes with IllegalArgumentException
              "foregroundServiceType 0x8 is not a subset of 0x0". -->
         <service

@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.theme.*
+import com.example.familysafety.location.LocationPermissionHelper
 import com.example.familysafety.util.OemBatteryHelper
 
 /**
@@ -124,6 +125,37 @@ fun BatteryOptimizationScreen(
                 )
                 Spacer(modifier = Modifier.width(Spacing.xs))
                 Text("Open Battery Settings")
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                !LocationPermissionHelper.canScheduleExactAlarms(context)
+            ) {
+                Spacer(modifier = Modifier.height(Spacing.sm))
+                OutlinedButton(
+                    onClick = {
+                        try {
+                            context.startActivity(
+                                Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                }
+                            )
+                        } catch (_: Exception) {
+                            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = Uri.parse("package:${context.packageName}")
+                            })
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TealPrimary)
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.OpenInNew,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(Spacing.xs))
+                    Text("Open Alarm Settings")
+                }
             }
 
             Spacer(modifier = Modifier.height(Spacing.sm))
