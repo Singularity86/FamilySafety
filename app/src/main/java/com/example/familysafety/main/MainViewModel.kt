@@ -23,6 +23,7 @@ import com.example.familysafety.location.LocationRepository
 import com.example.familysafety.location.MemberLocation
 import com.example.familysafety.group.FamilyMember
 import com.example.familysafety.sync.GroupSyncManager
+import com.example.familysafety.storage.LocationPublishOutboxRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +43,7 @@ class MainViewModel @Inject constructor(
     private val inviteManager: InviteManager,
     private val localMemberId: LocalMemberId,
     private val avatarRepository: AvatarRepository,
+    private val locationPublishOutboxRepository: LocationPublishOutboxRepository,
     private val mqttTransport: MqttTransport,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
@@ -257,6 +259,9 @@ class MainViewModel @Inject constructor(
         } catch (_: Exception) {}
         try {
             AndroidKeyStoreLocalKeyStore(context).destroyKeys()
+        } catch (_: Exception) {}
+        try {
+            locationPublishOutboxRepository.clearForMember(localMemberId.value)
         } catch (_: Exception) {}
         // Remove the location-service member ID so it doesn't resume tracking on restart
         context.getSharedPreferences("location_service", Context.MODE_PRIVATE)

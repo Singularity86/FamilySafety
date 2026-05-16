@@ -92,6 +92,15 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".location.LocationHeartbeatReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.familysafety.HEARTBEAT_TICK" />
+            </intent-filter>
+        </receiver>
+
         <!--
              BootRecoveryReceiver replaces the old BootReceiver and adds
              LOCKED_BOOT_COMPLETED + MY_PACKAGE_REPLACED coverage.

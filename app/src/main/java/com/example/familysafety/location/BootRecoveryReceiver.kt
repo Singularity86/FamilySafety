@@ -39,6 +39,7 @@ class BootRecoveryReceiver : BroadcastReceiver() {
 
         // AlarmManager is available in both direct-boot and normal contexts.
         ServiceWatchdogReceiver.schedule(context)
+        LocationHeartbeatReceiver.schedule(context)
 
         if (lockedBoot) {
             // Foreground services and WorkManager require credential-unlocked storage.

@@ -43,5 +43,6 @@ class ExactAlarmPermissionReceiver : BroadcastReceiver() {
 
         Timber.i("ExactAlarmPermissionReceiver: exact alarm permission granted — re-establishing alarm chains")
         ServiceWatchdogReceiver.schedule(context)
+        LocationHeartbeatReceiver.schedule(context)
     }
 }

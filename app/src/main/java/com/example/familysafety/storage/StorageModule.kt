@@ -33,6 +33,14 @@ object StorageModule {
 
     @Provides
     @Singleton
+    fun providePendingLocationPublishDao(
+        database: FamilySafetyDatabase
+    ): PendingLocationPublishDao {
+        return database.pendingLocationPublishDao()
+    }
+
+    @Provides
+    @Singleton
     fun provideChatMessageDao(
         database: FamilySafetyDatabase
     ): ChatMessageDao {

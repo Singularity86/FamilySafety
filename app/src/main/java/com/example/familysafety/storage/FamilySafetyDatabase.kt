@@ -22,9 +22,10 @@ import java.security.SecureRandom
     entities = [
         LocationHistoryEntity::class,
         ChatMessageEntity::class,
-        SharedFileEntity::class
+        SharedFileEntity::class,
+        PendingLocationPublishEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -33,6 +34,7 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
     abstract fun locationHistoryDao(): LocationHistoryDao
     abstract fun chatMessageDao(): ChatMessageDao
     abstract fun sharedFileDao(): SharedFileDao
+    abstract fun pendingLocationPublishDao(): PendingLocationPublishDao
 
     companion object {
         private const val DATABASE_NAME = "familysafety_encrypted.db"
@@ -78,6 +80,30 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `pending_location_publishes` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `memberId` TEXT NOT NULL,
+                        `latitude` REAL NOT NULL,
+                        `longitude` REAL NOT NULL,
+                        `accuracy` REAL NOT NULL,
+                        `timestamp` INTEGER NOT NULL,
+                        `speed` REAL,
+                        `bearing` REAL,
+                        `createdAt` INTEGER NOT NULL,
+                        `attemptCount` INTEGER NOT NULL DEFAULT 0,
+                        `lastAttemptAt` INTEGER,
+                        `lastError` TEXT
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_pending_location_publishes_memberId ON pending_location_publishes(memberId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_pending_location_publishes_timestamp ON pending_location_publishes(timestamp)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_pending_location_publishes_memberId_timestamp ON pending_location_publishes(memberId, timestamp)")
+            }
+        }
+
         private fun buildRoomDatabase(context: Context, passphrase: ByteArray): FamilySafetyDatabase {
             return Room.databaseBuilder(
                 context.applicationContext,
@@ -85,7 +111,7 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
                 DATABASE_NAME
             )
                 .openHelperFactory(SupportFactory(passphrase))
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .fallbackToDestructiveMigration()
                 .addCallback(object : Callback() {
                     override fun onDestructiveMigration(db: SupportSQLiteDatabase) {

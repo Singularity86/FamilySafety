@@ -16,6 +16,7 @@ import com.example.familysafety.core.RateLimiters
 import com.example.familysafety.core.DataValidator
 import com.example.familysafety.core.ValidationResult
 import com.example.familysafety.crash.CrashDetectionMonitor
+import com.example.familysafety.storage.LocationPublishOutboxRepository
 import com.example.familysafety.transport.MqttConfig
 import com.example.familysafety.transport.TransportProvider
 import com.example.familysafety.transport.MqttTransport
@@ -33,6 +34,9 @@ class LocationService : Service() {
 
     @Inject
     lateinit var locationHistoryRepository: com.example.familysafety.storage.LocationHistoryRepository
+
+    @Inject
+    lateinit var locationPublishOutboxRepository: LocationPublishOutboxRepository
 
     @Inject
     lateinit var mqttTransport: com.example.familysafety.transport.MqttTransport
@@ -105,6 +109,7 @@ class LocationService : Service() {
 
         const val ACTION_START_TRACKING = "com.example.familysafety.START_TRACKING"
         const val ACTION_STOP_TRACKING = "com.example.familysafety.STOP_TRACKING"
+        const val ACTION_HEARTBEAT = "com.example.familysafety.HEARTBEAT"
         const val EXTRA_MEMBER_ID = "member_id"
 
         /** True while this service instance is alive; read by ServiceWatchdogReceiver. */
@@ -129,6 +134,17 @@ class LocationService : Service() {
                 action = ACTION_STOP_TRACKING
             }
             context.startService(intent)
+        }
+
+        fun requestHeartbeat(context: Context) {
+            val intent = Intent(context, LocationService::class.java).apply {
+                action = ACTION_HEARTBEAT
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
         }
     }
 
@@ -155,15 +171,45 @@ class LocationService : Service() {
                 appInitializer.initialize()
                 startLocationUpdates()
                 ServiceWatchdogWorker.scheduleIfNeeded(this)
+                LocationHeartbeatReceiver.schedule(this)
+            }
+            ACTION_HEARTBEAT -> {
+                val savedId = memberId ?: getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                    .getString(PREFS_MEMBER_ID, null)
+                if (savedId != null) {
+                    memberId = savedId
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                        .putBoolean(PREF_SERVICE_ALIVE, true)
+                        .apply()
+                    startForeground(NOTIFICATION_ID, createNotification())
+                    if (!::locationCallback.isInitialized || !isTracking) {
+                        Timber.i("LocationService: heartbeat restarted tracking for ${savedId.take(8)}…")
+                        appInitializer.initialize()
+                        startLocationUpdates()
+                    } else {
+                        scope.launch { flushPendingLocationPublishes() }
+                    }
+                    LocationHeartbeatReceiver.schedule(this)
+                    ServiceWatchdogReceiver.schedule(this)
+                    ServiceWatchdogWorker.scheduleIfNeeded(this)
+                } else {
+                    Timber.d("LocationService: heartbeat received but no active session")
+                }
             }
             ACTION_STOP_TRACKING -> {
                 Timber.i("LocationService: STOP_TRACKING (explicit user action)")
+                val savedId = memberId ?: getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                    .getString(PREFS_MEMBER_ID, null)
                 getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
                     .remove(PREFS_MEMBER_ID)
                     .putBoolean(PREF_SERVICE_ALIVE, false)
                     .apply()
                 ServiceWatchdogWorker.cancel(this)
                 ServiceWatchdogReceiver.cancel(this)
+                LocationHeartbeatReceiver.cancel(this)
+                if (savedId != null) {
+                    scope.launch { locationPublishOutboxRepository.clearForMember(savedId) }
+                }
                 stopLocationUpdates()
                 stopSelf()
             }
@@ -179,6 +225,7 @@ class LocationService : Service() {
                     appInitializer.initialize()
                     startLocationUpdates()
                     ServiceWatchdogWorker.scheduleIfNeeded(this)
+                    LocationHeartbeatReceiver.schedule(this)
                 } else {
                     Timber.w("LocationService: restarted by OS but no saved member ID — idle")
                     startForeground(NOTIFICATION_ID, createNotification())
@@ -200,6 +247,7 @@ class LocationService : Service() {
                 .apply()
             ServiceWatchdogReceiver.scheduleSoon(this)
             ServiceWatchdogWorker.scheduleIfNeeded(this)
+            LocationHeartbeatReceiver.schedule(this)
         }
         super.onTaskRemoved(rootIntent)
     }
@@ -272,14 +320,16 @@ class LocationService : Service() {
                 val isNowConnected = state is MqttTransport.ConnectionState.Connected
                 Timber.d("LocationService: MQTT state → $state")
                 if (isNowConnected && !wasConnected) {
-                    val lastLocation = locationRepository.myLocation.value
+                val lastLocation = locationRepository.myLocation.value
                     if (lastLocation != null) {
                         Timber.i("LocationService: MQTT reconnected — republishing last known location")
-                        val heartbeatLocation = lastLocation.copy(timestamp = System.currentTimeMillis())
-                        if (publishLocationSnapshot(heartbeatLocation, updateRepository = true)) {
-                            lastPublishedAt = System.currentTimeMillis()
-                        } else {
-                            Timber.w("LocationService: reconnect publish did not reach any peers")
+                        scope.launch {
+                            maybeQueueHeartbeatSnapshot(lastLocation)
+                            if (flushPendingLocationPublishes()) {
+                                lastPublishedAt = System.currentTimeMillis()
+                            } else {
+                                Timber.w("LocationService: reconnect flush did not reach any peers")
+                            }
                         }
                     }
                 }
@@ -306,11 +356,11 @@ class LocationService : Service() {
                     val lastLocation = locationRepository.myLocation.value
                     if (lastLocation != null) {
                         Timber.i("LocationService: heartbeat — republishing last known location (${sinceLastPublish / 1000}s since last publish)")
-                        val heartbeatLocation = lastLocation.copy(timestamp = System.currentTimeMillis())
-                        if (publishLocationSnapshot(heartbeatLocation, updateRepository = true)) {
+                        maybeQueueHeartbeatSnapshot(lastLocation)
+                        if (flushPendingLocationPublishes()) {
                             lastPublishedAt = System.currentTimeMillis()
                         } else {
-                            Timber.w("LocationService: heartbeat publish did not reach any peers")
+                            Timber.w("LocationService: heartbeat flush did not reach any peers")
                         }
                     }
                 }
@@ -435,6 +485,7 @@ class LocationService : Service() {
                 }
 
                 locationRepository.updateMyLocation(memberLocation)
+                locationPublishOutboxRepository.enqueue(memberLocation)
                 crashDetectionMonitor.feedSpeed(speedMs)
 
                 if (!RateLimiters.locationUpdates.allowRequest(id)) {
@@ -443,11 +494,11 @@ class LocationService : Service() {
                     return@safely
                 }
 
-                if (publishLocationSnapshot(memberLocation, updateRepository = false)) {
+                if (flushPendingLocationPublishes()) {
                     lastPublishedAt = System.currentTimeMillis()
                     Timber.d("LocationService: published location")
                 } else {
-                    Timber.w("LocationService: location publish did not reach any peers")
+                    Timber.w("LocationService: location publish cached locally for later retry")
                 }
 
                 adjustIntervalFromGps(location)
@@ -501,15 +552,35 @@ class LocationService : Service() {
         return anySucceeded
     }
 
-    private suspend fun publishLocationSnapshot(
-        location: MemberLocation,
-        updateRepository: Boolean
-    ): Boolean {
-        val delivered = publishLocationToPeers(location)
-        if (delivered && updateRepository) {
-            locationRepository.updateMyLocation(location)
+    private suspend fun maybeQueueHeartbeatSnapshot(lastLocation: MemberLocation) {
+        val id = memberId ?: return
+        val newestPending = locationPublishOutboxRepository.getNewestPendingTimestamp(id)
+        val now = System.currentTimeMillis()
+        if (newestPending != null && now - newestPending < LOCATION_INTERVAL_STATIONARY) return
+        val heartbeatLocation = lastLocation.copy(timestamp = System.currentTimeMillis())
+        locationRepository.updateMyLocation(heartbeatLocation)
+        locationPublishOutboxRepository.enqueue(heartbeatLocation)
+    }
+
+    private suspend fun flushPendingLocationPublishes(): Boolean {
+        val id = memberId ?: return false
+        val pending = locationPublishOutboxRepository.getPendingForMember(id)
+        if (pending.isEmpty()) return false
+
+        var anyDelivered = false
+        pending.forEach { pendingLocation ->
+            val delivered = publishLocationToPeers(pendingLocation.toMemberLocation())
+            if (delivered) {
+                anyDelivered = true
+                locationPublishOutboxRepository.delete(pendingLocation.id)
+            } else {
+                locationPublishOutboxRepository.markAttempt(
+                    pendingLocation.id,
+                    "publish deferred"
+                )
+            }
         }
-        return delivered
+        return anyDelivered
     }
 
     private fun String.hexToByteArray(): ByteArray =
@@ -541,6 +612,7 @@ class LocationService : Service() {
         isRunning = false
         super.onDestroy()
         stopLocationUpdates()
+        LocationHeartbeatReceiver.cancel(this)
         scope.cancel()
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
             .putBoolean(PREF_SERVICE_ALIVE, false).apply()
