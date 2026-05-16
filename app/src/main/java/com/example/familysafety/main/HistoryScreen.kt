@@ -10,14 +10,8 @@ import android.graphics.drawable.Drawable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccessTime
@@ -28,13 +22,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import android.widget.FrameLayout
 import androidx.compose.ui.viewinterop.AndroidView
@@ -100,7 +94,8 @@ fun HistoryScreen(
     }
 
     val context = LocalContext.current
-    val listState = rememberLazyListState()
+    val scrollState = rememberScrollState()
+    val rowStepPx = with(LocalDensity.current) { 60.dp.roundToPx() }
     val scope = rememberCoroutineScope()
     var showTimePicker by remember { mutableStateOf(false) }
     var selectedLocation by remember { mutableStateOf<MemberLocation?>(null) }
@@ -239,24 +234,18 @@ fun HistoryScreen(
             }
 
             // Timeline — newest first
-            LazyColumn(
-                state = listState,
+            Column(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(bottom = 16.dp)
+                verticalArrangement = Arrangement.Top
             ) {
-                itemsIndexed(locationHistory.asReversed()) { index, loc ->
-                    var visible by remember { mutableStateOf(false) }
-                    LaunchedEffect(index) {
-                        delay(minOf(index, 7) * 40L)
-                        visible = true
-                    }
-                    AnimatedVisibility(
-                        visible = visible,
-                        enter = fadeIn(tween(150)) + slideInVertically(
-                            initialOffsetY = { it / 4 },
-                            animationSpec = tween(150)
-                        )
-                    ) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .verticalScroll(scrollState)
+                        .padding(bottom = 16.dp)
+                ) {
+                    locationHistory.asReversed().forEach { loc ->
                         LocationHistoryRow(
                             location = loc,
                             imperial = imperial,
@@ -266,8 +255,8 @@ fun HistoryScreen(
                                 selectedLocation = if (selectedLocation == loc) null else loc
                             }
                         )
+                        HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
                     }
-                    HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
                 }
             }
         }
@@ -299,7 +288,7 @@ fun HistoryScreen(
                         ascending.isNotEmpty() -> ascending.lastIndex // target is after all entries
                         else -> return@TextButton
                     }
-                    scope.launch { listState.animateScrollToItem(scrollTo) }
+                    scope.launch { scrollState.animateScrollTo(scrollTo * rowStepPx) }
                 }) { Text("Go") }
             },
             dismissButton = {
