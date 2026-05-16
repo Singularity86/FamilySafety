@@ -2,6 +2,7 @@ package com.example.familysafety
 
 import android.content.Context
 import com.example.familysafety.avatar.AvatarRepository
+import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.chat.ChatRepository
 import com.example.familysafety.files.SharedFileRepository
 import com.example.familysafety.group.GroupStateManager
@@ -40,6 +41,7 @@ class AppInitializer @Inject constructor(
     private val localTransport: LocalTransport,
     private val replicationManager: ReplicationManager,
     private val chatRepository: ChatRepository,
+    private val e2eeManager: E2EEManager,
     private val inviteManager: InviteManager,
     private val groupSyncManager: GroupSyncManager,
     private val avatarRepository: AvatarRepository,
@@ -141,6 +143,7 @@ class AppInitializer @Inject constructor(
                         .collect { updatedGroup ->
                             try {
                                 mqttTransport.updateFamilyMembers(updatedGroup.members.toList())
+                                e2eeManager.clearSharedSecretCache()
                                 Timber.d("$TAG: Updated MQTT members after group change")
 
                                 // Sync files to any newly added members

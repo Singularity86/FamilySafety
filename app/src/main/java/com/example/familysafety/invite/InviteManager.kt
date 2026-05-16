@@ -23,6 +23,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import timber.log.Timber
 import java.util.*
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -46,10 +47,13 @@ class InviteManager @Inject constructor(
 
     private val _pendingJoinRequests = MutableStateFlow<List<JoinRequest>>(emptyList())
     val pendingJoinRequests: StateFlow<List<JoinRequest>> = _pendingJoinRequests.asStateFlow()
+    private val closedJoinRequestIds = ConcurrentHashMap.newKeySet<String>()
 
     companion object {
         private const val CHANNEL_ID = "join_requests"
         private const val NOTIFICATION_BASE_ID = 2000
+        private const val PREFS = "familysafety_prefs"
+        private const val KEY_CLOSED_JOIN_REQUEST_IDS = "closed_join_request_ids"
     }
 
     init {
@@ -102,6 +106,11 @@ class InviteManager @Inject constructor(
             Timber.d("Received join request payload")
 
             val joinRequest = json.decodeFromString<JoinRequest>(payload)
+
+            if (isJoinRequestClosed(joinRequest.requestId)) {
+                Timber.d("Join request ${joinRequest.requestId} already closed, ignoring redelivery")
+                return
+            }
 
             // Verify the request is for our current group
             val currentGroup = groupStateManager?.groupDefinition?.value
@@ -267,6 +276,7 @@ class InviteManager @Inject constructor(
                 )
                 if (published) {
                     Timber.i("InviteManager: approval published successfully")
+                    markJoinRequestClosed(request.requestId)
                 } else {
                     Timber.w("InviteManager: approval queued for delivery on reconnect")
                 }
@@ -299,6 +309,7 @@ class InviteManager @Inject constructor(
      */
     suspend fun rejectJoinRequest(request: JoinRequest): Result<Unit> {
         return try {
+            markJoinRequestClosed(request.requestId)
             _pendingJoinRequests.update { current ->
                 current.filter { it.requestId != request.requestId }
             }
@@ -329,4 +340,28 @@ class InviteManager @Inject constructor(
 
     private fun ByteArray.toHexString(): String =
         joinToString("") { "%02x".format(it) }
+
+    private fun isJoinRequestClosed(requestId: String): Boolean {
+        if (closedJoinRequestIds.contains(requestId)) return true
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val stored = prefs.getStringSet(KEY_CLOSED_JOIN_REQUEST_IDS, emptySet()) ?: emptySet()
+        if (stored.contains(requestId)) {
+            closedJoinRequestIds.add(requestId)
+            return true
+        }
+        return false
+    }
+
+    private fun markJoinRequestClosed(requestId: String) {
+        closedJoinRequestIds.add(requestId)
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val stored = prefs.getStringSet(KEY_CLOSED_JOIN_REQUEST_IDS, emptySet())?.toMutableSet()
+            ?: mutableSetOf()
+        stored.add(requestId)
+        if (stored.size > 200) {
+            stored.take(stored.size - 200).forEach { stored.remove(it) }
+        }
+        prefs.edit().putStringSet(KEY_CLOSED_JOIN_REQUEST_IDS, stored).apply()
+    }
+
 }
