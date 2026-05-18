@@ -1,12 +1,25 @@
 package com.example.familysafety.main
 
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.sync.GroupSyncManager
 
@@ -16,96 +29,72 @@ fun SyncIndicator(
     modifier: Modifier = Modifier
 ) {
     val syncState by syncManager.syncState.collectAsState()
-    
+
     when (val state = syncState) {
-        is GroupSyncManager.SyncState.Idle -> {
-        }
-        
-        is GroupSyncManager.SyncState.Syncing -> {
-            SyncingIndicator(modifier)
-        }
-        
-        is GroupSyncManager.SyncState.Synced -> {
-            SyncedIndicator(state.version, modifier)
-        }
-        
-        is GroupSyncManager.SyncState.Conflict -> {
-            ConflictIndicator(state, modifier)
-        }
-        
-        is GroupSyncManager.SyncState.Error -> {
-            ErrorIndicator(state.message, modifier) {
-                syncManager.clearError()
-            }
-        }
+        is GroupSyncManager.SyncState.Idle -> Unit
+        is GroupSyncManager.SyncState.Syncing -> SyncingIndicator(modifier)
+        is GroupSyncManager.SyncState.Synced -> SyncedIndicator(state.version, modifier)
+        is GroupSyncManager.SyncState.Conflict -> ConflictIndicator(state, modifier)
+        is GroupSyncManager.SyncState.Error -> ErrorIndicator(
+            message = state.message,
+            modifier = modifier,
+            onDismiss = { syncManager.clearError() }
+        )
     }
 }
 
 @Composable
 private fun SyncingIndicator(modifier: Modifier = Modifier) {
-    val infiniteTransition = rememberInfiniteTransition(label = "sync")
-    val rotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "rotation"
-    )
-    
-    Card(
+    StatusPill(
         modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer
-        )
+        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+        borderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
+        contentColor = MaterialTheme.colorScheme.primary
     ) {
-        Row(
-            modifier = Modifier.padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "🔄",
-                modifier = Modifier.rotate(rotation)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "Syncing...",
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
+        CircularProgressIndicator(
+            modifier = Modifier.size(12.dp),
+            strokeWidth = 1.8.dp,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.width(2.dp))
+        Text(
+            text = "Syncing",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary
+        )
     }
 }
 
 @Composable
 private fun SyncedIndicator(version: Int, modifier: Modifier = Modifier) {
     var visible by remember { mutableStateOf(true) }
-    
+
     LaunchedEffect(version) {
         visible = true
-        kotlinx.coroutines.delay(3000)
+        kotlinx.coroutines.delay(2500)
         visible = false
     }
-    
-    if (visible) {
-        Card(
-            modifier = modifier,
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer
-            )
-        ) {
-            Row(
-                modifier = Modifier.padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(text = "✓")
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Synced (v$version)",
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-        }
+
+    if (!visible) return
+
+    StatusPill(
+        modifier = modifier,
+        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+        borderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.24f),
+        contentColor = MaterialTheme.colorScheme.primary
+    ) {
+        Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(12.dp)
+        )
+        Spacer(modifier = Modifier.width(2.dp))
+        Text(
+            text = "Synced v$version",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary
+        )
     }
 }
 
@@ -114,29 +103,32 @@ private fun ConflictIndicator(
     conflict: GroupSyncManager.SyncState.Conflict,
     modifier: Modifier = Modifier
 ) {
-    Card(
+    StatusPill(
         modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer
-        )
+        containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.10f),
+        borderColor = MaterialTheme.colorScheme.error.copy(alpha = 0.24f),
+        contentColor = MaterialTheme.colorScheme.error
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(text = "⚠️")
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Sync Conflict",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onErrorContainer
-                )
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Local: v${conflict.localVersion}, Remote: v${conflict.remoteVersion}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer
-            )
-        }
+        Icon(
+            imageVector = Icons.Default.WarningAmber,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(12.dp)
+        )
+        Spacer(modifier = Modifier.width(2.dp))
+        Text(
+            text = "Sync conflict",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = "v${conflict.localVersion} / v${conflict.remoteVersion}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -150,30 +142,32 @@ private fun ErrorIndicator(
 
     LaunchedEffect(message) {
         visible = true
-        kotlinx.coroutines.delay(5_000)
+        kotlinx.coroutines.delay(5000)
         visible = false
         onDismiss()
     }
 
-    if (visible) {
-        Card(
-            modifier = modifier,
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer
-            )
-        ) {
-            Row(
-                modifier = Modifier.padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(text = "❌")
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onErrorContainer
-                )
-            }
-        }
+    if (!visible) return
+
+    StatusPill(
+        modifier = modifier,
+        containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.10f),
+        borderColor = MaterialTheme.colorScheme.error.copy(alpha = 0.24f),
+        contentColor = MaterialTheme.colorScheme.error
+    ) {
+        Icon(
+            imageVector = Icons.Default.Error,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(12.dp)
+        )
+        Spacer(modifier = Modifier.width(2.dp))
+        Text(
+            text = message,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }

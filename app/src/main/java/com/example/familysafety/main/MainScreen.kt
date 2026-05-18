@@ -7,10 +7,12 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
@@ -195,13 +197,13 @@ fun MainScreen(
                 topBar = {
                     TopAppBar(
                         colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
                             titleContentColor = MaterialTheme.colorScheme.onSurface,
                             actionIconContentColor = MaterialTheme.colorScheme.onSurface
                         ),
                         title = {
                             Column {
-                                Text("FamilySafety", style = MaterialTheme.typography.titleLarge)
+                                Text("FamilySafety", style = MaterialTheme.typography.titleMedium)
                                 if (groupName.isNotBlank()) {
                                     Text(
                                         text = groupName,
@@ -212,15 +214,14 @@ fun MainScreen(
                             }
                         },
                         actions = {
-                            EncryptionChip(modifier = Modifier.padding(end = 4.dp))
-                            ConnectionBadge(
-                                viewModel = viewModel,
-                                modifier = Modifier.padding(end = 4.dp)
-                            )
-                            SyncIndicator(
-                                syncManager = syncManager,
-                                modifier = Modifier.padding(end = 8.dp)
-                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                EncryptionChip()
+                                ConnectionBadge(viewModel = viewModel)
+                                SyncIndicator(syncManager = syncManager)
+                            }
                         }
                     )
                 },

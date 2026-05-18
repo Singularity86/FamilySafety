@@ -3,6 +3,7 @@ package com.example.familysafety.ui.theme
 import android.app.Activity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalView
@@ -26,8 +27,30 @@ private val DarkColorScheme = darkColorScheme(
     outlineVariant   = OutlineSoft
 )
 
+private val LightColorScheme = lightColorScheme(
+    primary          = TealPrimary,
+    onPrimary        = Black,
+    secondary        = AmberWarning,
+    onSecondary      = Black,
+    tertiary         = RedDanger,
+    onTertiary       = TextPrimary,
+    error            = RedDanger,
+    onError          = TextPrimary,
+    background       = SurfaceLight0,
+    onBackground     = TextPrimaryLight,
+    surface          = SurfaceLight1,
+    onSurface        = TextPrimaryLight,
+    surfaceVariant   = SurfaceLight2,
+    onSurfaceVariant = TextSecondaryLight,
+    outline          = OutlineMutedLight,
+    outlineVariant   = OutlineSoftLight
+)
+
 @Composable
-fun AppTheme(content: @Composable () -> Unit) {
+fun AppTheme(
+    darkTheme: Boolean = true,
+    content: @Composable () -> Unit
+) {
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
@@ -38,14 +61,14 @@ fun AppTheme(content: @Composable () -> Unit) {
             @Suppress("DEPRECATION")
             window.navigationBarColor = android.graphics.Color.TRANSPARENT
             WindowCompat.getInsetsController(window, view).apply {
-                isAppearanceLightStatusBars = false
-                isAppearanceLightNavigationBars = false
+                isAppearanceLightStatusBars = !darkTheme
+                isAppearanceLightNavigationBars = !darkTheme
             }
         }
     }
 
     MaterialTheme(
-        colorScheme = DarkColorScheme,
+        colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
         typography  = AppTypography,
         shapes      = AppShapes,
         content     = content
@@ -57,4 +80,4 @@ fun AppTheme(content: @Composable () -> Unit) {
 fun FamilySafetyTheme(
     darkTheme: Boolean = true,
     content: @Composable () -> Unit
-) = AppTheme(content = content)
+) = AppTheme(darkTheme = darkTheme, content = content)
