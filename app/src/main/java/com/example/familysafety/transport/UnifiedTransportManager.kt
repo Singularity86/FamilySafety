@@ -2,6 +2,7 @@ package com.example.familysafety.transport
 
 import com.example.familysafety.chat.ChatRepository
 import com.example.familysafety.files.SharedFileRepository
+import com.example.familysafety.group.ConnectionState
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.group.LocalMemberId
 import com.example.familysafety.invite.InviteManager
@@ -13,7 +14,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
-import java.util.Base64
 import javax.inject.Inject
 import javax.inject.Singleton
 import javax.inject.Provider
@@ -49,8 +49,25 @@ class UnifiedTransportManager @Inject constructor(
 
         // Hook up Local P2P incoming messages
         localTransport.onMessageReceived = { topic, payloadString ->
-            // LocalTransport payloads are already strings (Base64 or JSON)
+            // LocalTransport payloads preserve the same UTF-8 string shape as MQTT payloads.
             handleIncomingMessage(topic, payloadString)
+        }
+
+        localTransport.onPeerReachabilityChanged = { peerPrefix, reachable, address ->
+            scope.launch {
+                val peer = groupStateManager.groupDefinition.value
+                    ?.members
+                    ?.firstOrNull { it.memberId.take(16) == peerPrefix }
+                    ?: return@launch
+                val state = if (reachable && address != null) {
+                    Timber.i("$TAG: ${peer.memberId.take(8)} reachable on LAN at ${address.hostString}:${address.port}")
+                    ConnectionState.Local(address.hostString, address.port)
+                } else {
+                    Timber.i("$TAG: ${peer.memberId.take(8)} no longer reachable on LAN")
+                    ConnectionState.Unknown
+                }
+                groupStateManager.updateConnectionState(peer.memberId, state)
+            }
         }
     }
 
@@ -63,7 +80,7 @@ class UnifiedTransportManager @Inject constructor(
     ): Boolean = withContext(Dispatchers.IO) {
         // 1. Try Local P2P first
         if (localTransport.isReachable(recipientId)) {
-            val payloadString = Base64.getEncoder().encodeToString(payload)
+            val payloadString = payload.toString(Charsets.UTF_8)
             val success = localTransport.send(topic, payloadString, recipientId)
             if (success) {
                 Timber.d("$TAG: Delivered to ${recipientId.take(8)} via P2P")
@@ -113,7 +130,7 @@ class UnifiedTransportManager @Inject constructor(
         // Also try P2P for everyone currently on LAN
         for (member in otherMembers) {
             if (localTransport.isReachable(member.memberId)) {
-                val payloadString = Base64.getEncoder().encodeToString(payload)
+                val payloadString = payload.toString(Charsets.UTF_8)
                 if (localTransport.send(topic, payloadString, member.memberId)) {
                     anySucceeded = true
                 }
@@ -170,6 +187,10 @@ class UnifiedTransportManager @Inject constructor(
 
                     topic.endsWith("/join_request") -> {
                         inviteManagerProvider.get().handleIncomingJoinRequest(payload)
+                    }
+
+                    topic.endsWith("/sync_request") -> {
+                        groupSyncManagerProvider.get().handleSyncRequestMessage(payload)
                     }
 
                     topic.endsWith("/location") -> {

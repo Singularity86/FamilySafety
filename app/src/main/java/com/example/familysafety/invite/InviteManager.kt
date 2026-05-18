@@ -257,6 +257,13 @@ class InviteManager @Inject constructor(
                 Timber.w("InviteManager: member already exists — re-sending approval in case joiner missed it")
             } else {
                 Timber.i("InviteManager: addMember succeeded")
+                scope.launch {
+                    groupSyncManager?.requestGroupStateRefresh(
+                        reason = "member_added",
+                        minimumVersion = stateManager.groupDefinition.value?.version?.toInt(),
+                        changedMemberId = newMember.memberId
+                    )
+                }
             }
 
             // Send approval immediately — before broadcastGroupUpdate which can block for

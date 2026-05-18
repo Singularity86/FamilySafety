@@ -81,7 +81,13 @@ fun JoinFamilyScreen(
 
             OutlinedTextField(
                 value = inviteCode,
-                onValueChange = { inviteCode = it },
+                onValueChange = {
+                    inviteCode = it
+                    if (joinFailed) {
+                        joinFailed = false
+                        joinFailedReason = ""
+                    }
+                },
                 label = { Text("Invite Code") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,

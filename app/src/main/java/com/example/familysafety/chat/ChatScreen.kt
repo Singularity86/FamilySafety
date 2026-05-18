@@ -36,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -240,7 +241,7 @@ private fun MessageBubble(
                 modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
             )
         }
-        Card(
+        OutlinedCard(
             modifier = Modifier.widthIn(max = 280.dp),
             shape = RoundedCornerShape(
                 topStart = 16.dp,

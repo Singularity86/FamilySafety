@@ -151,6 +151,10 @@ class OnboardingViewModel @Inject constructor(
         return try {
             _isLoading.value = true
 
+            if (inviteCode.isBlank()) {
+                return JoinSubmitResult.Failed("Invite code is empty.")
+            }
+
             // 1. Initialize keys from mnemonic
             val mnemonicString = _mnemonic.value.joinToString(" ")
             val seed = Bip39.mnemonicToSeed(mnemonicString)
@@ -225,9 +229,31 @@ class OnboardingViewModel @Inject constructor(
             )
         } catch (e: Exception) {
             Timber.e(e, "sendJoinRequest: unexpected exception")
-            JoinSubmitResult.Failed(e.message ?: "Unknown error")
+            JoinSubmitResult.Failed(mapJoinRequestError(e))
         } finally {
             _isLoading.value = false
+        }
+    }
+
+    private fun mapJoinRequestError(error: Throwable): String {
+        val message = error.message.orEmpty().trim()
+        if (message.isBlank()) return "Could not send request. Check the invite code and try again."
+
+        return when {
+            message.contains("password", ignoreCase = true) ->
+                "Could not send request. Check the invite code and try again."
+            message.contains("connect", ignoreCase = true) ||
+            message.contains("broker", ignoreCase = true) ||
+            message.contains("timeout", ignoreCase = true) ||
+            message.contains("network", ignoreCase = true) ->
+                "Unable to connect to server."
+            message.contains("invite code", ignoreCase = true) ||
+            message.contains("groupId", ignoreCase = true) ||
+            message.contains("inviterMemberId", ignoreCase = true) ||
+            message.contains("malformed", ignoreCase = true) ->
+                message
+            else ->
+                "Could not send request. Check the invite code and try again."
         }
     }
 

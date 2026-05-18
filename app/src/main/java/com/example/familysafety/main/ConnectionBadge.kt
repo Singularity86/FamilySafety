@@ -1,6 +1,7 @@
 package com.example.familysafety.main
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,6 +18,7 @@ import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -47,7 +49,11 @@ fun ConnectionBadge(
 
     Row(
         modifier = modifier
-            .background(color = MaterialTheme.colorScheme.surfaceVariant, shape = ChipShape)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, ChipShape)
+            .background(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                shape = ChipShape
+            )
             .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically
     ) {

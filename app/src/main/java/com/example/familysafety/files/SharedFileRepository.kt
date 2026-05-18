@@ -113,11 +113,30 @@ class SharedFileRepository @Inject constructor(
             // Derive group file key
             val fileKey = deriveFileKey(groupId)
 
+            // Persist metadata before publishing chunks so receivers can create their
+            // pending records from the manifest before chunk messages arrive.
+            val entity = SharedFileEntity(
+                fileId = fileId,
+                name = fileName,
+                mimeType = mimeType,
+                sizeBytes = bytes.size.toLong(),
+                contentHash = contentHash,
+                uploaderMemberId = groupStateManager.localMember.value?.memberId ?: "",
+                uploadedAt = System.currentTimeMillis(),
+                chunkCount = 0,
+                localPath = null,
+                chunksReceived = 0,
+                downloadState = "PENDING"
+            )
+
             // Split into 32 KB chunks, encrypt each
             val chunks = bytes.toList().chunked(CHUNK_SIZE).map { it.toByteArray() }
             val totalChunks = chunks.size
 
             _uploadProgress.value = UploadProgress(fileId, fileName, 0, totalChunks)
+
+            sharedFileDao.upsert(entity.copy(chunkCount = totalChunks))
+            broadcastManifest(groupId)
 
             chunks.forEachIndexed { index, chunk ->
                 val encryptedChunk = encrypt(chunk, fileKey)
@@ -143,21 +162,14 @@ class SharedFileRepository @Inject constructor(
             // Save file locally (uploader already has the plaintext)
             val localPath = saveToLocalStorage(fileId, bytes)
 
-            // Persist metadata
-            val entity = SharedFileEntity(
-                fileId = fileId,
-                name = fileName,
-                mimeType = mimeType,
-                sizeBytes = bytes.size.toLong(),
-                contentHash = contentHash,
-                uploaderMemberId = groupStateManager.localMember.value?.memberId ?: "",
-                uploadedAt = System.currentTimeMillis(),
-                chunkCount = totalChunks,
-                localPath = localPath,
-                chunksReceived = totalChunks,
-                downloadState = "COMPLETE"
+            sharedFileDao.upsert(
+                entity.copy(
+                    chunkCount = totalChunks,
+                    localPath = localPath,
+                    chunksReceived = totalChunks,
+                    downloadState = "COMPLETE"
+                )
             )
-            sharedFileDao.upsert(entity)
 
             // Broadcast updated manifest (retained so new members get it immediately)
             broadcastManifest(groupId)
@@ -190,6 +202,7 @@ class SharedFileRepository @Inject constructor(
                     if (existing == null) {
                         // New file — create a PENDING record to trigger download
                         sharedFileDao.upsert(sharedFile.toEntity())
+                        tryAssembleFile(sharedFile.fileId)
                     } else if (sharedFile.isDeleted && !existing.isDeleted) {
                         // Remotely deleted
                         sharedFileDao.markDeleted(
@@ -198,6 +211,8 @@ class SharedFileRepository @Inject constructor(
                             sharedFile.deletedAt ?: System.currentTimeMillis()
                         )
                         deleteLocalFile(sharedFile.fileId)
+                    } else if (existing.downloadState != "COMPLETE") {
+                        tryAssembleFile(sharedFile.fileId)
                     }
                 }
             } catch (e: Exception) {
@@ -210,15 +225,25 @@ class SharedFileRepository @Inject constructor(
         scope.launch {
             try {
                 val groupId = groupStateManager.groupDefinition.value?.groupId ?: return@launch
-                val entity = sharedFileDao.getFileById(fileId) ?: return@launch
-                if (entity.downloadState == "COMPLETE") return@launch
-
                 val chunkMsg = json.decodeFromString<FileChunkMessage>(String(payload))
+                if (chunkMsg.fileId != fileId || chunkMsg.chunkIndex != chunkIndex) {
+                    Timber.w("$TAG: Ignoring chunk with mismatched topic metadata for $fileId/$chunkIndex")
+                    return@launch
+                }
+
+                val entity = sharedFileDao.getFileById(fileId)
+                if (entity?.downloadState == "COMPLETE") return@launch
+
                 val encryptedBytes = Base64.getDecoder().decode(chunkMsg.data)
                 val fileKey = deriveFileKey(groupId)
                 val plainChunk = decrypt(encryptedBytes, fileKey)
 
                 writeTempChunk(fileId, chunkIndex, plainChunk)
+
+                if (entity == null) {
+                    Timber.d("$TAG: Stashed chunk $chunkIndex for $fileId before manifest arrived")
+                    return@launch
+                }
 
                 // Count unique chunk files on disk — naturally handles concurrent coroutines
                 // and at-least-once redelivery (same chunk overwrites same file = still 1 count).
@@ -371,6 +396,34 @@ class SharedFileRepository @Inject constructor(
             MqttConfig.QOS_AT_LEAST_ONCE,
             true  // retained — new subscribers get it immediately
         )
+    }
+
+    private suspend fun tryAssembleFile(fileId: String) {
+        val entity = sharedFileDao.getFileById(fileId) ?: return
+        if (entity.downloadState == "COMPLETE") return
+
+        val tmpDir = File(filesDir(), "$fileId/.tmp")
+        val received = tmpDir.listFiles()?.size ?: 0
+        if (received == 0) return
+
+        sharedFileDao.updateDownloadProgress(fileId, "DOWNLOADING", null, received)
+        if (received < entity.chunkCount) return
+
+        val fresh = sharedFileDao.getFileById(fileId) ?: return
+        if (fresh.downloadState == "COMPLETE") return
+
+        val assembled = assembleChunks(fileId, entity.chunkCount)
+        val hash = sha256Hex(assembled)
+        if (hash != entity.contentHash) {
+            Timber.e("$TAG: Hash mismatch for $fileId, discarding")
+            sharedFileDao.updateDownloadProgress(fileId, "FAILED", null, received)
+            return
+        }
+
+        val localPath = saveToLocalStorage(fileId, assembled)
+        cleanTempChunks(fileId)
+        sharedFileDao.updateDownloadProgress(fileId, "COMPLETE", localPath, received)
+        Timber.i("$TAG: Assembled file ${entity.name}")
     }
 
     private fun deriveFileKey(groupId: String): ByteArray {

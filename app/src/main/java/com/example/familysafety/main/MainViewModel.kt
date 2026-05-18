@@ -287,6 +287,16 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    fun requestGroupStateRefresh() {
+        viewModelScope.launch {
+            val groupDef = groupStateManager.groupDefinition.value ?: return@launch
+            groupSyncManager.requestGroupStateRefresh(
+                reason = "manual_refresh",
+                minimumVersion = groupDef.version.toInt()
+            )
+        }
+    }
+
     /**
      * Remove a member from the group and broadcast the change to all remaining members.
      * Any member can remove any other member (including ghost/failed-invite members).

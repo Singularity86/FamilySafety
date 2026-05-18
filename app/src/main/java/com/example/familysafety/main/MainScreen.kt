@@ -8,7 +8,13 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
@@ -24,6 +30,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -127,6 +135,7 @@ fun MainScreen(
         // -----------------------------------------------------------------------
         composable(MainRoute.Map.route) {
             val syncManager = viewModel.groupSyncManager
+            val groupName by viewModel.groupName.collectAsState()
             val totalUnreadCount by chatViewModel.totalUnreadCount.collectAsState()
             val pendingJoinCount by viewModel.pendingJoinRequests.collectAsState()
             val geofences by geofenceViewModel.geofences.collectAsState()
@@ -185,7 +194,23 @@ fun MainScreen(
                 snackbarHost = { SnackbarHost(snackbarHostState) },
                 topBar = {
                     TopAppBar(
-                        title = { Text("FamilySafety") },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                            titleContentColor = MaterialTheme.colorScheme.onSurface,
+                            actionIconContentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        title = {
+                            Column {
+                                Text("FamilySafety", style = MaterialTheme.typography.titleLarge)
+                                if (groupName.isNotBlank()) {
+                                    Text(
+                                        text = groupName,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = TextDisabled
+                                    )
+                                }
+                            }
+                        },
                         actions = {
                             EncryptionChip(modifier = Modifier.padding(end = 4.dp))
                             ConnectionBadge(
@@ -200,7 +225,10 @@ fun MainScreen(
                     )
                 },
                 bottomBar = {
-                    NavigationBar {
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                        tonalElevation = 0.dp
+                    ) {
                         pagerTabs.forEachIndexed { index, tab ->
                             val selected = pagerState.currentPage == index
                             val chatBadge   = index == 3 && totalUnreadCount > 0
@@ -208,29 +236,11 @@ fun MainScreen(
 
                             // Local glow+icon lambda — avoids duplicating the Box tree.
                             val glowIcon: @Composable () -> Unit = {
-                                Box(contentAlignment = Alignment.Center) {
-                                    if (selected) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(40.dp)
-                                                .background(
-                                                    brush = Brush.radialGradient(
-                                                        colors = listOf(
-                                                            TealPrimary.copy(alpha = 0.25f),
-                                                            Color.Transparent
-                                                        ),
-                                                        radius = 60f
-                                                    ),
-                                                    shape = CircleShape
-                                                )
-                                        )
-                                    }
-                                    Icon(
-                                        imageVector = tab.icon,
-                                        contentDescription = tab.label,
-                                        tint = if (selected) TealPrimary else TextDisabled
-                                    )
-                                }
+                                Icon(
+                                    imageVector = tab.icon,
+                                    contentDescription = tab.label,
+                                    tint = if (selected) TealPrimary else TextDisabled
+                                )
                             }
 
                             NavigationBarItem(
@@ -254,22 +264,40 @@ fun MainScreen(
                                         glowIcon()
                                     }
                                 },
-                                label = null,
+                                label = { Text(tab.label) },
                                 selected = selected,
                                 onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
                                 colors = NavigationBarItemDefaults.colors(
-                                    indicatorColor = Color.Transparent
+                                    selectedIconColor = TealPrimary,
+                                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                                    unselectedIconColor = TextDisabled,
+                                    unselectedTextColor = TextDisabled,
+                                    indicatorColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
                                 )
                             )
                         }
                     }
                 }
             ) { paddingValues ->
+                val density = LocalDensity.current
+                val layoutDirection = LocalLayoutDirection.current
+                val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
+                val pagerPadding = PaddingValues(
+                    start = paddingValues.calculateStartPadding(layoutDirection),
+                    top = paddingValues.calculateTopPadding(),
+                    end = paddingValues.calculateEndPadding(layoutDirection),
+                    bottom = if (pagerState.currentPage == 3 && keyboardVisible) {
+                        0.dp
+                    } else {
+                        paddingValues.calculateBottomPadding()
+                    }
+                )
+
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(paddingValues),
+                        .padding(pagerPadding),
                     userScrollEnabled = true,
                     beyondViewportPageCount = 1
                 ) { page ->

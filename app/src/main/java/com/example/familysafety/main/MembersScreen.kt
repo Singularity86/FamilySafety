@@ -64,11 +64,18 @@ fun MembersScreen(
             contentPadding = PaddingValues(top = 16.dp, bottom = 88.dp)
         ) {
             item {
-                Text(
-                    text = groupName.ifEmpty { "Family Members" },
-                    style = MaterialTheme.typography.headlineMedium,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
+                Column(modifier = Modifier.padding(bottom = 8.dp)) {
+                    Text(
+                        text = groupName.ifEmpty { "Family Members" },
+                        style = MaterialTheme.typography.headlineMedium
+                    )
+                    Text(
+                        text = if (familyMembers.isEmpty()) "No one is connected yet"
+                               else "${familyMembers.size} people in this group",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             if (familyMembers.isEmpty()) {
@@ -144,7 +151,7 @@ internal fun JoinRequestCard(
         return
     }
 
-    Card(
+    OutlinedCard(
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer
@@ -326,7 +333,7 @@ private fun MemberCard(
         )
     }
 
-    Card(
+    OutlinedCard(
         modifier = modifier.fillMaxWidth(),
         onClick = { showDialog = true }
     ) {

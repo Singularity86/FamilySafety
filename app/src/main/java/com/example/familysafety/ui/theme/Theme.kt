@@ -7,7 +7,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
-
 private val DarkColorScheme = darkColorScheme(
     primary          = TealPrimary,
     onPrimary        = Black,
@@ -22,7 +21,9 @@ private val DarkColorScheme = darkColorScheme(
     surface          = Surface1,
     onSurface        = TextPrimary,
     surfaceVariant   = Surface2,
-    onSurfaceVariant = TextSecondary
+    onSurfaceVariant = TextSecondary,
+    outline          = OutlineMuted,
+    outlineVariant   = OutlineSoft
 )
 
 @Composable

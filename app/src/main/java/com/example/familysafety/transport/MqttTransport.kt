@@ -211,6 +211,8 @@ class MqttTransport @Inject constructor(
         qosLevels.add(MqttConfig.DEFAULT_QOS)
         topics.add(MqttConfig.getJoinApprovalTopic(id))
         qosLevels.add(MqttConfig.DEFAULT_QOS)
+        topics.add(MqttConfig.getSyncRequestTopic(id))
+        qosLevels.add(MqttConfig.DEFAULT_QOS)
 
         // Group sync topic (broadcasts membership changes)
         topics.add(MqttConfig.getGroupSyncTopic(gId))

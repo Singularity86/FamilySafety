@@ -4,12 +4,9 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
-import com.example.familysafety.R
 import com.goterl.lazysodium.LazySodiumAndroid
 import com.goterl.lazysodium.SodiumAndroid
-import com.goterl.lazysodium.interfaces.Sign
 import java.io.File
-import java.security.GeneralSecurityException
 import java.security.KeyStore
 
 /**
@@ -61,7 +58,7 @@ class AndroidKeyStoreLocalKeyStore(
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
-        } catch (e: GeneralSecurityException) {
+        } catch (e: Exception) {
             // Keyset is corrupted or encrypted with a key that no longer exists
             // (common after reinstall with cloud-restored SharedPreferences, or key rotation).
             // The stored keys are unrecoverable — wipe and start fresh so the app can launch.
@@ -81,16 +78,29 @@ class AndroidKeyStoreLocalKeyStore(
 
     private fun clearCorruptedKeyStorage() {
         // Clear the SharedPreferences XML file (holds the encrypted Tink keyset)
+        try { context.deleteSharedPreferences(PREFS_NAME) } catch (_: Exception) {}
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().commit()
         File(context.dataDir, "shared_prefs/$PREFS_NAME.xml").delete()
 
-        // Delete the Tink master key from AndroidKeyStore so a fresh one is generated
-        val keyStore = KeyStore.getInstance("AndroidKeyStore")
-        keyStore.load(null)
-        val tinkAlias = MasterKey.DEFAULT_MASTER_KEY_ALIAS
-        if (keyStore.containsAlias(tinkAlias)) {
-            keyStore.deleteEntry(tinkAlias)
+        try {
+            // Delete possible master-key aliases from AndroidKeyStore so a fresh key is generated.
+            val keyStore = KeyStore.getInstance("AndroidKeyStore")
+            keyStore.load(null)
+            listOf(MasterKey.DEFAULT_MASTER_KEY_ALIAS, KEYSTORE_ALIAS).forEach { alias ->
+                if (keyStore.containsAlias(alias)) {
+                    keyStore.deleteEntry(alias)
+                }
+            }
+        } catch (_: Exception) {
+            // Best-effort cleanup. Recreating EncryptedSharedPreferences below will surface
+            // any unrecoverable platform failure.
         }
+
+        // If keys are gone, onboarding must be recalculated on next launch.
+        context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .remove("onboarding_complete")
+            .apply()
     }
 
     // Cached keys (loaded once from encrypted storage)

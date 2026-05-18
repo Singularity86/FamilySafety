@@ -203,12 +203,13 @@ fun HistoryScreen(
                 estimatedKb < 1024 -> "$estimatedKb KB"
                 else -> "${"%.1f".format(estimatedKb / 1024f)} MB"
             }
-            Surface(
+            OutlinedCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                shape = MaterialTheme.shapes.small
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
+                )
             ) {
                 Row(
                     modifier = Modifier

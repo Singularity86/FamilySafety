@@ -134,6 +134,54 @@ class GroupSyncManager @Inject constructor(
     }
 
     /**
+     * Ask every other member in the group to rebroadcast the latest group state.
+     * This is used after membership changes so devices that missed the update can
+     * recover from a retained or delayed refresh.
+     */
+    suspend fun requestGroupStateRefresh(
+        reason: String,
+        minimumVersion: Int? = null,
+        changedMemberId: String? = null
+    ) {
+        withContext(Dispatchers.IO) {
+            try {
+                val myMemberId = currentMemberId ?: run {
+                    Timber.d("GroupSyncManager not initialized, skipping refresh request")
+                    return@withContext
+                }
+                val groupDefinition = groupStateManager?.groupDefinition?.value ?: return@withContext
+                val request = GroupStateRefreshRequest(
+                    groupId = groupDefinition.groupId,
+                    requesterMemberId = myMemberId,
+                    minimumVersion = minimumVersion ?: groupDefinition.version.toInt(),
+                    changedMemberId = changedMemberId,
+                    reason = reason,
+                    timestamp = System.currentTimeMillis()
+                )
+                val payload = json.encodeToString(request).toByteArray()
+
+                groupDefinition.members
+                    .filter { it.memberId != myMemberId }
+                    .forEach { member ->
+                        val topic = MqttConfig.getSyncRequestTopic(member.memberId)
+                        transportProvider.sendMessage(
+                            recipientId = member.memberId,
+                            topic = topic,
+                            payload = payload,
+                            qos = MqttConfig.DEFAULT_QOS
+                        )
+                    }
+
+                Timber.i(
+                    "Requested group state refresh v${request.minimumVersion} for ${groupDefinition.members.size - 1} peers"
+                )
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to request group state refresh")
+            }
+        }
+    }
+
+    /**
      * Called by MqttTransport when a message arrives on the group sync topic.
      */
     suspend fun handleSyncMessage(payload: String) {
@@ -160,6 +208,44 @@ class GroupSyncManager @Inject constructor(
             Timber.d("Received ack for v${ack.version} from ${ack.memberId.take(8)} (${set.size} total)")
         } catch (e: Exception) {
             Timber.w(e, "Failed to parse ack message")
+        }
+    }
+
+    /**
+     * Handle a request for the latest group definition.
+     * A peer only responds if it is already at the requested version or newer.
+     */
+    suspend fun handleSyncRequestMessage(payload: String) {
+        try {
+            val request = json.decodeFromString<GroupStateRefreshRequest>(payload)
+            val manager = groupStateManager ?: return
+            val currentGroup = manager.groupDefinition.value ?: return
+            val myMemberId = currentMemberId ?: return
+
+            if (request.groupId != currentGroup.groupId) {
+                Timber.d("Ignoring refresh request for different group ${request.groupId}")
+                return
+            }
+
+            if (request.requesterMemberId == myMemberId) {
+                return
+            }
+
+            if (currentGroup.version.toInt() < request.minimumVersion) {
+                Timber.d(
+                    "Ignoring stale refresh request for v${request.minimumVersion} " +
+                        "because local version is ${currentGroup.version}"
+                )
+                return
+            }
+
+            Timber.i(
+                "Responding to group refresh request from ${request.requesterMemberId.take(8)} " +
+                    "for v${request.minimumVersion}"
+            )
+            broadcastGroupUpdate(currentGroup, ChangeType.FULL_SYNC, request.changedMemberId)
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to handle group sync request")
         }
     }
 
@@ -225,6 +311,15 @@ class GroupSyncManager @Inject constructor(
                 _syncState.value = SyncState.Synced(syncMessage.version)
                 Timber.i("Applied group update: ${syncMessage.changeType}")
 
+                if (syncMessage.changeType == ChangeType.MEMBER_ADDED) {
+                    scope.launch {
+                        requestGroupStateRefresh(
+                            reason = "member_added",
+                            minimumVersion = syncMessage.version,
+                            changedMemberId = syncMessage.changedMemberId
+                        )
+                    }
+                }
             } catch (e: Exception) {
                 Timber.e(e, "Failed to apply group update")
                 _syncState.value = SyncState.Error(e.message ?: "Failed to apply update")
@@ -343,6 +438,16 @@ data class GroupUpdateAck(
     val groupId: String,
     val version: Int,
     val memberId: String,
+    val timestamp: Long
+)
+
+@Serializable
+data class GroupStateRefreshRequest(
+    val groupId: String,
+    val requesterMemberId: String,
+    val minimumVersion: Int,
+    val changedMemberId: String? = null,
+    val reason: String,
     val timestamp: Long
 )
 

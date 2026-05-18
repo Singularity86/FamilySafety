@@ -17,6 +17,8 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -52,11 +54,18 @@ class LocalTransport @Inject constructor(
         val payloadBase64: String
     )
 
+    private data class ResolveRequest(
+        val peerPrefix: String,
+        val serviceInfo: NsdServiceInfo
+    )
+
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     // Peers discovered via NSD — keyed by the first 16 chars of their memberId
     private val peerAddresses = ConcurrentHashMap<String, InetSocketAddress>()
+    private val resolveQueue = ConcurrentLinkedQueue<ResolveRequest>()
+    private val isResolving = AtomicBoolean(false)
 
     // Outbound TCP connections — keyed by 16-char prefix
     private val connections = ConcurrentHashMap<String, Socket>()
@@ -70,6 +79,9 @@ class LocalTransport @Inject constructor(
 
     /** Invoked on the IO dispatcher when a framed message arrives from a peer. */
     var onMessageReceived: ((topic: String, payloadString: String) -> Unit)? = null
+
+    /** Invoked when NSD resolves or loses a local peer, keyed by memberId prefix. */
+    var onPeerReachabilityChanged: ((peerPrefix: String, reachable: Boolean, address: InetSocketAddress?) -> Unit)? = null
 
     val isRunning: Boolean get() = serverSocket?.isClosed == false
 
@@ -88,6 +100,8 @@ class LocalTransport @Inject constructor(
         runCatching { registrationListener?.let { nsdManager?.unregisterService(it) } }
         runCatching { discoveryListener?.let { nsdManager?.stopServiceDiscovery(it) } }
         peerAddresses.clear()
+        resolveQueue.clear()
+        isResolving.set(false)
         connections.values.forEach { runCatching { it.close() } }
         connections.clear()
         serverSocket?.close()
@@ -204,6 +218,7 @@ class LocalTransport @Inject constructor(
                 Timber.d("LocalTransport send to $prefix failed (${e.message}), MQTT fallback")
                 connections.remove(prefix)?.let { runCatching { it.close() } }
                 peerAddresses.remove(prefix) // remove stale entry so we re-resolve next time
+                onPeerReachabilityChanged?.invoke(prefix, false, null)
                 false
             }
         }
@@ -255,14 +270,15 @@ class LocalTransport @Inject constructor(
                 if (!serviceInfo.serviceName.startsWith("familysafety-")) return
                 val peerPrefix = serviceInfo.serviceName.removePrefix("familysafety-")
                 if (peerPrefix == localMemberId?.take(16)) return // skip ourselves
-                Timber.d("NSD found peer: $peerPrefix, resolving...")
-                nsdManager?.resolveService(serviceInfo, makeResolveListener(peerPrefix))
+                Timber.d("NSD found peer: $peerPrefix, queueing resolve...")
+                enqueueResolve(peerPrefix, serviceInfo)
             }
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {
                 if (!serviceInfo.serviceName.startsWith("familysafety-")) return
                 val peerPrefix = serviceInfo.serviceName.removePrefix("familysafety-")
                 peerAddresses.remove(peerPrefix)
                 connections.remove(peerPrefix)?.let { runCatching { it.close() } }
+                onPeerReachabilityChanged?.invoke(peerPrefix, false, null)
                 Timber.d("Peer lost: $peerPrefix")
             }
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
@@ -276,16 +292,50 @@ class LocalTransport @Inject constructor(
         nsdManager?.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
     }
 
+    private fun enqueueResolve(peerPrefix: String, serviceInfo: NsdServiceInfo) {
+        if (peerAddresses.containsKey(peerPrefix)) return
+        if (resolveQueue.any { it.peerPrefix == peerPrefix }) return
+        resolveQueue.offer(ResolveRequest(peerPrefix, serviceInfo))
+        drainResolveQueue()
+    }
+
+    private fun drainResolveQueue() {
+        if (!isResolving.compareAndSet(false, true)) return
+        val request = resolveQueue.poll() ?: run {
+            isResolving.set(false)
+            return
+        }
+        try {
+            nsdManager?.resolveService(request.serviceInfo, makeResolveListener(request.peerPrefix))
+                ?: completeResolve()
+        } catch (e: Exception) {
+            Timber.w(e, "NSD resolve could not start for ${request.peerPrefix}")
+            completeResolve()
+        }
+    }
+
+    private fun completeResolve() {
+        isResolving.set(false)
+        drainResolveQueue()
+    }
+
     private fun makeResolveListener(peerPrefix: String): NsdManager.ResolveListener {
         return object : NsdManager.ResolveListener {
             override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
-                val host = serviceInfo.host?.hostAddress ?: return
+                val host = serviceInfo.host?.hostAddress ?: run {
+                    completeResolve()
+                    return
+                }
                 val port = serviceInfo.port
-                peerAddresses[peerPrefix] = InetSocketAddress(host, port)
+                val address = InetSocketAddress(host, port)
+                peerAddresses[peerPrefix] = address
+                onPeerReachabilityChanged?.invoke(peerPrefix, true, address)
                 Timber.i("Peer resolved: $peerPrefix @ $host:$port")
+                completeResolve()
             }
             override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
                 Timber.e("NSD resolve failed for $peerPrefix: $errorCode")
+                completeResolve()
             }
         }
     }

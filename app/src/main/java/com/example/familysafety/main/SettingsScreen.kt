@@ -72,6 +72,7 @@ fun SettingsScreen(
     val myDisplayName = familyMembers.find { it.memberId == myMemberId }?.displayName ?: ""
     var nameEdit by remember(myDisplayName) { mutableStateOf(myDisplayName) }
     var isEditingName by remember { mutableStateOf(false) }
+    var refreshRequested by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     // Gallery picker launcher — routes through the crop screen before saving
@@ -149,7 +150,7 @@ fun SettingsScreen(
 
         // Battery optimization warning — shown at top so it's immediately visible
         if (isBatteryOptimized) {
-            Card(
+            OutlinedCard(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.errorContainer
@@ -201,7 +202,7 @@ fun SettingsScreen(
         }
 
         // Profile card — avatar + display name
-        Card(modifier = Modifier.fillMaxWidth()) {
+        OutlinedCard(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -783,6 +784,33 @@ fun SettingsScreen(
                 }
 
                 HorizontalDivider()
+
+                TextButton(
+                    onClick = {
+                        viewModel.requestGroupStateRefresh()
+                        refreshRequested = true
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Refresh Family State")
+                        Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
+                    }
+                }
+
+                if (refreshRequested) {
+                    Text(
+                        text = "Requested a group refresh.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
 
                 TextButton(
                     onClick = { showLeaveDialog = true },
