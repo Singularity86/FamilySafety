@@ -2,6 +2,7 @@ package com.example.familysafety
 
 import android.content.Context
 import com.example.familysafety.avatar.AvatarRepository
+import com.example.familysafety.core.SecurityEventRepository
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.chat.ChatRepository
 import com.example.familysafety.files.SharedFileRepository
@@ -45,7 +46,8 @@ class AppInitializer @Inject constructor(
     private val inviteManager: InviteManager,
     private val groupSyncManager: GroupSyncManager,
     private val avatarRepository: AvatarRepository,
-    private val sharedFileRepository: SharedFileRepository
+    private val sharedFileRepository: SharedFileRepository,
+    private val securityEventRepository: SecurityEventRepository
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var isInitialized = false
@@ -92,7 +94,9 @@ class AppInitializer @Inject constructor(
                 inviteManager.initialize(localMemberId.value, groupStateManager, groupSyncManager)
                 Timber.d("$TAG: InviteManager initialized")
 
-                // 6. Set group ID for group-level subscriptions (Still needed for MQTT internal routing)
+                // 6. Wire setter-injected dependencies into MQTT transport before connecting.
+                mqttTransport.groupSyncManager = groupSyncManager
+                mqttTransport.securityEventRepository = securityEventRepository
                 mqttTransport.setGroupId(groupDef.groupId)
 
                 // 7. Initialize MQTT connection - retained messages (join_request etc.) arrive

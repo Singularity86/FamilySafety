@@ -10,7 +10,7 @@ object MqttConfig {
     
     const val DEFAULT_QOS = QOS_AT_LEAST_ONCE
     
-    const val KEEP_ALIVE_MOVING = 60      // seconds — device is in motion
+    const val KEEP_ALIVE_MOVING = 30      // seconds — short enough to survive typical NAT idle timeouts
     const val KEEP_ALIVE_STATIONARY = 300 // 5 min — device is still (saves broker pings)
     const val CONNECTION_TIMEOUT = 30
     const val RECONNECT_DELAY_MS = 5000L

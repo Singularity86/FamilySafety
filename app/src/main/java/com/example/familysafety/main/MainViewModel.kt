@@ -9,6 +9,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.familysafety.avatar.AvatarRepository
 import com.example.familysafety.backup.BackupManager
+import com.example.familysafety.core.SecurityEventRepository
 import com.example.familysafety.group.AndroidKeyStoreLocalKeyStore
 import com.example.familysafety.group.Bip39
 import com.example.familysafety.group.EncryptedGroupStatePersistence
@@ -45,6 +46,7 @@ class MainViewModel @Inject constructor(
     private val avatarRepository: AvatarRepository,
     private val locationPublishOutboxRepository: LocationPublishOutboxRepository,
     private val mqttTransport: MqttTransport,
+    private val securityEventRepository: SecurityEventRepository,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -84,6 +86,19 @@ class MainViewModel @Inject constructor(
 
     // The local device's member ID — used by the UI to label "You"
     val myMemberId: String get() = localMemberId.value
+
+    val groupDefinition: StateFlow<GroupDefinition?> = groupStateManager.groupDefinition
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val mqttState: StateFlow<MqttTransport.ConnectionState> = mqttTransport.connectionState
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), MqttTransport.ConnectionState.Disconnected)
+
+    val syncState: StateFlow<GroupSyncManager.SyncState> = groupSyncManager.syncState
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), GroupSyncManager.SyncState.Idle)
+
+    val decryptFailures: StateFlow<Map<String, SecurityEventRepository.DecryptStats>> =
+        securityEventRepository.decryptFailures
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     val connectionMode: StateFlow<ConnectionMode> = combine(
         groupStateManager.memberStates,

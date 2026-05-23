@@ -342,7 +342,8 @@ fun MainScreen(
                             onThemeChanged = onThemeChanged,
                             onNavigateToCrop = { navController.navigate("avatar_crop") },
                             onReplayTutorial = onReplayTutorial,
-                            onNavigateToPrivacy = { navController.navigate("privacy") }
+                            onNavigateToPrivacy = { navController.navigate("privacy") },
+                            onNavigateToSecurity = { navController.navigate("security") }
                         )
                         else -> {}
                     }
@@ -419,6 +420,13 @@ fun MainScreen(
                 memberId = memberId,
                 onBack = { navController.popBackStack() },
                 viewModel = chatViewModel
+            )
+        }
+
+        composable("security") {
+            SecurityScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() }
             )
         }
 

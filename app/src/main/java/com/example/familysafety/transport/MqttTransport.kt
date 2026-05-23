@@ -3,18 +3,21 @@ package com.example.familysafety.transport
 import android.content.Context
 import com.example.familysafety.core.*
 import com.example.familysafety.core.NetworkMonitor
+import com.example.familysafety.core.SecurityEventRepository
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.crypto.RecipientKeys
 import com.example.familysafety.group.FamilyMember
 import com.example.familysafety.group.LazysodiumCryptoProvider
 import com.example.familysafety.location.LocationRepository
 import com.example.familysafety.location.MemberLocation
+import com.example.familysafety.sync.GroupSyncManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.eclipse.paho.client.mqttv3.*
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import timber.log.Timber
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -47,6 +50,17 @@ class MqttTransport @Inject constructor(
     private var currentKeepAlive = MqttConfig.KEEP_ALIVE_MOVING
     private var networkObserverJob: Job? = null
 
+    // Setter-injected to avoid circular dependency: MqttTransport ← TransportProvider ← GroupSyncManager
+    var groupSyncManager: GroupSyncManager? = null
+    var securityEventRepository: SecurityEventRepository? = null
+
+    // Throttle group-sync requests triggered by decrypt failures to once per sender per minute.
+    private val decryptFailureSyncCooldowns = ConcurrentHashMap<String, Long>()
+    private companion object {
+        private const val TAG = "MqttTransport"
+        private const val DECRYPT_SYNC_COOLDOWN_MS = 60_000L
+    }
+
     sealed class ConnectionState {
         object Disconnected : ConnectionState()
         object Connecting : ConnectionState()
@@ -54,9 +68,6 @@ class MqttTransport @Inject constructor(
         data class Error(val message: String, val canRetry: Boolean) : ConnectionState()
     }
 
-    private companion object {
-        private const val TAG = "MqttTransport"
-    }
 
     suspend fun initialize(
         memberIdParam: String,
@@ -414,7 +425,18 @@ class MqttTransport @Inject constructor(
         }
 
         val decryptedPayload = decryptResult.getOrElse {
-            Timber.d("$TAG: Failed to decrypt message from $senderId")
+            Timber.w("$TAG: Failed to decrypt message from $senderId")
+            securityEventRepository?.recordDecryptFailure(senderId)
+            val lastSync = decryptFailureSyncCooldowns[senderId] ?: 0L
+            if (System.currentTimeMillis() - lastSync > DECRYPT_SYNC_COOLDOWN_MS) {
+                decryptFailureSyncCooldowns[senderId] = System.currentTimeMillis()
+                scope.launch {
+                    groupSyncManager?.requestGroupStateRefresh(
+                        reason = "decrypt_failure",
+                        changedMemberId = senderId
+                    )
+                }
+            }
             return
         }
 

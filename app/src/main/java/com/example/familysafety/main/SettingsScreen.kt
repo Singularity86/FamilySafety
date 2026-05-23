@@ -60,6 +60,7 @@ fun SettingsScreen(
     onNavigateToCrop: () -> Unit = {},
     onReplayTutorial: () -> Unit = {},
     onNavigateToPrivacy: () -> Unit = {},
+    onNavigateToSecurity: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -826,6 +827,31 @@ fun SettingsScreen(
                     ) {
                         Text("Leave Family")
                         Icon(imageVector = Icons.Default.ExitToApp, contentDescription = null)
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Security",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                TextButton(
+                    onClick = onNavigateToSecurity,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Security Dashboard")
+                        Icon(imageVector = Icons.Default.KeyboardArrowRight, contentDescription = null)
                     }
                 }
             }
