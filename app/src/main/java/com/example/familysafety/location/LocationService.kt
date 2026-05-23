@@ -62,7 +62,7 @@ class LocationService : Service() {
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private var memberId: String? = null
     private var isTracking = false
@@ -167,6 +167,8 @@ class LocationService : Service() {
                     .putString(PREFS_MEMBER_ID, memberId)
                     .putBoolean(PREF_SERVICE_ALIVE, true)
                     .apply()
+                scope.cancel()
+                scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
                 startForeground(NOTIFICATION_ID, createNotification())
                 appInitializer.initialize()
                 startLocationUpdates()
@@ -184,6 +186,8 @@ class LocationService : Service() {
                     startForeground(NOTIFICATION_ID, createNotification())
                     if (!::locationCallback.isInitialized || !isTracking) {
                         Timber.i("LocationService: heartbeat restarted tracking for ${savedId.take(8)}…")
+                        scope.cancel()
+                        scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
                         appInitializer.initialize()
                         startLocationUpdates()
                     } else {
@@ -221,6 +225,8 @@ class LocationService : Service() {
                     memberId = savedId
                     getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
                         .putBoolean(PREF_SERVICE_ALIVE, true).apply()
+                    scope.cancel()
+                    scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
                     startForeground(NOTIFICATION_ID, createNotification())
                     appInitializer.initialize()
                     startLocationUpdates()
