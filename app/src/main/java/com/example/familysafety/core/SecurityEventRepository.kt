@@ -11,8 +11,12 @@ class SecurityEventRepository @Inject constructor() {
 
     data class DecryptStats(
         val failureCount: Int = 0,
-        val lastFailureMs: Long = 0L
-    )
+        val lastFailureMs: Long = 0L,
+        val lastSuccessMs: Long = 0L
+    ) {
+        val hasActiveFailure: Boolean
+            get() = failureCount > 0 && lastFailureMs > lastSuccessMs
+    }
 
     private val _decryptFailures = MutableStateFlow<Map<String, DecryptStats>>(emptyMap())
     val decryptFailures: StateFlow<Map<String, DecryptStats>> = _decryptFailures.asStateFlow()
@@ -29,6 +33,17 @@ class SecurityEventRepository @Inject constructor() {
         }
     }
 
+    fun recordDecryptSuccess(senderId: String) {
+        synchronized(this) {
+            val current = _decryptFailures.value.toMutableMap()
+            val prev = current[senderId] ?: DecryptStats()
+            current[senderId] = prev.copy(
+                lastSuccessMs = System.currentTimeMillis()
+            )
+            _decryptFailures.value = current
+        }
+    }
+
     fun clearFailures(senderId: String) {
         synchronized(this) {
             val current = _decryptFailures.value.toMutableMap()
@@ -39,5 +54,12 @@ class SecurityEventRepository @Inject constructor() {
 
     fun clearAll() {
         _decryptFailures.value = emptyMap()
+    }
+
+    fun clearRecoveredFailures() {
+        synchronized(this) {
+            _decryptFailures.value = _decryptFailures.value
+                .filterValues { it.hasActiveFailure }
+        }
     }
 }

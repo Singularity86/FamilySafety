@@ -14,6 +14,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val SPEED_ALERT_COOLDOWN_MS = 5 * 60 * 1000L // 5 minutes
+private const val ZONE_TRANSITION_COOLDOWN_MS = 2 * 60 * 1000L // 2 minutes
+private const val EXIT_HYSTERESIS_MIN_METERS = 25f
+private const val EXIT_HYSTERESIS_RADIUS_FRACTION = 0.15f
 
 @Singleton
 class GeofenceMonitor @Inject constructor(
@@ -30,15 +33,20 @@ class GeofenceMonitor @Inject constructor(
     // memberId -> set of geofence IDs the member is currently inside
     private val memberGeofenceState = mutableMapOf<String, Set<String>>()
 
+    // memberId:zoneId -> last accepted enter/exit state change
+    private val lastZoneTransitionTime = mutableMapOf<String, Long>()
+
     // memberId -> last time we sent a speed alert
     private val lastSpeedAlertTime = mutableMapOf<String, Long>()
 
     private val distanceResult = FloatArray(1)
 
+    @Synchronized
     fun checkLocation(location: MemberLocation, memberDisplayName: String) {
         val activeZones = geofences.value.filter { it.isEnabled }
         if (activeZones.isEmpty()) return
 
+        val now = System.currentTimeMillis()
         val currentlyInside = mutableSetOf<String>()
         val previouslyInside = memberGeofenceState[location.memberId] ?: emptySet()
 
@@ -52,17 +60,43 @@ class GeofenceMonitor @Inject constructor(
                 distanceResult
             )
             val distance = distanceResult[0]
+            val wasInside = zone.id in previouslyInside
+            val exitRadius = zone.radiusMeters + maxOf(
+                EXIT_HYSTERESIS_MIN_METERS,
+                zone.radiusMeters * EXIT_HYSTERESIS_RADIUS_FRACTION
+            )
 
             if (distance <= zone.radiusMeters) {
                 currentlyInside.add(zone.id)
-                if (zone.id !in previouslyInside && zone.alertOnEnter) {
-                    Timber.d("GeofenceMonitor: $memberDisplayName entered ${zone.name}")
-                    notificationHelper.notifyGeofence(memberDisplayName, zone, isEnter = true)
+                if (!wasInside && canAcceptZoneTransition(location.memberId, zone.id, now)) {
+                    recordZoneTransition(location.memberId, zone.id, now)
+                    if (zone.alertOnEnter) {
+                        Timber.d("GeofenceMonitor: $memberDisplayName entered ${zone.name}")
+                        notificationHelper.notifyGeofence(memberDisplayName, zone, isEnter = true)
+                    }
+                } else if (!wasInside) {
+                    currentlyInside.remove(zone.id)
+                    Timber.d(
+                        "GeofenceMonitor: suppressed rapid enter for $memberDisplayName in ${zone.name}"
+                    )
                 }
             } else {
-                if (zone.id in previouslyInside && zone.alertOnExit) {
-                    Timber.d("GeofenceMonitor: $memberDisplayName exited ${zone.name}")
-                    notificationHelper.notifyGeofence(memberDisplayName, zone, isEnter = false)
+                if (wasInside && distance <= exitRadius) {
+                    currentlyInside.add(zone.id)
+                    continue
+                }
+
+                if (wasInside && canAcceptZoneTransition(location.memberId, zone.id, now)) {
+                    recordZoneTransition(location.memberId, zone.id, now)
+                    if (zone.alertOnExit) {
+                        Timber.d("GeofenceMonitor: $memberDisplayName exited ${zone.name}")
+                        notificationHelper.notifyGeofence(memberDisplayName, zone, isEnter = false)
+                    }
+                } else if (wasInside) {
+                    currentlyInside.add(zone.id)
+                    Timber.d(
+                        "GeofenceMonitor: suppressed rapid exit for $memberDisplayName in ${zone.name}"
+                    )
                 }
             }
         }
@@ -77,7 +111,6 @@ class GeofenceMonitor @Inject constructor(
             .getInt("speed_threshold_mph", 90)
 
         if (speedMph > thresholdMph) {
-            val now = System.currentTimeMillis()
             val lastAlert = lastSpeedAlertTime[location.memberId] ?: 0L
             if (now - lastAlert > SPEED_ALERT_COOLDOWN_MS) {
                 lastSpeedAlertTime[location.memberId] = now
@@ -86,4 +119,15 @@ class GeofenceMonitor @Inject constructor(
             }
         }
     }
+
+    private fun canAcceptZoneTransition(memberId: String, zoneId: String, now: Long): Boolean {
+        val lastTransition = lastZoneTransitionTime[zoneTransitionKey(memberId, zoneId)] ?: 0L
+        return now - lastTransition >= ZONE_TRANSITION_COOLDOWN_MS
+    }
+
+    private fun recordZoneTransition(memberId: String, zoneId: String, now: Long) {
+        lastZoneTransitionTime[zoneTransitionKey(memberId, zoneId)] = now
+    }
+
+    private fun zoneTransitionKey(memberId: String, zoneId: String): String = "$memberId:$zoneId"
 }

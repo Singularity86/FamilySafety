@@ -18,23 +18,32 @@ fun EncryptionChip(
     modifier: Modifier = Modifier,
     isLocalOnly: Boolean = false
 ) {
-    StatusPill(
-        modifier = modifier,
-        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.88f),
-        borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.9f),
-        contentColor = TealPrimary
+    ChipInfoPopup(
+        title = if (isLocalOnly) "Protected local route" else "Protected updates",
+        message = if (isLocalOnly) {
+            "Working. Your family updates are locked on this device and sent directly across the local network."
+        } else {
+            "Working. Your family updates are locked on your device and can only be opened by your family's devices."
+        },
+        modifier = modifier
     ) {
-        Icon(
-            imageVector = Icons.Default.Lock,
-            contentDescription = null,
-            tint = TealPrimary,
-            modifier = Modifier.size(12.dp)
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(
-            text = if (isLocalOnly) "Local E2EE" else "E2EE",
-            style = MaterialTheme.typography.labelSmall,
-            color = TealPrimary
-        )
+        StatusPill(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.88f),
+            borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.9f),
+            contentColor = TealPrimary
+        ) {
+            Icon(
+                imageVector = Icons.Default.Lock,
+                contentDescription = null,
+                tint = TealPrimary,
+                modifier = Modifier.size(12.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = if (isLocalOnly) "Local E2EE" else "E2EE",
+                style = MaterialTheme.typography.labelSmall,
+                color = TealPrimary
+            )
+        }
     }
 }

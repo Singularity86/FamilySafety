@@ -439,6 +439,7 @@ class MqttTransport @Inject constructor(
             }
             return
         }
+        securityEventRepository?.recordDecryptSuccess(senderId)
 
         val envelope = try {
             MessageProtocol.decodeEnvelope(decryptedPayload)

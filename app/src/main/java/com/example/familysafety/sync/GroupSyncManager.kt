@@ -48,6 +48,13 @@ class GroupSyncManager @Inject constructor(
         data class Error(val message: String) : SyncState()
     }
 
+    data class RefreshRequestResult(
+        val requestedVersion: Int,
+        val peerCount: Int,
+        val sentCount: Int,
+        val failedCount: Int
+    )
+
     /**
      * Wire up the MQTT publisher callback.
      * Legacy method - no longer used with TransportProvider.
@@ -142,14 +149,14 @@ class GroupSyncManager @Inject constructor(
         reason: String,
         minimumVersion: Int? = null,
         changedMemberId: String? = null
-    ) {
-        withContext(Dispatchers.IO) {
+    ): RefreshRequestResult = withContext(Dispatchers.IO) {
             try {
                 val myMemberId = currentMemberId ?: run {
                     Timber.d("GroupSyncManager not initialized, skipping refresh request")
-                    return@withContext
+                    return@withContext RefreshRequestResult(0, 0, 0, 0)
                 }
-                val groupDefinition = groupStateManager?.groupDefinition?.value ?: return@withContext
+                val groupDefinition = groupStateManager?.groupDefinition?.value
+                    ?: return@withContext RefreshRequestResult(0, 0, 0, 0)
                 val request = GroupStateRefreshRequest(
                     groupId = groupDefinition.groupId,
                     requesterMemberId = myMemberId,
@@ -160,25 +167,37 @@ class GroupSyncManager @Inject constructor(
                 )
                 val payload = json.encodeToString(request).toByteArray()
 
-                groupDefinition.members
-                    .filter { it.memberId != myMemberId }
-                    .forEach { member ->
-                        val topic = MqttConfig.getSyncRequestTopic(member.memberId)
-                        transportProvider.sendMessage(
-                            recipientId = member.memberId,
-                            topic = topic,
-                            payload = payload,
-                            qos = MqttConfig.DEFAULT_QOS
-                        )
+                val peers = groupDefinition.members.filter { it.memberId != myMemberId }
+                var sentCount = 0
+                var failedCount = 0
+                peers.forEach { member ->
+                    val topic = MqttConfig.getSyncRequestTopic(member.memberId)
+                    val sent = transportProvider.sendMessage(
+                        recipientId = member.memberId,
+                        topic = topic,
+                        payload = payload,
+                        qos = MqttConfig.DEFAULT_QOS
+                    )
+                    if (sent) {
+                        sentCount++
+                    } else {
+                        failedCount++
                     }
+                }
 
                 Timber.i(
-                    "Requested group state refresh v${request.minimumVersion} for ${groupDefinition.members.size - 1} peers"
+                    "Requested group state refresh v${request.minimumVersion} for ${peers.size} peers ($sentCount sent, $failedCount failed)"
+                )
+                RefreshRequestResult(
+                    requestedVersion = request.minimumVersion,
+                    peerCount = peers.size,
+                    sentCount = sentCount,
+                    failedCount = failedCount
                 )
             } catch (e: Exception) {
                 Timber.e(e, "Failed to request group state refresh")
+                RefreshRequestResult(0, 0, 0, 0)
             }
-        }
     }
 
     /**
@@ -301,11 +320,13 @@ class GroupSyncManager @Inject constructor(
             try {
                 val manager = groupStateManager ?: return@withContext
 
-                manager.applyRemoteGroupState(
-                    syncMessage.groupDefinition,
-                    syncMessage.signature.hexToByteArray(),
-                    syncMessage.updaterMemberId
-                )
+                val result = manager.applyVerifiedRemoteGroupState(syncMessage.groupDefinition)
+                if (result is GroupOperationResult.Failure) {
+                    Timber.w("Rejected group update v${syncMessage.version}: ${result.error}")
+                    _syncState.value = SyncState.Error("Rejected group update: ${result.error}")
+                    return@withContext
+                }
+
                 sendAcknowledgment(syncMessage.groupId, syncMessage.version)
 
                 _syncState.value = SyncState.Synced(syncMessage.version)

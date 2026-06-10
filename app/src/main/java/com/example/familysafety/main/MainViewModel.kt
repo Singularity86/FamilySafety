@@ -9,6 +9,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.familysafety.avatar.AvatarRepository
 import com.example.familysafety.backup.BackupManager
+import com.example.familysafety.core.NetworkMonitor
 import com.example.familysafety.core.SecurityEventRepository
 import com.example.familysafety.group.AndroidKeyStoreLocalKeyStore
 import com.example.familysafety.group.Bip39
@@ -17,6 +18,7 @@ import com.example.familysafety.group.ConnectionState
 import com.example.familysafety.group.GroupDefinition
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.group.LocalMemberId
+import com.example.familysafety.group.PresenceStatus
 import com.example.familysafety.transport.MqttTransport
 import com.example.familysafety.invite.InviteManager
 import com.example.familysafety.invite.JoinRequest
@@ -28,6 +30,7 @@ import com.example.familysafety.storage.LocationPublishOutboxRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -47,10 +50,49 @@ class MainViewModel @Inject constructor(
     private val locationPublishOutboxRepository: LocationPublishOutboxRepository,
     private val mqttTransport: MqttTransport,
     private val securityEventRepository: SecurityEventRepository,
+    private val networkMonitor: NetworkMonitor,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
-    enum class ConnectionMode { LAN, RELAY, OFFLINE }
+    enum class ConnectionMode { LAN, MIXED, RELAY, OFFLINE }
+
+    sealed class KeySyncRequestState {
+        data object Idle : KeySyncRequestState()
+        data object Sending : KeySyncRequestState()
+        data class Requested(
+            val peerCount: Int,
+            val sentCount: Int,
+            val failedCount: Int,
+            val version: Long,
+            val requestedAtMs: Long
+        ) : KeySyncRequestState()
+        data class Updated(
+            val fromVersion: Long,
+            val toVersion: Long
+        ) : KeySyncRequestState()
+        data class NoNewerUpdate(
+            val peerCount: Int,
+            val sentCount: Int,
+            val failedCount: Int,
+            val version: Long
+        ) : KeySyncRequestState()
+        data object NoPeers : KeySyncRequestState()
+        data class Error(val message: String) : KeySyncRequestState()
+    }
+
+    data class RouteHealth(
+        val localPeerCount: Int = 0,
+        val totalPeerCount: Int = 0,
+        val hasRelay: Boolean = false
+    )
+
+    data class MemberRouteStatus(
+        val memberId: String,
+        val routeLabel: String,
+        val lastSeenMs: Long? = null,
+        val lastLocationUpdateMs: Long? = null,
+        val isRecentlyActive: Boolean = false
+    )
 
     val familyMembers: StateFlow<List<FamilyMember>> = groupStateManager.groupDefinition
         .map { it?.members?.toList() ?: emptyList() }
@@ -93,6 +135,9 @@ class MainViewModel @Inject constructor(
     val mqttState: StateFlow<MqttTransport.ConnectionState> = mqttTransport.connectionState
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), MqttTransport.ConnectionState.Disconnected)
 
+    val deviceNetworkAvailable: StateFlow<Boolean> = networkMonitor.isNetworkAvailable
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), networkMonitor.isCurrentlyConnected())
+
     val syncState: StateFlow<GroupSyncManager.SyncState> = groupSyncManager.syncState
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), GroupSyncManager.SyncState.Idle)
 
@@ -100,16 +145,22 @@ class MainViewModel @Inject constructor(
         securityEventRepository.decryptFailures
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
+    private val _keySyncRequestState = MutableStateFlow<KeySyncRequestState>(KeySyncRequestState.Idle)
+    val keySyncRequestState: StateFlow<KeySyncRequestState> = _keySyncRequestState.asStateFlow()
+
     val connectionMode: StateFlow<ConnectionMode> = combine(
         groupStateManager.memberStates,
         mqttTransport.connectionState
     ) { members, mqttState ->
-        val hasLanPeer = members.values
+        val peerStates = members.values
             .filter { it.member.memberId != localMemberId.value }
-            .any { it.connectionState is ConnectionState.Local }
+        val hasLanPeer = peerStates.any { it.connectionState is ConnectionState.Local }
+        val hasNonLanPeer = peerStates.any { it.connectionState !is ConnectionState.Local }
+        val relayConnected = mqttState is MqttTransport.ConnectionState.Connected
         when {
+            hasLanPeer && hasNonLanPeer && relayConnected -> ConnectionMode.MIXED
             hasLanPeer -> ConnectionMode.LAN
-            mqttState is MqttTransport.ConnectionState.Connected -> ConnectionMode.RELAY
+            relayConnected -> ConnectionMode.RELAY
             else -> ConnectionMode.OFFLINE
         }
     }.stateIn(
@@ -117,6 +168,44 @@ class MainViewModel @Inject constructor(
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = ConnectionMode.OFFLINE
     )
+
+    val routeHealth: StateFlow<RouteHealth> = combine(
+        groupStateManager.memberStates,
+        mqttTransport.connectionState
+    ) { members, mqttState ->
+        val peerStates = members.values
+            .filter { it.member.memberId != localMemberId.value }
+        RouteHealth(
+            localPeerCount = peerStates.count { it.connectionState is ConnectionState.Local },
+            totalPeerCount = peerStates.size,
+            hasRelay = mqttState is MqttTransport.ConnectionState.Connected
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = RouteHealth()
+    )
+
+    val memberRouteStatuses: StateFlow<Map<String, MemberRouteStatus>> =
+        groupStateManager.memberStates
+            .map { states ->
+                states.mapValues { (memberId, state) ->
+                    val route = when (state.connectionState) {
+                        is ConnectionState.Local -> "Local"
+                        is ConnectionState.Cloud -> "Relay"
+                        ConnectionState.Offline -> "Offline"
+                        ConnectionState.Unknown -> "Waiting"
+                    }
+                    MemberRouteStatus(
+                        memberId = memberId,
+                        routeLabel = route,
+                        lastSeenMs = state.lastSeenEpochMs,
+                        lastLocationUpdateMs = state.lastLocationUpdateEpochMs,
+                        isRecentlyActive = state.presenceStatus == PresenceStatus.ACTIVE
+                    )
+                }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     // Pending join requests from other users wanting to join this family
     val pendingJoinRequests: StateFlow<List<JoinRequest>> = inviteManager.pendingJoinRequests
@@ -304,12 +393,60 @@ class MainViewModel @Inject constructor(
 
     fun requestGroupStateRefresh() {
         viewModelScope.launch {
-            val groupDef = groupStateManager.groupDefinition.value ?: return@launch
-            groupSyncManager.requestGroupStateRefresh(
-                reason = "manual_refresh",
-                minimumVersion = groupDef.version.toInt()
-            )
+            val groupDef = groupStateManager.groupDefinition.value
+            if (groupDef == null) {
+                _keySyncRequestState.value = KeySyncRequestState.Error("No family state on this device")
+                return@launch
+            }
+
+            val peerCount = groupDef.members.count { it.memberId != localMemberId.value }
+            if (peerCount == 0) {
+                _keySyncRequestState.value = KeySyncRequestState.NoPeers
+                return@launch
+            }
+
+            val startingVersion = groupDef.version
+            _keySyncRequestState.value = KeySyncRequestState.Sending
+            try {
+                val requestResult = groupSyncManager.requestGroupStateRefresh(
+                    reason = "manual_refresh",
+                    minimumVersion = startingVersion.toInt()
+                )
+                _keySyncRequestState.value = KeySyncRequestState.Requested(
+                    peerCount = requestResult.peerCount.coerceAtLeast(peerCount),
+                    sentCount = requestResult.sentCount,
+                    failedCount = requestResult.failedCount,
+                    version = startingVersion,
+                    requestedAtMs = System.currentTimeMillis()
+                )
+
+                delay(8_000)
+                val currentState = _keySyncRequestState.value
+                val currentVersion = groupStateManager.groupDefinition.value?.version ?: startingVersion
+                if (currentState is KeySyncRequestState.Requested &&
+                    currentState.version == startingVersion
+                ) {
+                    _keySyncRequestState.value = if (currentVersion > startingVersion) {
+                        KeySyncRequestState.Updated(startingVersion, currentVersion)
+                    } else {
+                        KeySyncRequestState.NoNewerUpdate(
+                            peerCount = currentState.peerCount,
+                            sentCount = currentState.sentCount,
+                            failedCount = currentState.failedCount,
+                            version = startingVersion
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                _keySyncRequestState.value = KeySyncRequestState.Error(
+                    e.message ?: "Could not request family sync"
+                )
+            }
         }
+    }
+
+    fun clearRecoveredDecryptFailures() {
+        securityEventRepository.clearRecoveredFailures()
     }
 
     /**

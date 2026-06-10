@@ -16,9 +16,13 @@ import android.provider.Settings
 import android.view.MotionEvent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,8 +37,13 @@ import androidx.core.graphics.ColorUtils
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.LocationCity
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.example.familysafety.BuildConfig
 import com.example.familysafety.geofence.GeofenceZone
 import kotlinx.coroutines.launch
+import org.osmdroid.events.MapListener
+import org.osmdroid.events.ScrollEvent
+import org.osmdroid.events.ZoomEvent
 import org.osmdroid.tileprovider.cachemanager.CacheManager
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.util.BoundingBox
@@ -46,6 +55,7 @@ import org.osmdroid.views.overlay.Overlay
 import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
+import timber.log.Timber
 
 private val MAP_TILES = object : OnlineTileSourceBase(
     "OsmStandard", 0, 19, 256, ".png",
@@ -68,8 +78,8 @@ fun MapScreen(
     viewModel: MainViewModel,
     modifier: Modifier = Modifier,
     geofences: List<GeofenceZone> = emptyList(),
-    onLongPressMap: (GeoPoint) -> Unit = {},
-    onNavigateToZones: () -> Unit = {}
+    onNavigateToZones: () -> Unit = {},
+    onEdgeSwipeNext: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -169,6 +179,10 @@ fun MapScreen(
     var downloadTotal by remember { mutableIntStateOf(0) }
     var downloadErrorMessage by remember { mutableStateOf<String?>(null) }
     val isDownloading = downloadTask != null
+    var savedMapLatitude by rememberSaveable { mutableStateOf(0.0) }
+    var savedMapLongitude by rememberSaveable { mutableStateOf(0.0) }
+    var savedMapZoom by rememberSaveable { mutableStateOf(2.0) }
+    var hasSavedMapViewport by rememberSaveable { mutableStateOf(false) }
 
     // Cancel any in-progress download if the composable is removed from composition.
     DisposableEffect(Unit) {
@@ -179,11 +193,37 @@ fun MapScreen(
         MapView(context).apply {
             setTileSource(MAP_TILES)
             setMultiTouchControls(true)
-            controller.setZoom(2.0)
-            controller.setCenter(GeoPoint(0.0, 0.0))
+            controller.setZoom(savedMapZoom)
+            controller.setCenter(GeoPoint(savedMapLatitude, savedMapLongitude))
         }
     }
     val cacheManager = remember(mapView) { CacheManager(mapView) }
+
+    fun rememberCurrentMapViewport() {
+        val center = mapView.mapCenter
+        savedMapLatitude = center.latitude
+        savedMapLongitude = center.longitude
+        savedMapZoom = mapView.zoomLevelDouble
+        hasSavedMapViewport = true
+    }
+
+    DisposableEffect(mapView) {
+        val mapListener = object : MapListener {
+            override fun onScroll(event: ScrollEvent?): Boolean {
+                rememberCurrentMapViewport()
+                return false
+            }
+
+            override fun onZoom(event: ZoomEvent?): Boolean {
+                rememberCurrentMapViewport()
+                return false
+            }
+        }
+        mapView.addMapListener(mapListener)
+        onDispose {
+            mapView.removeMapListener(mapListener)
+        }
+    }
 
     // Blue dot for own location — replaces the default person icon.
     val myLocationOverlay = remember {
@@ -197,8 +237,14 @@ fun MapScreen(
     DisposableEffect(Unit) {
         mapView.overlays.add(myLocationOverlay)
         myLocationOverlay.enableMyLocation()
+        if (BuildConfig.DEBUG) {
+            Timber.d("Map lifecycle: resume")
+        }
         mapView.onResume()
         onDispose {
+            if (BuildConfig.DEBUG) {
+                Timber.d("Map lifecycle: pause/detach")
+            }
             myLocationOverlay.disableMyLocation()
             mapView.onPause()
             mapView.onDetach()
@@ -206,7 +252,7 @@ fun MapScreen(
     }
 
     // Auto-center on the group the first time we have locations.
-    val hasCentered = remember { mutableStateOf(false) }
+    val hasCentered = rememberSaveable { mutableStateOf(hasSavedMapViewport) }
     LaunchedEffect(memberLocations) {
         if (hasCentered.value || memberLocations.isEmpty()) return@LaunchedEffect
         hasCentered.value = true
@@ -216,10 +262,12 @@ fun MapScreen(
                 points.size == 1 -> {
                     mapView.controller.animateTo(points.first())
                     mapView.controller.setZoom(15.0)
+                    rememberCurrentMapViewport()
                 }
                 points.size > 1 -> {
                     val box = BoundingBox.fromGeoPoints(points)
                     mapView.zoomToBoundingBox(box, true, 150)
+                    rememberCurrentMapViewport()
                 }
             }
         }
@@ -231,16 +279,8 @@ fun MapScreen(
         val loc = memberLocations[id] ?: return@LaunchedEffect
         mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
         mapView.controller.setZoom(16.0)
+        rememberCurrentMapViewport()
         viewModel.clearFocus()
-    }
-
-    // Add long-press overlay once (stable reference via remember)
-    val longPressOverlay = remember(onLongPressMap) {
-        LongPressOverlay(onLongPressMap)
-    }
-    LaunchedEffect(longPressOverlay) {
-        mapView.overlays.removeAll { it is LongPressOverlay }
-        mapView.overlays.add(0, longPressOverlay)
     }
 
     // Draw geofence zone circles
@@ -396,6 +436,50 @@ fun MapScreen(
 
     Box(modifier = modifier.clipToBounds()) {
         AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize().clipToBounds())
+
+        var edgeDragTotal by remember { mutableFloatStateOf(0f) }
+        Surface(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 2.dp)
+                .width(18.dp)
+                .height(72.dp),
+            shape = RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.58f),
+            tonalElevation = 2.dp
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowLeft,
+                    contentDescription = "Swipe from edge",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .fillMaxWidth(1f / 10f)
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { edgeDragTotal = 0f },
+                        onHorizontalDrag = { _, dragAmount ->
+                            edgeDragTotal += dragAmount
+                            if (edgeDragTotal < -48f) {
+                                edgeDragTotal = 0f
+                                if (BuildConfig.DEBUG) {
+                                    Timber.d("Map edge swipe triggered family tab")
+                                }
+                                onEdgeSwipeNext()
+                            }
+                        },
+                        onDragEnd = { edgeDragTotal = 0f },
+                        onDragCancel = { edgeDragTotal = 0f }
+                    )
+                }
+        )
 
         if (isDownloading) {
             Surface(

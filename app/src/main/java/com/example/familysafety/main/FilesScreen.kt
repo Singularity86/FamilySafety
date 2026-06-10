@@ -69,9 +69,11 @@ fun FilesScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             if (uploadProgress == null) {
-                FloatingActionButton(onClick = { filePicker.launch("*/*") }) {
-                    Icon(Icons.Default.Add, contentDescription = "Upload file")
-                }
+                MetalActionButton(
+                    label = "Add File",
+                    icon = Icons.Default.Add,
+                    onClick = { filePicker.launch("*/*") }
+                )
             }
         }
     ) { padding ->

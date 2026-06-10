@@ -40,11 +40,13 @@ private fun radiusToSlider(r: Float): Float = ((ln(r) - LN_MIN) / (LN_MAX - LN_M
 fun GeofenceEditorScreen(
     geofenceId: String,
     viewModel: GeofenceViewModel = hiltViewModel(),
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onNavigateToZones: () -> Unit = onBack
 ) {
     val geofences by viewModel.geofences.collectAsState()
     val familyMembers by viewModel.familyMembers.collectAsState()
     val pendingGeoPoint by viewModel.pendingGeoPoint.collectAsState()
+    val myLocation by viewModel.myLocation.collectAsState()
 
     val isNew = geofenceId == "new"
     val existing = if (!isNew) geofences.find { it.id == geofenceId } else null
@@ -64,12 +66,21 @@ fun GeofenceEditorScreen(
     val watchedMemberIds = remember(existing) {
         mutableStateOf(existing?.watchedMemberIds ?: emptySet())
     }
+    val hasLocation = latitude != 0.0 || longitude != 0.0
 
     // Pre-fill location when navigated from map long-press
     LaunchedEffect(pendingGeoPoint) {
         if (isNew && pendingGeoPoint != null) {
             latitude = pendingGeoPoint!!.first
             longitude = pendingGeoPoint!!.second
+        }
+    }
+
+    LaunchedEffect(isNew, myLocation) {
+        val loc = myLocation
+        if (isNew && !hasLocation && loc != null) {
+            latitude = loc.latitude
+            longitude = loc.longitude
         }
     }
 
@@ -105,7 +116,6 @@ fun GeofenceEditorScreen(
     }
 
     val radiusMeters = sliderToRadius(radiusSlider)
-    val hasLocation = latitude != 0.0 || longitude != 0.0
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -118,6 +128,9 @@ fun GeofenceEditorScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onNavigateToZones) {
+                        Icon(Icons.Default.List, contentDescription = "All zones")
+                    }
                     if (!isNew) {
                         IconButton(onClick = { showDeleteConfirm = true }) {
                             Icon(
@@ -195,10 +208,25 @@ fun GeofenceEditorScreen(
                         )
                     } else {
                         Text(
-                            "Long-press the map to set zone center",
+                            "No location yet. Use your current location when GPS is available.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            myLocation?.let {
+                                latitude = it.latitude
+                                longitude = it.longitude
+                            }
+                        },
+                        enabled = myLocation != null,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Use current location")
                     }
                 }
             }

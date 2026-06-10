@@ -15,23 +15,34 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.familysafety.main.MetalActionButton
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GeofenceListScreen(
     viewModel: GeofenceViewModel = hiltViewModel(),
-    onNavigateToEditor: (String) -> Unit
+    onNavigateToEditor: (String) -> Unit,
+    onBack: () -> Unit
 ) {
     val geofences by viewModel.geofences.collectAsState()
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("Zones") })
+            TopAppBar(
+                title = { Text("Zones") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back to map")
+                    }
+                }
+            )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { onNavigateToEditor("new") }) {
-                Icon(Icons.Default.Add, contentDescription = "Add zone")
-            }
+            MetalActionButton(
+                label = "Add Zone",
+                icon = Icons.Default.Add,
+                onClick = { onNavigateToEditor("new") }
+            )
         }
     ) { paddingValues ->
         if (geofences.isEmpty()) {
@@ -57,7 +68,7 @@ fun GeofenceListScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        "Long-press the map or tap + to create a zone",
+                        "Tap + to create a zone",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

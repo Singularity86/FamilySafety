@@ -499,8 +499,6 @@ class GroupStateManager(
         senderMemberId: String
     ): GroupOperationResult<GroupDefinition> {
         return stateMutex.withLock {
-            val currentGroup = _groupDefinition.value
-
             // Verify sender is a member in the remote definition
             val sender = remoteDefinition.findMemberById(senderMemberId)
                 ?: return@withLock GroupOperationResult.Failure(GroupError.MemberNotFound)
@@ -517,49 +515,69 @@ class GroupStateManager(
                 return@withLock GroupOperationResult.Failure(GroupError.InvalidSignature)
             }
 
-            // Version conflict resolution
-            if (currentGroup != null) {
-                when {
-                    remoteDefinition.version < currentGroup.version -> {
-                        // Remote is stale; ignore
-                        return@withLock GroupOperationResult.Success(currentGroup)
-                    }
-                    remoteDefinition.version == currentGroup.version &&
-                            remoteDefinition.computeStateHash() != currentGroup.computeStateHash() -> {
-                        // Same version, different content = conflict
-                        _events.emit(
-                            GroupStateEvent.ConflictDetected(
-                                localVersion = currentGroup.version,
-                                remoteVersion = remoteDefinition.version
-                            )
+            applyRemoteGroupStateLocked(remoteDefinition)
+        }
+    }
+
+    /**
+     * Apply a group definition from a GroupSyncMessage whose envelope signature
+     * has already been verified by GroupSyncManager.
+     */
+    suspend fun applyVerifiedRemoteGroupState(
+        remoteDefinition: GroupDefinition
+    ): GroupOperationResult<GroupDefinition> {
+        return stateMutex.withLock {
+            applyRemoteGroupStateLocked(remoteDefinition)
+        }
+    }
+
+    private suspend fun applyRemoteGroupStateLocked(
+        remoteDefinition: GroupDefinition
+    ): GroupOperationResult<GroupDefinition> {
+        val currentGroup = _groupDefinition.value
+
+        // Version conflict resolution
+        if (currentGroup != null) {
+            when {
+                remoteDefinition.version < currentGroup.version -> {
+                    // Remote is stale; ignore
+                    return GroupOperationResult.Success(currentGroup)
+                }
+                remoteDefinition.version == currentGroup.version &&
+                        remoteDefinition.computeStateHash() != currentGroup.computeStateHash() -> {
+                    // Same version, different content = conflict
+                    _events.emit(
+                        GroupStateEvent.ConflictDetected(
+                            localVersion = currentGroup.version,
+                            remoteVersion = remoteDefinition.version
                         )
-                        return@withLock GroupOperationResult.Failure(GroupError.VersionConflict)
-                    }
+                    )
+                    return GroupOperationResult.Failure(GroupError.VersionConflict)
                 }
             }
-
-            // Apply the remote state
-            try {
-                persistence.saveGroupDefinition(remoteDefinition)
-            } catch (e: Exception) {
-                return@withLock GroupOperationResult.Failure(GroupError.StorageError)
-            }
-
-            val oldDefinition = _groupDefinition.value
-            _groupDefinition.value = remoteDefinition
-            reinitializeMemberRuntimeStates(remoteDefinition)
-
-            if (oldDefinition != null) {
-                _events.emit(GroupStateEvent.GroupUpdated(oldDefinition, remoteDefinition))
-            }
-
-            // Check if we've been removed
-            if (!remoteDefinition.containsMember(localMemberId)) {
-                _events.emit(GroupStateEvent.RemovedFromGroup)
-            }
-
-            GroupOperationResult.Success(remoteDefinition)
         }
+
+        // Apply the remote state
+        try {
+            persistence.saveGroupDefinition(remoteDefinition)
+        } catch (e: Exception) {
+            return GroupOperationResult.Failure(GroupError.StorageError)
+        }
+
+        val oldDefinition = _groupDefinition.value
+        _groupDefinition.value = remoteDefinition
+        reinitializeMemberRuntimeStates(remoteDefinition)
+
+        if (oldDefinition != null) {
+            _events.emit(GroupStateEvent.GroupUpdated(oldDefinition, remoteDefinition))
+        }
+
+        // Check if we've been removed
+        if (!remoteDefinition.containsMember(localMemberId)) {
+            _events.emit(GroupStateEvent.RemovedFromGroup)
+        }
+
+        return GroupOperationResult.Success(remoteDefinition)
     }
 
     // =========================================================================

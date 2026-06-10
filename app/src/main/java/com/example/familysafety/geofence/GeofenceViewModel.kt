@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.familysafety.group.FamilyMember
 import com.example.familysafety.group.GroupStateManager
+import com.example.familysafety.location.LocationRepository
+import com.example.familysafety.location.MemberLocation
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -17,7 +19,8 @@ import javax.inject.Inject
 @HiltViewModel
 class GeofenceViewModel @Inject constructor(
     private val geofenceRepository: GeofenceRepository,
-    private val groupStateManager: GroupStateManager
+    private val groupStateManager: GroupStateManager,
+    private val locationRepository: LocationRepository
 ) : ViewModel() {
 
     val geofences: StateFlow<List<GeofenceZone>> = geofenceRepository.geofences
@@ -33,6 +36,13 @@ class GeofenceViewModel @Inject constructor(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
+        )
+
+    val myLocation: StateFlow<MemberLocation?> = locationRepository.myLocation
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = null
         )
 
     // Pending geo point set by map long-press, read by the editor when creating a new zone

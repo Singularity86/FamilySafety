@@ -76,7 +76,7 @@ fun PrivacyScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(Spacing.lg))
 
             Text(
-                text = "This app has no backend servers. All communication is peer-to-peer via your configured MQTT broker.",
+                text = "This app has no backend servers. Devices talk directly when they can, and use your relay when they are apart.",
                 style = MaterialTheme.typography.labelSmall,
                 color = TextDisabled,
                 textAlign = TextAlign.Center,

@@ -53,8 +53,11 @@ import com.example.familysafety.ui.theme.TextDisabled
 import com.example.familysafety.ui.theme.ThemeMode
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.example.familysafety.BuildConfig
 import com.example.familysafety.onboarding.BatteryOptimizationScreen
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 sealed class MainRoute(val route: String, val label: String, val icon: ImageVector) {
     data object Map      : MainRoute("map",       "Map",      Icons.Default.Place)
@@ -144,8 +147,29 @@ fun MainScreen(
 
             val pagerState = rememberPagerState(pageCount = { 5 })
             val scope = rememberCoroutineScope()
+            var pagerNavigationJob by remember { mutableStateOf<Job?>(null) }
             val snackbarHostState = remember { SnackbarHostState() }
             var showBatteryFixDialog by remember { mutableStateOf(false) }
+
+            fun navigatePagerTo(page: Int, animated: Boolean = false) {
+                if (page == pagerState.currentPage && !pagerState.isScrollInProgress) return
+                if (BuildConfig.DEBUG) {
+                    Timber.d(
+                        "Tab navigation requested: ${pagerState.currentPage} -> $page animated=$animated"
+                    )
+                }
+                pagerNavigationJob?.cancel()
+                pagerNavigationJob = scope.launch {
+                    if (animated) {
+                        pagerState.animateScrollToPage(page)
+                    } else {
+                        pagerState.scrollToPage(page)
+                    }
+                    if (BuildConfig.DEBUG) {
+                        Timber.d("Tab navigation settled on page ${pagerState.currentPage}")
+                    }
+                }
+            }
 
             // When opened from a notification, map route string to pager page.
             LaunchedEffect(navigateTo) {
@@ -163,7 +187,7 @@ fun MainScreen(
                         else                                                      -> -1
                     }
                     if (page >= 0) {
-                        pagerState.animateScrollToPage(page)
+                        navigatePagerTo(page)
                     } else {
                         navController.navigate(navigateTo) { launchSingleTop = true }
                     }
@@ -184,7 +208,7 @@ fun MainScreen(
                                 duration = SnackbarDuration.Long
                             )
                             if (result == SnackbarResult.ActionPerformed) {
-                                pagerState.animateScrollToPage(1)
+                                navigatePagerTo(1)
                             }
                         }
                     }
@@ -267,7 +291,7 @@ fun MainScreen(
                                 },
                                 label = { Text(tab.label) },
                                 selected = selected,
-                                onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
+                                onClick = { navigatePagerTo(index) },
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = TealPrimary,
                                     selectedTextColor = MaterialTheme.colorScheme.onSurface,
@@ -299,35 +323,31 @@ fun MainScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(pagerPadding),
-                    userScrollEnabled = true,
-                    beyondViewportPageCount = 1
+                    userScrollEnabled = pagerState.currentPage != 0,
+                    beyondViewportPageCount = pagerTabs.lastIndex
                 ) { page ->
                     when (page) {
                         0 -> MapScreen(
                             viewModel = viewModel,
                             geofences = geofences,
-                            onLongPressMap = { geoPoint ->
-                                geofenceViewModel.setPendingGeoPoint(
-                                    geoPoint.latitude,
-                                    geoPoint.longitude
-                                )
-                                navController.navigate("geofence_editor/new")
-                            },
                             onNavigateToZones = {
                                 navController.navigate(MainRoute.Zones.route)
+                            },
+                            onEdgeSwipeNext = {
+                                navigatePagerTo(1, animated = true)
                             }
                         )
                         1 -> MembersScreen(
                             viewModel = viewModel,
                             onNavigateToMap = {
-                                scope.launch { pagerState.animateScrollToPage(0) }
+                                navigatePagerTo(0)
                             },
                             onNavigateToInvite = { navController.navigate("invite") },
                             onNavigateToHistory = { memberId ->
                                 navController.navigate(HistoryRoute.route(memberId))
                             },
                             onNavigateToFiles = {
-                                scope.launch { pagerState.animateScrollToPage(2) }
+                                navigatePagerTo(2)
                             }
                         )
                         2 -> FilesScreen(viewModel = filesViewModel)
@@ -379,6 +399,9 @@ fun MainScreen(
             GeofenceListScreen(
                 onNavigateToEditor = { geofenceId ->
                     navController.navigate("geofence_editor/$geofenceId")
+                },
+                onBack = {
+                    navController.popBackStack()
                 }
             )
         }
@@ -391,7 +414,10 @@ fun MainScreen(
             GeofenceEditorScreen(
                 geofenceId = geofenceId,
                 viewModel = geofenceViewModel,
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onNavigateToZones = {
+                    navController.popBackStack(MainRoute.Zones.route, inclusive = false)
+                }
             )
         }
 

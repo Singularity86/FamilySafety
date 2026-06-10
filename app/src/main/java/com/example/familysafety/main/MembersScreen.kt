@@ -51,6 +51,7 @@ fun MembersScreen(
     val familyMembers by viewModel.familyMembers.collectAsState()
     val memberLocations by viewModel.memberLocations.collectAsState()
     val memberAvatars by viewModel.memberAvatars.collectAsState()
+    val memberRouteStatuses by viewModel.memberRouteStatuses.collectAsState()
     val groupName by viewModel.groupName.collectAsState()
     val myMemberId = viewModel.myMemberId
     val haptic = LocalHapticFeedback.current
@@ -106,6 +107,7 @@ fun MembersScreen(
                         MemberCard(
                             member = member,
                             location = memberLocations[member.memberId],
+                            routeStatus = memberRouteStatuses[member.memberId],
                             avatar = memberAvatars[member.memberId],
                             isMe = member.memberId == myMemberId,
                             onShowOnMap = {
@@ -121,13 +123,13 @@ fun MembersScreen(
             }
         }
 
-        ExtendedFloatingActionButton(
+        MetalActionButton(
             onClick = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onNavigateToInvite()
             },
-            icon = { Icon(Icons.Default.PersonAdd, contentDescription = null) },
-            text = { Text("Invite") },
+            icon = Icons.Default.PersonAdd,
+            label = "Invite",
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(16.dp)
@@ -252,6 +254,7 @@ internal fun MemberAvatar(
 private fun MemberCard(
     member: com.example.familysafety.group.FamilyMember,
     location: com.example.familysafety.location.MemberLocation?,
+    routeStatus: MainViewModel.MemberRouteStatus?,
     avatar: Bitmap? = null,
     isMe: Boolean,
     colorHue: Float? = null,
@@ -381,13 +384,13 @@ private fun MemberCard(
                     if (location != null) {
                         val timeAgo = getTimeAgo(location.timestamp)
                         Text(
-                            text = "Updated $timeAgo",
+                            text = buildMemberStatusText(timeAgo, routeStatus),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     } else {
                         Text(
-                            text = if (isMe) "Starting location..." else "Waiting for location...",
+                            text = buildWaitingStatusText(isMe, routeStatus),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -439,4 +442,23 @@ private fun getTimeAgo(timestamp: Long): String {
         diff < 86_400_000 -> "${diff / 3_600_000}h ago"
         else -> "${diff / 86_400_000}d ago"
     }
+}
+
+private fun buildMemberStatusText(
+    locationTimeAgo: String,
+    routeStatus: MainViewModel.MemberRouteStatus?
+): String {
+    val route = routeStatus?.routeLabel ?: "Waiting"
+    return "Seen $locationTimeAgo · $route"
+}
+
+private fun buildWaitingStatusText(
+    isMe: Boolean,
+    routeStatus: MainViewModel.MemberRouteStatus?
+): String {
+    val lastSeen = routeStatus?.lastSeenMs
+    if (lastSeen != null) {
+        return "Seen ${getTimeAgo(lastSeen)} · ${routeStatus.routeLabel}"
+    }
+    return if (isMe) "Starting location..." else "Waiting for location..."
 }
