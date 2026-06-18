@@ -181,13 +181,14 @@ class AvatarRepository @Inject constructor(
      */
     private fun startNsd() {
         val port = httpServer?.listeningPort?.takeIf { it > 0 } ?: return
+        val token = httpServer?.token ?: return
 
         scope.launch(Dispatchers.Main) {
             try {
-                val disc = AvatarDiscovery(context, scope) { memberId, host, fetchPort ->
-                    fetchAvatarIfNeeded(memberId, host, fetchPort)
+                val disc = AvatarDiscovery(context, scope) { memberId, host, fetchPort, fetchToken ->
+                    fetchAvatarIfNeeded(memberId, host, fetchPort, fetchToken)
                 }
-                disc.start(localMemberId.value, port)
+                disc.start(localMemberId.value, port, token)
                 discovery = disc
             } catch (e: SecurityException) {
                 Timber.w("AvatarRepository: NSD requires NEARBY_WIFI_DEVICES (not yet granted)")
@@ -201,7 +202,7 @@ class AvatarRepository @Inject constructor(
     // Internal — avatar fetch
     // -------------------------------------------------------------------------
 
-    private suspend fun fetchAvatarIfNeeded(memberId: String, host: String, port: Int) {
+    private suspend fun fetchAvatarIfNeeded(memberId: String, host: String, port: Int, token: String) {
         val myId = localMemberId.value
         if (memberId == myId) return
 
@@ -216,7 +217,7 @@ class AvatarRepository @Inject constructor(
         Timber.d("AvatarRepository: fetching avatar for $memberId from $host:$port")
         withContext(Dispatchers.IO) {
             try {
-                val conn = URL("http://$host:$port/avatar").openConnection() as HttpURLConnection
+                val conn = URL("http://$host:$port/avatar?token=$token").openConnection() as HttpURLConnection
                 conn.connectTimeout = 5_000
                 conn.readTimeout = 10_000
                 conn.connect()

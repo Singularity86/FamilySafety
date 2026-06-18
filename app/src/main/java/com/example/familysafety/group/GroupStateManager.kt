@@ -230,9 +230,10 @@ class GroupStateManager(
             val remover = currentGroup.findMemberById(removerMemberId)
                 ?: return@withLock GroupOperationResult.Failure(GroupError.MemberNotFound)
 
-            // Any member can remove any other member — the signature proves they hold
-            // their own private key, which is sufficient authorization in a family group.
-            // (Self-removal is also allowed; it's equivalent to "leave family".)
+            // Only the group creator or the member themselves may remove a member.
+            if (removerMemberId != currentGroup.creatorMemberId && removerMemberId != targetMemberId) {
+                return@withLock GroupOperationResult.Failure(GroupError.NotGroupCreator)
+            }
 
             // Verify signature
             val removalMessage = buildMemberRemovalApprovalMessage(

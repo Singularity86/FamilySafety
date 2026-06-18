@@ -37,19 +37,19 @@ class GroupSyncManager @Inject constructor(
 
     // Concurrent maps so concurrent ack arrivals + waitForAcknowledgments polling
     // can't trip a CME / lose entries.
-    private val versionAcks = ConcurrentHashMap<Int, MutableSet<String>>()
+    private val versionAcks = ConcurrentHashMap<Long, MutableSet<String>>()
     private val conflictQueue = java.util.Collections.synchronizedList(mutableListOf<GroupDefinition>())
 
     sealed class SyncState {
         data object Idle : SyncState()
         data object Syncing : SyncState()
-        data class Synced(val version: Int) : SyncState()
-        data class Conflict(val localVersion: Int, val remoteVersion: Int) : SyncState()
+        data class Synced(val version: Long) : SyncState()
+        data class Conflict(val localVersion: Long, val remoteVersion: Long) : SyncState()
         data class Error(val message: String) : SyncState()
     }
 
     data class RefreshRequestResult(
-        val requestedVersion: Int,
+        val requestedVersion: Long,
         val peerCount: Int,
         val sentCount: Int,
         val failedCount: Int
@@ -104,7 +104,7 @@ class GroupSyncManager @Inject constructor(
 
                 val syncMessage = GroupSyncMessage(
                     groupId = groupDefinition.groupId,
-                    version = groupDefinition.version.toInt(),
+                    version = groupDefinition.version,
                     groupDefinition = groupDefinition,
                     updaterMemberId = myMemberId,
                     changeType = changeType,
@@ -144,8 +144,8 @@ class GroupSyncManager @Inject constructor(
                 val published = peers.isEmpty() || sentCount > 0
                 if (published) {
                     Timber.i("Sent encrypted group update v${groupDefinition.version} to $sentCount/${peers.size} peers")
-                    _syncState.value = SyncState.Synced(groupDefinition.version.toInt())
-                    waitForAcknowledgments(groupDefinition.version.toInt(), groupDefinition.members.size)
+                    _syncState.value = SyncState.Synced(groupDefinition.version)
+                    waitForAcknowledgments(groupDefinition.version, groupDefinition.members.size)
                 } else {
                     Timber.w("Failed to send encrypted sync to any peers")
                     _syncState.value = SyncState.Error("Failed to broadcast update")
@@ -165,7 +165,7 @@ class GroupSyncManager @Inject constructor(
      */
     suspend fun requestGroupStateRefresh(
         reason: String,
-        minimumVersion: Int? = null,
+        minimumVersion: Long? = null,
         changedMemberId: String? = null
     ): RefreshRequestResult = withContext(Dispatchers.IO) {
             try {
@@ -178,7 +178,7 @@ class GroupSyncManager @Inject constructor(
                 val request = GroupStateRefreshRequest(
                     groupId = groupDefinition.groupId,
                     requesterMemberId = myMemberId,
-                    minimumVersion = minimumVersion ?: groupDefinition.version.toInt(),
+                    minimumVersion = minimumVersion ?: groupDefinition.version,
                     changedMemberId = changedMemberId,
                     reason = reason,
                     timestamp = System.currentTimeMillis()
@@ -268,7 +268,7 @@ class GroupSyncManager @Inject constructor(
                 return
             }
 
-            if (currentGroup.version.toInt() < request.minimumVersion) {
+            if (currentGroup.version < request.minimumVersion) {
                 Timber.d(
                     "Ignoring stale refresh request for v${request.minimumVersion} " +
                         "because local version is ${currentGroup.version}"
@@ -334,19 +334,19 @@ class GroupSyncManager @Inject constructor(
                 broadcastGroupUpdate(currentGroup, ChangeType.VERSION_SYNC)
             }
 
-            syncMessage.version == currentGroup.version.toInt() -> {
+            syncMessage.version == currentGroup.version -> {
                 Timber.d("Received same version")
                 sendAcknowledgment(syncMessage.groupId, syncMessage.version)
             }
 
-            syncMessage.version == currentGroup.version.toInt() + 1 -> {
+            syncMessage.version == currentGroup.version + 1 -> {
                 Timber.i("Applying group update")
                 applyGroupUpdate(syncMessage)
             }
 
-            syncMessage.version > currentGroup.version.toInt() + 1 -> {
+            syncMessage.version > currentGroup.version + 1 -> {
                 Timber.w("Version jump detected")
-                _syncState.value = SyncState.Conflict(currentGroup.version.toInt(), syncMessage.version)
+                _syncState.value = SyncState.Conflict(currentGroup.version, syncMessage.version)
                 applyGroupUpdate(syncMessage)
             }
         }
@@ -385,7 +385,7 @@ class GroupSyncManager @Inject constructor(
         }
     }
 
-    private suspend fun sendAcknowledgment(groupId: String, version: Int) {
+    private suspend fun sendAcknowledgment(groupId: String, version: Long) {
         withContext(Dispatchers.IO) {
             try {
                 val myMemberId = currentMemberId ?: return@withContext
@@ -410,7 +410,7 @@ class GroupSyncManager @Inject constructor(
         }
     }
 
-    private suspend fun waitForAcknowledgments(version: Int, memberCount: Int) {
+    private suspend fun waitForAcknowledgments(version: Long, memberCount: Int) {
         withContext(Dispatchers.IO) {
             val timeout = 30_000L
             val startTime = System.currentTimeMillis()
@@ -490,7 +490,7 @@ class GroupSyncManager @Inject constructor(
 @Serializable
 data class GroupSyncMessage(
     val groupId: String,
-    val version: Int,
+    val version: Long,
     val groupDefinition: GroupDefinition,
     val updaterMemberId: String,
     val changeType: ChangeType,
@@ -502,7 +502,7 @@ data class GroupSyncMessage(
 @Serializable
 data class GroupUpdateAck(
     val groupId: String,
-    val version: Int,
+    val version: Long,
     val memberId: String,
     val timestamp: Long
 )
@@ -511,7 +511,7 @@ data class GroupUpdateAck(
 data class GroupStateRefreshRequest(
     val groupId: String,
     val requesterMemberId: String,
-    val minimumVersion: Int,
+    val minimumVersion: Long,
     val changedMemberId: String? = null,
     val reason: String,
     val timestamp: Long

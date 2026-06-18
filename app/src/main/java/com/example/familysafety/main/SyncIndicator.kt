@@ -106,7 +106,7 @@ fun SyncIndicator(
 }
 
 @Composable
-private fun SyncedChip(version: Int, modifier: Modifier = Modifier) {
+private fun SyncedChip(version: Long, modifier: Modifier = Modifier) {
     var closed by remember(version) { mutableStateOf(false) }
     val shutterProgress = remember(version) { Animatable(0f) }
 

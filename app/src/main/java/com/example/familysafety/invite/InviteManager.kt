@@ -260,7 +260,7 @@ class InviteManager @Inject constructor(
                 scope.launch {
                     groupSyncManager?.requestGroupStateRefresh(
                         reason = "member_added",
-                        minimumVersion = stateManager.groupDefinition.value?.version?.toInt(),
+                        minimumVersion = stateManager.groupDefinition.value?.version,
                         changedMemberId = newMember.memberId
                     )
                 }

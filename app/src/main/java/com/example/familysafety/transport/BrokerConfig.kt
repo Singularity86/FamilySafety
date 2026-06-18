@@ -14,11 +14,11 @@ object BrokerConfig {
     
     private val brokers = mapOf(
         Environment.DEVELOPMENT to BrokerSettings(
-            url = "tcp://broker.hivemq.com:1883",
+            url = "ssl://broker.hivemq.com:8883",
             username = null,
             password = null,
-            useTls = false,
-            description = "Public HiveMQ broker (development only)"
+            useTls = true,
+            description = "Public HiveMQ broker over TLS (development only)"
         ),
         Environment.STAGING to BrokerSettings(
             url = "tcp://staging-mqtt.familysafety.app:1883",

@@ -95,6 +95,9 @@ class MqttTransport @Inject constructor(
                 _connectionState.value = ConnectionState.Connecting
 
                 val brokerUrl = MqttConfig.BROKER_URL
+                if (!BrokerConfig.isSecureBroker()) {
+                    Timber.w("$TAG: connecting to INSECURE broker (no TLS) — development only: $brokerUrl")
+                }
                 val clientId = MqttConfig.generateClientId(memberIdParam)
                 mqttClient = MqttAsyncClient(brokerUrl, clientId, MemoryPersistence())
 
@@ -329,6 +332,8 @@ class MqttTransport @Inject constructor(
     private fun queueMessage(topic: String, payload: ByteArray, qos: Int, retained: Boolean) {
         val msg = PendingMessage(topic, payload, qos, retained)
         pendingMessages.offer(msg)
+        val now = System.currentTimeMillis()
+        pendingMessages.removeIf { now - it.timestamp > 3600_000 }
         while (pendingMessages.size > 200) pendingMessages.poll()
         Timber.d("$TAG: Queued message for $topic (pending: ${pendingMessages.size})")
     }
@@ -403,7 +408,9 @@ class MqttTransport @Inject constructor(
                 it.memberId to RecipientKeys(it.x25519PublicKey, it.ed25519PublicKey)
             }
             val addedIds = newKeys.keys - familyMemberKeys.keys
+            val removedIds = familyMemberKeys.keys - newKeys.keys
             familyMemberKeys = newKeys.toMutableMap()
+            removedIds.forEach { e2eeManager.removeSharedSecret(it) }
             if (addedIds.isNotEmpty()) {
                 subscribeToFamilyMembers(addedIds.toList())
             }

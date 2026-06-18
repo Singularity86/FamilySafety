@@ -7,6 +7,7 @@ import androidx.security.crypto.MasterKey
 import com.goterl.lazysodium.LazySodiumAndroid
 import com.goterl.lazysodium.SodiumAndroid
 import java.io.File
+import java.security.GeneralSecurityException
 import java.security.KeyStore
 
 /**
@@ -58,7 +59,7 @@ class AndroidKeyStoreLocalKeyStore(
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
-        } catch (e: Exception) {
+        } catch (e: GeneralSecurityException) {
             // Keyset is corrupted or encrypted with a key that no longer exists
             // (common after reinstall with cloud-restored SharedPreferences, or key rotation).
             // The stored keys are unrecoverable — wipe and start fresh so the app can launch.

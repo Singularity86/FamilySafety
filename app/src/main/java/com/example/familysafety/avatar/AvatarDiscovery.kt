@@ -23,7 +23,7 @@ import kotlin.coroutines.suspendCoroutine
 class AvatarDiscovery(
     private val context: Context,
     private val scope: CoroutineScope,
-    private val onPeerResolved: suspend (memberId: String, host: String, port: Int) -> Unit
+    private val onPeerResolved: suspend (memberId: String, host: String, port: Int, token: String) -> Unit
 ) {
     private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
     private val resolveMutex = Mutex()
@@ -35,12 +35,13 @@ class AvatarDiscovery(
     companion object {
         private const val SERVICE_TYPE = "_familysafety._tcp"
         private const val ATTR_MEMBER_ID = "mid"
+        private const val ATTR_TOKEN = "tok"
         private const val TAG = "AvatarDiscovery"
     }
 
     /** Start both registration and discovery. Must be called from a thread with a Looper. */
-    fun start(myMemberId: String, serverPort: Int) {
-        registerSelf(myMemberId, serverPort)
+    fun start(myMemberId: String, serverPort: Int, serverToken: String) {
+        registerSelf(myMemberId, serverPort, serverToken)
         startDiscovery()
     }
 
@@ -59,12 +60,13 @@ class AvatarDiscovery(
         isDiscovering = false
     }
 
-    private fun registerSelf(memberId: String, port: Int) {
+    private fun registerSelf(memberId: String, port: Int, token: String) {
         val info = NsdServiceInfo().apply {
             serviceName = "fs-${memberId.take(16)}"
             serviceType = SERVICE_TYPE
             setPort(port)
             setAttribute(ATTR_MEMBER_ID, memberId)
+            setAttribute(ATTR_TOKEN, token)
         }
 
         val listener = object : NsdManager.RegistrationListener {
@@ -137,11 +139,15 @@ class AvatarDiscovery(
                     ?.let { String(it) }
                     ?: return@withLock
 
+                val token = resolved.attributes[ATTR_TOKEN]
+                    ?.let { String(it) }
+                    ?: return@withLock
+
                 val host = resolved.host?.hostAddress ?: return@withLock
                 val port = resolved.port
 
                 Timber.d("$TAG: Resolved $memberId @ $host:$port")
-                onPeerResolved(memberId, host, port)
+                onPeerResolved(memberId, host, port, token)
             } catch (e: Exception) {
                 Timber.w(e, "$TAG: resolveService exception")
             }

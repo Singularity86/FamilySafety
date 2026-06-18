@@ -30,7 +30,7 @@ class CrashDetectionMonitor @Inject constructor(
     private var isArmed = false
 
     @Volatile private var lastSpeedMs = 0f
-    @Volatile private var lastAlertTime = 0L
+    private val lastAlertTime = java.util.concurrent.atomic.AtomicLong(0L)
 
     private var thresholdMs2 = SENSITIVITY_MEDIUM
 
@@ -43,11 +43,11 @@ class CrashDetectionMonitor @Inject constructor(
             val magnitude = sqrt(x * x + y * y + z * z)
             if (magnitude >= thresholdMs2) {
                 val now = System.currentTimeMillis()
-                val speedGuardMet = lastSpeedMs >= SPEED_GUARD_MS
-                val cooldownExpired = (now - lastAlertTime) > ALERT_COOLDOWN_MS
-                if (speedGuardMet && cooldownExpired) {
+                val last = lastAlertTime.get()
+                if (lastSpeedMs >= SPEED_GUARD_MS &&
+                    (now - last) > ALERT_COOLDOWN_MS &&
+                    lastAlertTime.compareAndSet(last, now)) {
                     Timber.w("CrashDetection: impact detected! accel=${magnitude}m/s², speed=${lastSpeedMs}m/s")
-                    lastAlertTime = now
                     triggerCrashAlert()
                 }
             }

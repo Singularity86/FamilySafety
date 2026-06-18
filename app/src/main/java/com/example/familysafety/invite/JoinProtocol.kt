@@ -17,11 +17,3 @@ data class GroupUpdate(
     val updatedMembers: List<String>,
     val timestamp: Long
 )
-
-@Serializable
-data class GroupUpdateAck(
-    val groupId: String,
-    val version: Int,
-    val memberId: String,
-    val timestamp: Long
-)

@@ -36,6 +36,7 @@ object BackupManager {
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
+    private const val CURRENT_VERSION = 1
     private const val PBKDF2_ITERATIONS = 200_000
     private const val KEY_LENGTH_BITS = 256
     private const val GCM_TAG_BITS = 128
@@ -71,7 +72,7 @@ object BackupManager {
      */
     fun import(data: ByteArray, password: String): BackupPayload {
         val backupFile = json.decodeFromString<BackupFile>(String(data, Charsets.UTF_8))
-        require(backupFile.version == 1) { "Unsupported backup version: ${backupFile.version}" }
+        require(backupFile.version in 1..CURRENT_VERSION) { "Unsupported backup version: ${backupFile.version}" }
 
         val salt = Base64.decode(backupFile.salt, Base64.NO_WRAP)
         val nonce = Base64.decode(backupFile.nonce, Base64.NO_WRAP)

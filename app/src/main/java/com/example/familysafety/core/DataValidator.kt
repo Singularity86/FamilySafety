@@ -169,20 +169,22 @@ object DataValidator {
     /**
      * Validate mnemonic phrase
      */
-    fun validateMnemonic(mnemonic: String): ValidationResult {
+    fun validateMnemonic(mnemonic: String, validWords: Set<String>? = null): ValidationResult {
         val words = mnemonic.trim().split("\\s+".toRegex())
         val errors = mutableListOf<String>()
-        
+
         if (words.size != 12 && words.size != 24) {
             errors.add("Mnemonic must be 12 or 24 words, got ${words.size}")
         }
-        
+
         words.forEach { word ->
             if (!word.matches(Regex("^[a-z]+$"))) {
                 errors.add("Invalid word: $word")
+            } else if (validWords != null && word !in validWords) {
+                errors.add("Unknown word: $word")
             }
         }
-        
+
         return if (errors.isEmpty()) {
             ValidationResult.Valid
         } else {

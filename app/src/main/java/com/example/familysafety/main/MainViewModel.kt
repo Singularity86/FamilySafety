@@ -25,6 +25,7 @@ import com.example.familysafety.invite.JoinRequest
 import com.example.familysafety.location.LocationRepository
 import com.example.familysafety.location.MemberLocation
 import com.example.familysafety.group.FamilyMember
+import com.example.familysafety.routing.RoutingService
 import com.example.familysafety.sync.GroupSyncManager
 import com.example.familysafety.storage.LocationPublishOutboxRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -51,6 +52,7 @@ class MainViewModel @Inject constructor(
     private val mqttTransport: MqttTransport,
     private val securityEventRepository: SecurityEventRepository,
     private val networkMonitor: NetworkMonitor,
+    private val routingService: RoutingService,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -93,6 +95,26 @@ class MainViewModel @Inject constructor(
         val lastLocationUpdateMs: Long? = null,
         val isRecentlyActive: Boolean = false
     )
+
+    sealed class DriveEstimateState {
+        data object Hidden : DriveEstimateState()
+        data class Loading(
+            val memberId: String,
+            val memberName: String
+        ) : DriveEstimateState()
+        data class Ready(
+            val memberId: String,
+            val memberName: String,
+            val distanceMeters: Double,
+            val durationSeconds: Double,
+            val locationTimestamp: Long
+        ) : DriveEstimateState()
+        data class Error(
+            val memberId: String,
+            val memberName: String,
+            val message: String
+        ) : DriveEstimateState()
+    }
 
     val familyMembers: StateFlow<List<FamilyMember>> = groupStateManager.groupDefinition
         .map { it?.members?.toList() ?: emptyList() }
@@ -147,6 +169,69 @@ class MainViewModel @Inject constructor(
 
     private val _keySyncRequestState = MutableStateFlow<KeySyncRequestState>(KeySyncRequestState.Idle)
     val keySyncRequestState: StateFlow<KeySyncRequestState> = _keySyncRequestState.asStateFlow()
+
+    private val _driveEstimateState =
+        MutableStateFlow<DriveEstimateState>(DriveEstimateState.Hidden)
+    val driveEstimateState: StateFlow<DriveEstimateState> = _driveEstimateState.asStateFlow()
+    private var driveEstimateJob: kotlinx.coroutines.Job? = null
+
+    fun requestDriveEstimate(memberId: String) {
+        val member = familyMembers.value.firstOrNull { it.memberId == memberId } ?: return
+        val destination = memberLocations.value[memberId]
+        val origin = selectDriveEstimateOrigin(
+            liveLocation = myLocation.value,
+            cachedLocalLocation = memberLocations.value[localMemberId.value]
+        )
+
+        driveEstimateJob?.cancel()
+        if (destination == null) {
+            _driveEstimateState.value = DriveEstimateState.Error(
+                memberId,
+                member.displayName,
+                "No location is available for this member yet."
+            )
+            return
+        }
+        if (origin == null) {
+            _driveEstimateState.value = DriveEstimateState.Error(
+                memberId,
+                member.displayName,
+                "Your current location is not available yet."
+            )
+            return
+        }
+
+        _driveEstimateState.value = DriveEstimateState.Loading(memberId, member.displayName)
+        driveEstimateJob = viewModelScope.launch {
+            try {
+                val estimate = routingService.getDriveEstimate(
+                    startLatitude = origin.latitude,
+                    startLongitude = origin.longitude,
+                    destinationLatitude = destination.latitude,
+                    destinationLongitude = destination.longitude
+                )
+                _driveEstimateState.value = DriveEstimateState.Ready(
+                    memberId = memberId,
+                    memberName = member.displayName,
+                    distanceMeters = estimate.distanceMeters,
+                    durationSeconds = estimate.durationSeconds,
+                    locationTimestamp = destination.timestamp
+                )
+            } catch (e: Exception) {
+                _driveEstimateState.value = DriveEstimateState.Error(
+                    memberId,
+                    member.displayName,
+                    "Drive time is unavailable right now. Check your connection and try again."
+                )
+            }
+        }
+    }
+
+    fun dismissDriveEstimate() {
+        driveEstimateJob?.cancel()
+        driveEstimateJob = null
+        _driveEstimateState.value = DriveEstimateState.Hidden
+    }
 
     val connectionMode: StateFlow<ConnectionMode> = combine(
         groupStateManager.memberStates,
@@ -410,7 +495,7 @@ class MainViewModel @Inject constructor(
             try {
                 val requestResult = groupSyncManager.requestGroupStateRefresh(
                     reason = "manual_refresh",
-                    minimumVersion = startingVersion.toInt()
+                    minimumVersion = startingVersion
                 )
                 _keySyncRequestState.value = KeySyncRequestState.Requested(
                     peerCount = requestResult.peerCount.coerceAtLeast(peerCount),
@@ -466,3 +551,8 @@ class MainViewModel @Inject constructor(
         }
     }
 }
+
+internal fun selectDriveEstimateOrigin(
+    liveLocation: MemberLocation?,
+    cachedLocalLocation: MemberLocation?
+): MemberLocation? = liveLocation ?: cachedLocalLocation

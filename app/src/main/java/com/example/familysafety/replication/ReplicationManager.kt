@@ -447,25 +447,6 @@ class ReplicationManager @Inject constructor(
                 }
             }
 
-            // Request more if available
-            if (response.hasMore && response.newestTimestamp != null) {
-                val originalRequest = pendingRequests.values
-                    .find { it.request.requestId == response.requestId }
-                    ?.request
-
-                if (originalRequest != null) {
-                    val sender = groupStateManager.groupDefinition.value
-                        ?.findMemberById(senderMemberId)
-
-                    if (sender != null) {
-                        val followUpRequest = originalRequest.copy(
-                            requestId = UUID.randomUUID().toString(),
-                            afterTimestamp = response.newestTimestamp
-                        )
-                        sendReplicationRequest(sender, followUpRequest)
-                    }
-                }
-            }
         } catch (e: Exception) {
             Timber.e(e, "$TAG: Failed to handle replication response")
         }
