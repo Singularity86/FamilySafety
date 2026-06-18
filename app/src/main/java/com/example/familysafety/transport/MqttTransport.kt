@@ -225,8 +225,8 @@ class MqttTransport @Inject constructor(
         topics.add(MqttConfig.getSyncRequestTopic(id))
         qosLevels.add(MqttConfig.DEFAULT_QOS)
 
-        // Group sync topic (broadcasts membership changes)
-        topics.add(MqttConfig.getGroupSyncTopic(gId))
+        // Per-member encrypted group sync inbox
+        topics.add(MqttConfig.getGroupSyncInboxTopic(id))
         qosLevels.add(MqttConfig.DEFAULT_QOS)
         
         // Group ack topic
@@ -369,9 +369,10 @@ class MqttTransport @Inject constructor(
         ensureActiveScope()
         if (reconnectJob?.isActive == true) return
         reconnectJob = scope.launch {
-            reconnectAttempts++
-            // Exponential backoff: 5 s, 10 s, 20 s … capped at 5 minutes.
-            val delay = (MqttConfig.RECONNECT_DELAY_MS * reconnectAttempts).coerceAtMost(5 * 60_000L)
+            reconnectAttempts = (reconnectAttempts + 1).coerceAtMost(12)
+            // Exponential backoff: 5 s, 10 s, 20 s, 40 s … capped at 5 minutes.
+            val backoffFactor = 1L shl (reconnectAttempts - 1)
+            val delay = (MqttConfig.RECONNECT_DELAY_MS * backoffFactor).coerceAtMost(5 * 60_000L)
             Timber.i("$TAG: Reconnect attempt $reconnectAttempts in ${delay / 1000}s")
             delay(delay)
             val id = memberId ?: return@launch
@@ -451,6 +452,10 @@ class MqttTransport @Inject constructor(
             "location_update" -> {
                 val locationUpdate = MessageProtocol.decodeLocationUpdate(envelope.payload)
                 val memberLocation = MessageProtocol.locationUpdateToMemberLocation(locationUpdate)
+                if (DataValidator.validateLocation(memberLocation) !is ValidationResult.Valid) {
+                    Timber.w("$TAG: Rejected invalid location from $senderId")
+                    return
+                }
                 locationRepository.updateMemberLocation(memberLocation)
             }
             "presence_update" -> {

@@ -1,5 +1,7 @@
 package com.example.familysafety.replication
 
+import com.example.familysafety.core.DataValidator
+import com.example.familysafety.core.ValidationResult
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.group.FamilyMember
 import com.example.familysafety.group.GroupStateManager
@@ -405,17 +407,25 @@ class ReplicationManager @Inject constructor(
                 ReplicationDataType.LOCATION_HISTORY -> {
                     response.locations?.let { locations ->
                         val memberLocations = locations.map { it.toMemberLocation() }
+                        val validLocations = memberLocations.filter { loc ->
+                            val result = DataValidator.validateLocation(loc)
+                            if (result !is ValidationResult.Valid) {
+                                Timber.w("$TAG: Dropping invalid replicated location from $senderMemberId")
+                            }
+                            result is ValidationResult.Valid
+                        }
+                        if (validLocations.isEmpty()) return@let
                         locationRepository.updateMemberLocations(
-                            locations = memberLocations,
+                            locations = validLocations,
                             isReplicated = true,
                             replicatedFrom = senderMemberId
                         )
-                        Timber.d("$TAG: Stored ${locations.size} replicated locations")
+                        Timber.d("$TAG: Stored ${validLocations.size}/${locations.size} replicated locations")
                         _events.emit(
                             ReplicationEvent.DataReceived(
                                 peerId = senderMemberId,
                                 dataType = ReplicationDataType.LOCATION_HISTORY,
-                                itemCount = locations.size
+                                itemCount = validLocations.size
                             )
                         )
                     }

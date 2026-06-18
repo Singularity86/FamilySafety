@@ -16,7 +16,7 @@ object MqttConfig {
     const val RECONNECT_DELAY_MS = 5000L
     
     fun generateClientId(memberId: String): String {
-        return "familysafe_${memberId}_${System.currentTimeMillis()}"
+        return "familysafe_${memberId}"
     }
     
     fun getLocationTopic(memberId: String): String {
@@ -41,6 +41,10 @@ object MqttConfig {
     
     fun getSyncRequestTopic(memberId: String): String {
         return "familysafe/$memberId/sync_request"
+    }
+
+    fun getGroupSyncInboxTopic(memberId: String): String {
+        return "familysafe/$memberId/group_sync"
     }
     
     fun getJoinRequestTopic(inviterMemberId: String): String {

@@ -40,10 +40,10 @@ class E2EEManager @Inject constructor(
         val plaintextBytes = plaintext.toByteArray(Charsets.UTF_8)
         val ciphertext = ByteArray(plaintextBytes.size + SecretBox.MACBYTES)
 
-        // ... inside encryptMessage function around line 46
         val encryptSuccess = lazySodium.cryptoSecretBoxEasy(
-            ciphertext,    plaintextBytes,
-            plaintextBytes.size.toLong(), // Change this to .toLong()
+            ciphertext,
+            plaintextBytes,
+            plaintextBytes.size.toLong(),
             nonce,
             sharedSecret
         )
@@ -98,11 +98,10 @@ class E2EEManager @Inject constructor(
         
         val plaintext = ByteArray(ciphertext.size - SecretBox.MACBYTES)
 
-        // ... inside decryptMessage function around line 95
         val decryptSuccess = lazySodium.cryptoSecretBoxOpenEasy(
             plaintext,
             ciphertext,
-            ciphertext.size.toLong(), // Change this to .toLong()
+            ciphertext.size.toLong(),
             nonce,
             sharedSecret
         )

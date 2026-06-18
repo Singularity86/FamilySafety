@@ -177,7 +177,7 @@ class UnifiedTransportManager @Inject constructor(
                         }
                     }
 
-                    topic.contains("/group/") && topic.endsWith("/sync") -> {
+                    topic.endsWith("/group_sync") -> {
                         groupSyncManagerProvider.get().handleSyncMessage(payload)
                     }
 

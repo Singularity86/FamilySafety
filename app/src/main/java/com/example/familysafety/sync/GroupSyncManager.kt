@@ -119,17 +119,35 @@ class GroupSyncManager @Inject constructor(
                 val signedMessage = syncMessage.copy(signature = signature.toHexString())
                 val messageJson = json.encodeToString(signedMessage)
 
-                val topic = MqttConfig.getGroupSyncTopic(groupDefinition.groupId)
+                val peers = groupDefinition.members.filter { it.memberId != myMemberId }
+                var sentCount = 0
+                peers.forEach { member ->
+                    try {
+                        val encrypted = e2eeManager.encryptMessage(
+                            plaintext = messageJson,
+                            recipientMemberId = member.memberId,
+                            recipientX25519PublicKey = member.x25519PublicKey.hexToByteArray()
+                        )
+                        val topic = MqttConfig.getGroupSyncInboxTopic(member.memberId)
+                        val sent = transportProvider.sendMessage(
+                            recipientId = member.memberId,
+                            topic = topic,
+                            payload = encrypted.toByteArray(),
+                            qos = MqttConfig.QOS_AT_LEAST_ONCE
+                        )
+                        if (sent) sentCount++
+                    } catch (e: Exception) {
+                        Timber.e(e, "Failed to send encrypted sync to ${member.memberId.take(8)}")
+                    }
+                }
 
-                // Use broadcastMessage which will intelligently choose between P2P and Relay
-                val published = transportProvider.broadcastMessage(topic, messageJson.toByteArray(), MqttConfig.QOS_AT_LEAST_ONCE)
-
+                val published = peers.isEmpty() || sentCount > 0
                 if (published) {
-                    Timber.i("Broadcasted group update v${groupDefinition.version}")
+                    Timber.i("Sent encrypted group update v${groupDefinition.version} to $sentCount/${peers.size} peers")
                     _syncState.value = SyncState.Synced(groupDefinition.version.toInt())
                     waitForAcknowledgments(groupDefinition.version.toInt(), groupDefinition.members.size)
                 } else {
-                    Timber.w("Broadcast failed or queued")
+                    Timber.w("Failed to send encrypted sync to any peers")
                     _syncState.value = SyncState.Error("Failed to broadcast update")
                 }
 
@@ -273,8 +291,27 @@ class GroupSyncManager @Inject constructor(
         val currentGroup = manager.groupDefinition.value ?: return
         val myMemberId = currentMemberId ?: return
 
+        val senderMemberId = extractSenderMemberId(encryptedPayload) ?: run {
+            Timber.w("Cannot extract sender from group sync payload")
+            return
+        }
+        val sender = currentGroup.findMemberById(senderMemberId) ?: run {
+            Timber.w("Unknown sender ${senderMemberId.take(8)} for group sync — ignoring")
+            return
+        }
+        val decryptedJson = try {
+            e2eeManager.decryptMessage(
+                encryptedMessageJson = encryptedPayload,
+                senderX25519PublicKey = sender.x25519PublicKey.hexToByteArray(),
+                senderEd25519PublicKey = sender.ed25519PublicKey.hexToByteArray()
+            )
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to decrypt group sync message from ${senderMemberId.take(8)}")
+            return
+        }
+
         val syncMessage = try {
-            json.decodeFromString<GroupSyncMessage>(encryptedPayload)
+            json.decodeFromString<GroupSyncMessage>(decryptedJson)
         } catch (e: Exception) {
             Timber.w(e, "Failed to parse sync message")
             return
@@ -420,7 +457,8 @@ class GroupSyncManager @Inject constructor(
     }
 
     private fun createSyncSignaturePayload(syncMessage: GroupSyncMessage): String {
-        return "${syncMessage.groupId}|${syncMessage.version}|${syncMessage.updaterMemberId}|${syncMessage.timestamp}"
+        val definitionHash = syncMessage.groupDefinition.computeStateHash()
+        return "${syncMessage.groupId}|${syncMessage.version}|${syncMessage.updaterMemberId}|${syncMessage.timestamp}|${definitionHash}"
     }
 
     fun clearError() {
@@ -433,6 +471,13 @@ class GroupSyncManager @Inject constructor(
         scope.cancel()
         versionAcks.clear()
         conflictQueue.clear()
+    }
+
+    private fun extractSenderMemberId(encryptedPayload: String): String? {
+        return try {
+            val regex = """"senderMemberId"\s*:\s*"([^"]+)"""".toRegex()
+            regex.find(encryptedPayload)?.groupValues?.getOrNull(1)
+        } catch (e: Exception) { null }
     }
 
     private fun ByteArray.toHexString(): String =
