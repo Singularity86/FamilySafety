@@ -26,6 +26,7 @@ import com.example.familysafety.main.incrementSessionCount
 import com.example.familysafety.main.shouldShowTip
 import com.example.familysafety.ui.screens.ApprovedScreen
 import com.example.familysafety.ui.screens.PendingMemberScreen
+import com.example.familysafety.ui.screens.RejectedScreen
 import com.example.familysafety.ui.theme.AppTheme
 import com.example.familysafety.ui.theme.ThemeMode
 import com.example.familysafety.ui.theme.ThemePreference
@@ -77,18 +78,14 @@ class MainActivity : ComponentActivity() {
                     // Trigger a full process restart when background approval arrives while the
                     // app is open (MembershipViewModel emits once via approvedEvent).
                     LaunchedEffect(Unit) {
-                        membershipViewModel.approvedEvent.collect {
-                            val restartIntent = packageManager
-                                .getLaunchIntentForPackage(packageName)!!
-                                .apply {
-                                    addFlags(
-                                        Intent.FLAG_ACTIVITY_NEW_TASK or
-                                        Intent.FLAG_ACTIVITY_CLEAR_TASK
-                                    )
-                                }
-                            startActivity(restartIntent)
-                            android.os.Process.killProcess(android.os.Process.myPid())
-                        }
+                        membershipViewModel.approvedEvent.collect { restartProcess() }
+                    }
+
+                    // Same restart when this device is removed from the group: AppInitializer
+                    // has already stopped tracking and wiped group state, so the restart
+                    // lands in onboarding with fresh singletons.
+                    LaunchedEffect(Unit) {
+                        appInitializer.removedFromGroupEvent.collect { restartProcess() }
                     }
 
                     when (membershipState) {
@@ -160,25 +157,15 @@ class MainActivity : ComponentActivity() {
                                 onCancelRequest = { membershipViewModel.cancelPending() }
                             )
                         }
+                        is MembershipState.Rejected -> {
+                            RejectedScreen(
+                                familyName = (membershipState as MembershipState.Rejected).familyName,
+                                onContinue = { membershipViewModel.acknowledgeRejection() }
+                            )
+                        }
                         is MembershipState.Unauthenticated -> {
                             OnboardingNavigation(
-                                onOnboardingComplete = {
-                                    // Force a full process restart so the Hilt SingletonComponent
-                                    // is rebuilt from scratch with the now-initialized keys.
-                                    // finish()+startActivity() is not enough — it reuses the
-                                    // same process and the same stale singletons (LocalMemberId="",
-                                    // GroupStateManager with empty member ID).
-                                    val restartIntent = packageManager
-                                        .getLaunchIntentForPackage(packageName)!!
-                                        .apply {
-                                            addFlags(
-                                                Intent.FLAG_ACTIVITY_NEW_TASK or
-                                                Intent.FLAG_ACTIVITY_CLEAR_TASK
-                                            )
-                                        }
-                                    startActivity(restartIntent)
-                                    android.os.Process.killProcess(android.os.Process.myPid())
-                                }
+                                onOnboardingComplete = { restartProcess() }
                             )
                         }
                     }
@@ -203,5 +190,24 @@ class MainActivity : ComponentActivity() {
     private fun startLocationService() {
         if (!LocationPermissionHelper.hasAlwaysOnLocationPrerequisites(this)) return
         LocationService.startTracking(this, localMemberId.value)
+    }
+
+    /**
+     * Force a full process restart so the Hilt SingletonComponent is rebuilt from
+     * scratch. finish()+startActivity() is not enough — it reuses the same process
+     * and the same stale singletons (LocalMemberId="", GroupStateManager with an
+     * empty or outdated member ID).
+     */
+    private fun restartProcess() {
+        val restartIntent = packageManager
+            .getLaunchIntentForPackage(packageName)!!
+            .apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TASK
+                )
+            }
+        startActivity(restartIntent)
+        android.os.Process.killProcess(android.os.Process.myPid())
     }
 }

@@ -133,6 +133,19 @@ interface ChatMessageDao {
     """)
     fun observeTotalUnreadCount(): Flow<Int>
 
+    /**
+     * Observe total unread count across conversations this member participates in.
+     * Excludes replicated copies of other members' private conversations, which
+     * would otherwise inflate the badge with chats the user can't even open.
+     */
+    @Query("""
+        SELECT COUNT(*) FROM chat_messages
+        WHERE isOutgoing = 0 AND isReadLocally = 0
+        AND (conversationId = :groupId
+             OR conversationId LIKE '%' || :localMemberId || '%')
+    """)
+    fun observeTotalUnreadCountFor(localMemberId: String, groupId: String?): Flow<Int>
+
     // =========================================================================
     // QUERY - BY MESSAGE ID
     // =========================================================================
@@ -191,6 +204,18 @@ interface ChatMessageDao {
      */
     @Query("UPDATE chat_messages SET status = :status WHERE messageId = :messageId")
     suspend fun updateStatus(messageId: String, status: MessageStatus)
+
+    /**
+     * Get unread incoming messages in a conversation.
+     * Used to send read receipts before marking the conversation as read.
+     */
+    @Query("""
+        SELECT * FROM chat_messages
+        WHERE conversationId = :conversationId
+        AND isOutgoing = 0
+        AND isReadLocally = 0
+    """)
+    suspend fun getUnreadIncoming(conversationId: String): List<ChatMessageEntity>
 
     /**
      * Mark all messages in a conversation as read.

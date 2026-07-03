@@ -38,7 +38,6 @@ class GroupSyncManager @Inject constructor(
     // Concurrent maps so concurrent ack arrivals + waitForAcknowledgments polling
     // can't trip a CME / lose entries.
     private val versionAcks = ConcurrentHashMap<Long, MutableSet<String>>()
-    private val conflictQueue = java.util.Collections.synchronizedList(mutableListOf<GroupDefinition>())
 
     sealed class SyncState {
         data object Idle : SyncState()
@@ -55,37 +54,13 @@ class GroupSyncManager @Inject constructor(
         val failedCount: Int
     )
 
-    /**
-     * Wire up the MQTT publisher callback.
-     * Legacy method - no longer used with TransportProvider.
-     */
-    fun setMqttPublisher(
-        publisher: suspend (topic: String, payload: ByteArray, qos: Int) -> Boolean
-    ) {
-        // No-op
-    }
-
     fun initialize(
         memberId: String,
         groupStateManager: GroupStateManager
     ) {
         this.currentMemberId = memberId
         this.groupStateManager = groupStateManager
-        observeGroupChanges()
         Timber.i("GroupSyncManager initialized for member ${memberId.take(8)}…")
-    }
-
-    private fun observeGroupChanges() {
-        scope.launch {
-            groupStateManager?.groupDefinition?.collect { groupDef ->
-                groupDef?.let {
-                    if (_syncState.value is SyncState.Syncing) {
-                        return@collect
-                    }
-                    Timber.d("Group definition changed to version ${it.version}")
-                }
-            }
-        }
     }
 
     suspend fun broadcastGroupUpdate(
@@ -144,8 +119,10 @@ class GroupSyncManager @Inject constructor(
                 val published = peers.isEmpty() || sentCount > 0
                 if (published) {
                     Timber.i("Sent encrypted group update v${groupDefinition.version} to $sentCount/${peers.size} peers")
-                    _syncState.value = SyncState.Synced(groupDefinition.version)
+                    // Report Synced only after the ack window; until then peers may
+                    // not have applied the update yet.
                     waitForAcknowledgments(groupDefinition.version, groupDefinition.members.size)
+                    _syncState.value = SyncState.Synced(groupDefinition.version)
                 } else {
                     Timber.w("Failed to send encrypted sync to any peers")
                     _syncState.value = SyncState.Error("Failed to broadcast update")
@@ -242,6 +219,11 @@ class GroupSyncManager @Inject constructor(
                 java.util.Collections.synchronizedSet(mutableSetOf())
             }
             set.add(ack.memberId)
+            // Evict buckets for versions well behind the current one so the map
+            // doesn't grow for the life of the process.
+            groupStateManager?.groupDefinition?.value?.version?.let { currentVersion ->
+                versionAcks.keys.removeIf { it < currentVersion - 5 }
+            }
             Timber.d("Received ack for v${ack.version} from ${ack.memberId.take(8)} (${set.size} total)")
         } catch (e: Exception) {
             Timber.w(e, "Failed to parse ack message")
@@ -357,7 +339,10 @@ class GroupSyncManager @Inject constructor(
             try {
                 val manager = groupStateManager ?: return@withContext
 
-                val result = manager.applyVerifiedRemoteGroupState(syncMessage.groupDefinition)
+                val result = manager.applyVerifiedRemoteGroupState(
+                    syncMessage.groupDefinition,
+                    syncMessage.updaterMemberId
+                )
                 if (result is GroupOperationResult.Failure) {
                     Timber.w("Rejected group update v${syncMessage.version}: ${result.error}")
                     _syncState.value = SyncState.Error("Rejected group update: ${result.error}")
@@ -438,9 +423,17 @@ class GroupSyncManager @Inject constructor(
             val manager = groupStateManager ?: return false
             val currentGroup = manager.groupDefinition.value ?: return false
 
+            // The updater's key must come from OUR current roster. Falling back to the
+            // incoming definition's roster would let an attacker validate their own
+            // signature against a key they supplied themselves.
             val updater = currentGroup.members.find { it.memberId == syncMessage.updaterMemberId }
-                ?: syncMessage.groupDefinition.members.find { it.memberId == syncMessage.updaterMemberId }
-                ?: return false
+                ?: run {
+                    Timber.w(
+                        "Sync update signed by ${syncMessage.updaterMemberId.take(8)}, " +
+                            "who is not in our current roster — rejecting"
+                    )
+                    return false
+                }
 
             val payload = createSyncSignaturePayload(syncMessage)
             val signature = syncMessage.signature.hexToByteArray()
@@ -470,7 +463,6 @@ class GroupSyncManager @Inject constructor(
     fun cleanup() {
         scope.cancel()
         versionAcks.clear()
-        conflictQueue.clear()
     }
 
     private fun extractSenderMemberId(encryptedPayload: String): String? {
@@ -525,10 +517,4 @@ enum class ChangeType {
     VERSION_SYNC,
     CONFLICT_RESOLUTION,
     FULL_SYNC
-}
-
-enum class ConflictResolutionStrategy {
-    USE_LOCAL,
-    USE_REMOTE,
-    MERGE
 }

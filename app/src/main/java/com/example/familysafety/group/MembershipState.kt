@@ -8,5 +8,7 @@ sealed class MembershipState {
     ) : MembershipState()
     /** Approval received — show confirmation screen before restarting. */
     data class ApprovalReceived(val familyName: String) : MembershipState()
+    /** The inviter declined the join request — show a notice before returning to onboarding. */
+    data class Rejected(val familyName: String) : MembershipState()
     data object Approved : MembershipState()
 }

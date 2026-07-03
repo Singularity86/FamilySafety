@@ -47,6 +47,7 @@ class MainViewModel @Inject constructor(
     val groupSyncManager: GroupSyncManager,
     private val inviteManager: InviteManager,
     private val localMemberId: LocalMemberId,
+    private val appInitializer: com.example.familysafety.AppInitializer,
     private val avatarRepository: AvatarRepository,
     private val locationPublishOutboxRepository: LocationPublishOutboxRepository,
     private val mqttTransport: MqttTransport,
@@ -438,11 +439,41 @@ class MainViewModel @Inject constructor(
     }
 
     /**
-     * Wipe all local group data and cryptographic keys so the app returns to
+     * Leave the family group: broadcast an authorized self-removal to the other
+     * members (so they stop encrypting to our key and drop us from their rosters),
+     * then wipe all local group data and cryptographic keys so the app returns to
      * the onboarding screen.  The caller is responsible for restarting the
      * process afterwards.
+     *
+     * The broadcast is best effort with a bounded wait — leaving must always
+     * succeed locally even when offline (peers then never learn of the departure
+     * until the group creator removes the stale member manually).
      */
     suspend fun leaveFamily(): Unit = withContext(Dispatchers.IO) {
+        // Our own self-removal emits RemovedFromGroup; stop AppInitializer's
+        // remote-removal handler from firing its notification and competing wipe.
+        appInitializer.suppressRemovalHandling()
+
+        try {
+            val removal = groupStateManager.removeMemberByLocal(localMemberId.value)
+            if (removal is com.example.familysafety.group.GroupOperationResult.Success) {
+                // Peers accept this under the creator-or-self rule in
+                // GroupTransitionValidator. Publishes complete quickly; the timeout
+                // only cuts short the ack-polling that follows them.
+                kotlinx.coroutines.withTimeoutOrNull(5_000) {
+                    groupSyncManager.broadcastGroupUpdate(
+                        removal.value,
+                        com.example.familysafety.sync.ChangeType.MEMBER_REMOVED,
+                        localMemberId.value
+                    )
+                }
+            } else {
+                timber.log.Timber.w("leaveFamily: self-removal not broadcast ($removal) — wiping locally anyway")
+            }
+        } catch (e: Exception) {
+            timber.log.Timber.w(e, "leaveFamily: failed to broadcast departure — wiping locally anyway")
+        }
+
         try {
             EncryptedGroupStatePersistence.getInstance(context).deleteGroupDefinition()
         } catch (_: Exception) {}
@@ -536,17 +567,23 @@ class MainViewModel @Inject constructor(
 
     /**
      * Remove a member from the group and broadcast the change to all remaining members.
-     * Any member can remove any other member (including ghost/failed-invite members).
+     * Authorization (enforced locally in GroupStateManager.removeMember and remotely by
+     * GroupTransitionValidator on every peer): only the group creator may remove others;
+     * any member may remove themselves.
      */
     fun removeMember(memberId: String) {
         viewModelScope.launch {
-            val result = groupStateManager.removeMemberByLocal(memberId)
-            if (result is com.example.familysafety.group.GroupOperationResult.Success) {
-                groupSyncManager.broadcastGroupUpdate(
-                    result.value,
-                    com.example.familysafety.sync.ChangeType.MEMBER_REMOVED,
-                    memberId
-                )
+            when (val result = groupStateManager.removeMemberByLocal(memberId)) {
+                is com.example.familysafety.group.GroupOperationResult.Success -> {
+                    groupSyncManager.broadcastGroupUpdate(
+                        result.value,
+                        com.example.familysafety.sync.ChangeType.MEMBER_REMOVED,
+                        memberId
+                    )
+                }
+                is com.example.familysafety.group.GroupOperationResult.Failure -> {
+                    timber.log.Timber.w("removeMember(${memberId.take(8)}) rejected: ${result.error}")
+                }
             }
         }
     }

@@ -28,6 +28,21 @@ class E2EEManager @Inject constructor(
         val signature: String
     )
 
+    companion object {
+        private val envelopeJson = Json { ignoreUnknownKeys = true }
+
+        /**
+         * Read the plaintext senderMemberId from an encrypted envelope without decrypting.
+         * The value is unauthenticated until decryptMessage verifies the signature against
+         * that sender's keys — treat it as routing metadata only.
+         */
+        fun peekSenderMemberId(encryptedMessageJson: String): String? = try {
+            envelopeJson.decodeFromString<EncryptedMessage>(encryptedMessageJson).senderMemberId
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun encryptMessage(
         plaintext: String,
         recipientMemberId: String,

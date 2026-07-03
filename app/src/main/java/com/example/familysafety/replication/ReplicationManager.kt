@@ -69,9 +69,14 @@ class ReplicationManager @Inject constructor(
     companion object {
         private const val TAG = "ReplicationManager"
         private const val REQUEST_TIMEOUT_MS = 30_000L
-        private const val SYNC_INTERVAL_MS = 5 * 60 * 1000L // 5 minutes
+        /** Cadence of periodic data-availability announcements (driven by AppInitializer). */
+        const val SYNC_INTERVAL_MS = 5 * 60 * 1000L // 5 minutes
+        /** Minimum spacing between full syncs so reconnect flaps don't spam the group. */
+        private const val MIN_FULL_SYNC_INTERVAL_MS = 60_000L
         private const val MAX_ITEMS_PER_REQUEST = 500
     }
+
+    private var lastFullSyncAtMs = 0L
 
     // =========================================================================
     // SYNC INITIATION
@@ -83,6 +88,12 @@ class ReplicationManager @Inject constructor(
      */
     suspend fun requestFullSync() {
         syncMutex.withLock {
+            val now = System.currentTimeMillis()
+            if (now - lastFullSyncAtMs < MIN_FULL_SYNC_INTERVAL_MS) {
+                Timber.d("$TAG: full sync skipped — last ran ${(now - lastFullSyncAtMs) / 1000}s ago")
+                return@withLock
+            }
+
             _syncState.value = SyncState.Syncing
 
             val group = groupStateManager.groupDefinition.value ?: run {
@@ -90,7 +101,12 @@ class ReplicationManager @Inject constructor(
                 return@withLock
             }
 
-            val localMemberId = groupStateManager.localMember.value?.memberId ?: return@withLock
+            val localMemberId = groupStateManager.localMember.value?.memberId ?: run {
+                _syncState.value = SyncState.Idle
+                return@withLock
+            }
+
+            lastFullSyncAtMs = now
 
             Timber.d("$TAG: Starting full sync with ${group.members.size - 1} peers")
             _events.emit(ReplicationEvent.SyncStarted)

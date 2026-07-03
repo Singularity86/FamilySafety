@@ -25,7 +25,7 @@ import java.security.KeyStore
  */
 class AndroidKeyStoreLocalKeyStore(
     private val context: Context
-) : Slip10CryptoProvider.LocalKeyStore {
+) : LocalKeyStore {
 
     companion object {
         private const val PREFS_NAME = "familysafe_keys"

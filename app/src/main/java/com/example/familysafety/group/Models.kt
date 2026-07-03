@@ -62,25 +62,7 @@ data class FamilyMember(
     val addedByMemberId: String? = null,
     val avatarHash: String? = null,
     val colorHue: Float? = null   // 0–359; null = derive from memberId hash
-) {
-    /** MQTT topic for sending messages to this member: SHA-256(ed25519PubKey) */
-
-    val mqttInboxTopic: String by lazy {
-        "inbox/${computeTopicHash(ed25519PublicKey)}"
-    }
-
-    companion object {
-        /**
-         * Computes the unlinkable pseudonym topic from a public key.
-         * Uses full SHA-256 hash to prevent correlation attacks.
-         */
-        fun computeTopicHash(publicKeyHex: String): String {
-            val digest = MessageDigest.getInstance("SHA-256")
-            return digest.digest(publicKeyHex.toByteArray(Charsets.UTF_8))
-                .joinToString("") { "%02x".format(it) }
-        }
-    }
-}
+)
 
 /**
  * Runtime state for a family member (not persisted).
@@ -205,6 +187,9 @@ sealed class GroupError {
     object MemberNotFound : GroupError()
     object InvalidSignature : GroupError()
     object VersionConflict : GroupError()
+
+    /** The update was validly signed, but the signer was not allowed to make this change. */
+    data class UnauthorizedChange(val reason: String) : GroupError()
     object StorageError : GroupError()
     data class CryptoError(val message: String) : GroupError()
     data class NetworkError(val message: String) : GroupError()

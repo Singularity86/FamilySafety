@@ -45,16 +45,6 @@ class SharedFileRepository @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
-    /**
-     * Wire up the MQTT publisher.
-     * Legacy method - no longer used with TransportProvider.
-     */
-    fun setMqttPublisher(
-        publisher: suspend (topic: String, payload: ByteArray, qos: Int, retained: Boolean) -> Boolean
-    ) {
-        // No-op
-    }
-
     private val _uploadProgress = MutableStateFlow<UploadProgress?>(null)
     val uploadProgress: StateFlow<UploadProgress?> = _uploadProgress.asStateFlow()
 

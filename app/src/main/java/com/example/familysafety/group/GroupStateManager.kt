@@ -516,24 +516,29 @@ class GroupStateManager(
                 return@withLock GroupOperationResult.Failure(GroupError.InvalidSignature)
             }
 
-            applyRemoteGroupStateLocked(remoteDefinition)
+            applyRemoteGroupStateLocked(remoteDefinition, senderMemberId)
         }
     }
 
     /**
      * Apply a group definition from a GroupSyncMessage whose envelope signature
      * has already been verified by GroupSyncManager.
+     *
+     * @param updaterMemberId The member whose signature was verified — used to
+     *        authorize the transition (e.g. only the creator may remove others).
      */
     suspend fun applyVerifiedRemoteGroupState(
-        remoteDefinition: GroupDefinition
+        remoteDefinition: GroupDefinition,
+        updaterMemberId: String
     ): GroupOperationResult<GroupDefinition> {
         return stateMutex.withLock {
-            applyRemoteGroupStateLocked(remoteDefinition)
+            applyRemoteGroupStateLocked(remoteDefinition, updaterMemberId)
         }
     }
 
     private suspend fun applyRemoteGroupStateLocked(
-        remoteDefinition: GroupDefinition
+        remoteDefinition: GroupDefinition,
+        updaterMemberId: String
     ): GroupOperationResult<GroupDefinition> {
         val currentGroup = _groupDefinition.value
 
@@ -555,6 +560,17 @@ class GroupStateManager(
                     )
                     return GroupOperationResult.Failure(GroupError.VersionConflict)
                 }
+            }
+
+            // Signature verification proved WHO sent this; now check they were
+            // ALLOWED to make these changes relative to the state we hold.
+            val rejection = GroupTransitionValidator.validate(
+                current = currentGroup,
+                remote = remoteDefinition,
+                updaterMemberId = updaterMemberId
+            )
+            if (rejection != null) {
+                return GroupOperationResult.Failure(GroupError.UnauthorizedChange(rejection))
             }
         }
 

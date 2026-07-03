@@ -58,15 +58,26 @@ class ChatRepository @Inject constructor(
 
     /**
      * Get all conversations with summaries.
+     *
+     * The DAO holds replicated copies of EVERY member's conversations (backup
+     * design), so filter to the ones this user participates in: the group chat
+     * and 1-to-1 threads containing our member ID. Other members' private chats
+     * are backup data, not our conversation list.
      */
     fun observeConversations(): Flow<List<ConversationSummary>> {
-        val localMemberId = groupStateManager.localMember.value?.memberId ?: ""
-
         return chatMessageDao.observeAllConversationIds()
             .map { conversationIds ->
-                conversationIds.mapNotNull { conversationId ->
-                    createConversationSummary(conversationId, localMemberId)
-                }.sortedByDescending { it.lastMessageTimestamp }
+                val localMemberId = groupStateManager.localMember.value?.memberId ?: ""
+                val groupId = groupStateManager.groupDefinition.value?.groupId
+                conversationIds
+                    .filter { conversationId ->
+                        conversationId == groupId ||
+                            conversationId.split(":").contains(localMemberId)
+                    }
+                    .mapNotNull { conversationId ->
+                        createConversationSummary(conversationId, localMemberId)
+                    }
+                    .sortedByDescending { it.lastMessageTimestamp }
             }
     }
 
@@ -96,10 +107,12 @@ class ChatRepository @Inject constructor(
     }
 
     /**
-     * Observe total unread count.
+     * Observe total unread count for conversations this user participates in.
      */
     fun observeTotalUnreadCount(): Flow<Int> {
-        return chatMessageDao.observeTotalUnreadCount()
+        val localMemberId = groupStateManager.localMember.value?.memberId ?: ""
+        val groupId = groupStateManager.groupDefinition.value?.groupId
+        return chatMessageDao.observeTotalUnreadCountFor(localMemberId, groupId)
     }
 
     // =========================================================================
@@ -112,10 +125,24 @@ class ChatRepository @Inject constructor(
     fun setActiveConversation(conversationId: String?) {
         _activeConversationId.value = conversationId
 
-        // Mark messages as read when entering conversation
+        // Mark messages as read when entering conversation, and tell their
+        // senders — this is what moves messages to READ on the other side.
         if (conversationId != null) {
             scope.launch {
+                val unread = chatMessageDao.getUnreadIncoming(conversationId)
                 chatMessageDao.markConversationAsRead(conversationId)
+                sendReadReceipts(unread)
+            }
+        }
+    }
+
+    private suspend fun sendReadReceipts(messages: List<ChatMessageEntity>) {
+        if (messages.isEmpty()) return
+        val group = groupStateManager.groupDefinition.value ?: return
+        messages.groupBy { it.senderId }.forEach { (senderId, senderMessages) ->
+            val sender = group.findMemberById(senderId) ?: return@forEach
+            senderMessages.forEach { message ->
+                sendReceipt(sender, message.messageId, MessageStatus.READ)
             }
         }
     }
@@ -406,8 +433,13 @@ class ChatRepository @Inject constructor(
                 )
             }
 
-            // Send delivery receipt
-            sendDeliveryReceipt(sender, message.messageId)
+            // Confirm receipt — READ if the conversation is open on screen right now,
+            // DELIVERED otherwise (the read receipt then follows via setActiveConversation).
+            sendReceipt(
+                recipient = sender,
+                messageId = message.messageId,
+                status = if (message.isReadLocally) MessageStatus.READ else MessageStatus.DELIVERED
+            )
 
             // Replicate to other family members
             scope.launch {
@@ -419,44 +451,103 @@ class ChatRepository @Inject constructor(
     }
 
     /**
-     * Send delivery receipt to sender.
+     * Send a delivery or read receipt, E2E-encrypted and signed like any other
+     * message — a plaintext receipt would let anyone on the broker rewrite
+     * message statuses.
      */
-    private suspend fun sendDeliveryReceipt(sender: FamilyMember, messageId: String) {
+    private suspend fun sendReceipt(
+        recipient: FamilyMember,
+        messageId: String,
+        status: MessageStatus
+    ) {
         val localMemberId = groupStateManager.localMember.value?.memberId ?: return
 
         try {
             val receipt = DeliveryReceipt(
                 messageId = messageId,
                 recipientId = localMemberId,
-                status = MessageStatus.DELIVERED,
+                status = status,
                 timestamp = System.currentTimeMillis()
             )
 
-            val topic = MqttConfig.getChatReceiptTopic(sender.memberId)
-            val payload = json.encodeToString(receipt).toByteArray()
+            val encrypted = e2eeManager.encryptMessage(
+                plaintext = json.encodeToString(receipt),
+                recipientMemberId = recipient.memberId,
+                recipientX25519PublicKey = hexToByteArray(recipient.x25519PublicKey)
+            )
+
+            val topic = if (status == MessageStatus.READ) {
+                MqttConfig.getChatReadTopic(recipient.memberId)
+            } else {
+                MqttConfig.getChatReceiptTopic(recipient.memberId)
+            }
 
             transportProvider.sendMessage(
-                recipientId = sender.memberId,
+                recipientId = recipient.memberId,
                 topic = topic,
-                payload = payload,
+                payload = encrypted.toByteArray(),
                 qos = MqttConfig.QOS_AT_LEAST_ONCE
             )
         } catch (e: Exception) {
-            Timber.e(e, "$TAG: Failed to send delivery receipt")
+            Timber.e(e, "$TAG: Failed to send $status receipt")
         }
     }
 
     /**
-     * Handle incoming delivery receipt.
+     * Handle an incoming encrypted delivery/read receipt.
+     *
+     * Decryption verifies the sender's signature; the checks after it stop a
+     * valid group member from forging receipts for messages that were never
+     * addressed to them (message IDs are known group-wide via replication).
      */
-    suspend fun handleDeliveryReceipt(receiptJson: String) {
+    suspend fun handleDeliveryReceipt(encryptedPayload: String, senderMemberId: String) {
         try {
+            val sender = groupStateManager.groupDefinition.value?.findMemberById(senderMemberId)
+                ?: run {
+                    Timber.w("$TAG: Receipt from unknown sender ${senderMemberId.take(8)} — ignoring")
+                    return
+                }
+
+            val receiptJson = e2eeManager.decryptMessage(
+                encryptedMessageJson = encryptedPayload,
+                senderX25519PublicKey = hexToByteArray(sender.x25519PublicKey),
+                senderEd25519PublicKey = hexToByteArray(sender.ed25519PublicKey)
+            )
             val receipt = json.decodeFromString<DeliveryReceipt>(receiptJson)
+
+            // Receipts are self-reported: the signer must be the recipient it claims to be.
+            if (receipt.recipientId != senderMemberId) {
+                Timber.w("$TAG: Receipt recipient does not match its signer — ignoring")
+                return
+            }
+            // Receipts may only carry DELIVERED or READ — never FAILED/PENDING/SENT.
+            if (receipt.status != MessageStatus.DELIVERED && receipt.status != MessageStatus.READ) {
+                return
+            }
+
+            val message = chatMessageDao.getMessageById(receipt.messageId) ?: return
+            if (!message.isOutgoing) return
+            // 1-to-1 messages: only the actual recipient may confirm.
+            // Group messages (recipientId == null): any member's receipt counts.
+            if (message.recipientId != null && message.recipientId != senderMemberId) {
+                Timber.w("$TAG: Receipt from non-recipient ${senderMemberId.take(8)} — ignoring")
+                return
+            }
+            // Statuses only move forward (SENT → DELIVERED → READ), never back.
+            if (statusRank(receipt.status) <= statusRank(message.status)) return
+
             chatMessageDao.updateStatus(receipt.messageId, receipt.status)
             Timber.d("$TAG: Updated message ${receipt.messageId} status to ${receipt.status}")
         } catch (e: Exception) {
-            Timber.e(e, "$TAG: Failed to handle delivery receipt")
+            Timber.w(e, "$TAG: Failed to handle delivery receipt")
         }
+    }
+
+    private fun statusRank(status: MessageStatus): Int = when (status) {
+        MessageStatus.READ -> 3
+        MessageStatus.DELIVERED -> 2
+        MessageStatus.SENT -> 1
+        else -> 0
     }
 
     // =========================================================================

@@ -18,7 +18,7 @@ import java.security.SecureRandom
  * - SHA-256 for hashing
  */
 class LazysodiumCryptoProvider(
-    private val keyStore: Slip10CryptoProvider.LocalKeyStore
+    private val keyStore: LocalKeyStore
 ) : CryptoProvider {
 
     private val sodium = LazySodiumAndroid(SodiumAndroid())

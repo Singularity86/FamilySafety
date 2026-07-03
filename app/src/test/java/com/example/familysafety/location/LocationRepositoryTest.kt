@@ -1,7 +1,11 @@
 package com.example.familysafety.location
 
+import com.example.familysafety.geofence.GeofenceMonitor
+import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.storage.LocationHistoryRepository
+import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -15,6 +19,8 @@ import org.junit.Test
 class LocationRepositoryTest {
 
     private lateinit var mockLocationHistoryRepository: LocationHistoryRepository
+    private lateinit var mockGeofenceMonitor: GeofenceMonitor
+    private lateinit var mockGroupStateManager: GroupStateManager
     private lateinit var locationRepo: LocationRepository
 
     private fun makeLocation(
@@ -33,7 +39,14 @@ class LocationRepositoryTest {
     @Before
     fun setup() {
         mockLocationHistoryRepository = mockk(relaxed = true)
-        locationRepo = LocationRepository(mockLocationHistoryRepository)
+        mockGeofenceMonitor = mockk(relaxed = true)
+        mockGroupStateManager = mockk(relaxed = true)
+        every { mockGroupStateManager.groupDefinition } returns MutableStateFlow(null)
+        locationRepo = LocationRepository(
+            mockLocationHistoryRepository,
+            mockGeofenceMonitor,
+            mockGroupStateManager
+        )
     }
 
     // ── Initial state ─────────────────────────────────────────────────────────
@@ -59,13 +72,27 @@ class LocationRepositoryTest {
     }
 
     @Test
-    fun `updateMemberLocation replaces existing entry for same member`() {
-        val loc1 = makeLocation(lat = 1.0)
-        val loc2 = makeLocation(lat = 2.0)
+    fun `updateMemberLocation replaces existing entry with a newer one`() {
+        val loc1 = makeLocation(lat = 1.0, timestamp = 1_700_000_000_000L)
+        val loc2 = makeLocation(lat = 2.0, timestamp = 1_700_000_001_000L)
 
         locationRepo.updateMemberLocation(loc1)
         locationRepo.updateMemberLocation(loc2)
 
+        assertEquals(2.0, locationRepo.memberLocations.value["member_001"]?.latitude ?: 0.0, 0.0001)
+    }
+
+    @Test
+    fun `updateMemberLocation rejects older or equal timestamps (replay guard)`() {
+        val newer = makeLocation(lat = 2.0, timestamp = 1_700_000_001_000L)
+        val replayedOlder = makeLocation(lat = 1.0, timestamp = 1_700_000_000_000L)
+        val sameTimestamp = makeLocation(lat = 3.0, timestamp = 1_700_000_001_000L)
+
+        locationRepo.updateMemberLocation(newer)
+        locationRepo.updateMemberLocation(replayedOlder)
+        locationRepo.updateMemberLocation(sameTimestamp)
+
+        // The pin must stay at the newest position; replays cannot move it back.
         assertEquals(2.0, locationRepo.memberLocations.value["member_001"]?.latitude ?: 0.0, 0.0001)
     }
 

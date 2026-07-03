@@ -59,6 +59,16 @@ class LocationRepository @Inject constructor(
         isReplicated: Boolean = false,
         replicatedFrom: String? = null
     ) {
+        // Replay/out-of-order guard: never move a member's pin backwards in time.
+        // The timestamp is inside the signed+encrypted payload, so a replayed old
+        // ciphertext cannot override a newer position. (Historical backfill goes
+        // through updateMemberLocations, which persists regardless.)
+        val existing = _memberLocations.value[location.memberId]
+        if (existing != null && location.timestamp <= existing.timestamp) {
+            Timber.d("LocationRepository: ignoring stale location for ${location.memberId.take(8)}")
+            return
+        }
+
         // Update in-memory cache immediately
         _memberLocations.value = _memberLocations.value.toMutableMap().apply {
             put(location.memberId, location)

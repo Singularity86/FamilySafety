@@ -87,6 +87,48 @@ class E2EEManagerTest {
         assertEquals(original.nonce, copy.nonce)
     }
 
+    // ── peekSenderMemberId ────────────────────────────────────────────────────
+
+    @Test
+    fun `peekSenderMemberId reads sender from a valid envelope`() {
+        val envelope = json.encodeToString(
+            E2EEManager.EncryptedMessage(
+                senderMemberId = "sender_abc123",
+                nonce = "aabb",
+                ciphertext = "ccdd",
+                signature = "eeff"
+            )
+        )
+
+        assertEquals("sender_abc123", E2EEManager.peekSenderMemberId(envelope))
+    }
+
+    @Test
+    fun `peekSenderMemberId ignores unknown fields`() {
+        val payload = """{"senderMemberId":"m42","nonce":"aa","ciphertext":"bb","signature":"cc","future":"field"}"""
+        assertEquals("m42", E2EEManager.peekSenderMemberId(payload))
+    }
+
+    @Test
+    fun `peekSenderMemberId returns null for malformed JSON`() {
+        assertNull(E2EEManager.peekSenderMemberId("not json at all"))
+        assertNull(E2EEManager.peekSenderMemberId(""))
+    }
+
+    @Test
+    fun `peekSenderMemberId returns null when sender field is missing`() {
+        val payload = """{"nonce":"aa","ciphertext":"bb","signature":"cc"}"""
+        assertNull(E2EEManager.peekSenderMemberId(payload))
+    }
+
+    @Test
+    fun `peekSenderMemberId is not fooled by sender-like text inside other fields`() {
+        // The old regex-based extraction would have matched a senderMemberId string
+        // embedded in the ciphertext field; proper JSON parsing must not.
+        val payload = """{"senderMemberId":"real_sender","nonce":"aa","ciphertext":"{\"senderMemberId\":\"fake_sender\"}","signature":"cc"}"""
+        assertEquals("real_sender", E2EEManager.peekSenderMemberId(payload))
+    }
+
     // ── RecipientKeys ─────────────────────────────────────────────────────────
 
     @Test

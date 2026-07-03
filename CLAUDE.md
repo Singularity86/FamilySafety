@@ -47,10 +47,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Transport
 
-- **`MqttTransport.kt`** — Singleton MQTT client; exponential reconnect backoff; pending message queue (max 100, 1hr expiry); routes incoming messages by topic type (chat, location, presence, replication)
+- **`MqttTransport.kt`** — Singleton MQTT client; exponential reconnect backoff; pending message queue (max 200, 1hr expiry); handles location/presence topics itself, forwards the rest to `UnifiedTransportManager` for routing (chat, receipts, replication, sync, files)
 - **`MessageProtocol.kt`** — JSON encode/decode for `LocationUpdate`, `PresenceUpdate`, `Envelope`
 - **`BrokerConfig.kt`** / **`MqttConfig.kt`** — Broker URL and topic namespace constants
-- Each member's inbox topic: `inbox/SHA-256(ed25519PubKey)` (computed in `FamilyMember.mqttInboxTopic`)
+- Topics are per-recipient inboxes under `familysafe/{memberId}/…` (e.g. `location_inbox`, `chat`, `group_sync`); the sender is identified by the encrypted envelope's `senderMemberId`, verified by signature on decrypt. Presence is plaintext (MQTT last-will can't be encrypted); everything else is E2EE.
 
 ### Sync
 

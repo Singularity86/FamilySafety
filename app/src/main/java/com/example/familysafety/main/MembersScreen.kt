@@ -53,7 +53,11 @@ fun MembersScreen(
     val memberAvatars by viewModel.memberAvatars.collectAsState()
     val memberRouteStatuses by viewModel.memberRouteStatuses.collectAsState()
     val groupName by viewModel.groupName.collectAsState()
+    val groupDefinition by viewModel.groupDefinition.collectAsState()
     val myMemberId = viewModel.myMemberId
+    // Only the creator may remove other members (enforced by GroupStateManager and
+    // by every peer via GroupTransitionValidator) — don't offer a button that fails.
+    val canRemoveOthers = groupDefinition?.creatorMemberId == myMemberId
     val haptic = LocalHapticFeedback.current
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -114,8 +118,12 @@ fun MembersScreen(
                                 viewModel.focusOnMember(member.memberId)
                                 onNavigateToMap()
                             },
+                            onShowDriveEstimate = {
+                                viewModel.requestDriveEstimate(member.memberId)
+                            },
                             onShowHistory = { onNavigateToHistory(member.memberId) },
                             onRemove = { viewModel.removeMember(member.memberId) },
+                            canRemove = canRemoveOthers,
                             colorHue = member.colorHue
                         )
                     }
@@ -259,8 +267,10 @@ private fun MemberCard(
     isMe: Boolean,
     colorHue: Float? = null,
     onShowOnMap: () -> Unit = {},
+    onShowDriveEstimate: () -> Unit = {},
     onShowHistory: () -> Unit = {},
     onRemove: () -> Unit = {},
+    canRemove: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var showDialog by remember { mutableStateOf(false) }
@@ -399,12 +409,18 @@ private fun MemberCard(
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (location != null) {
-                    Icon(
+                if (location != null && !isMe) {
+                    IconButton(
+                        onClick = onShowDriveEstimate,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
                         imageVector = Icons.Default.LocationOn,
-                        contentDescription = "Location available",
+                        contentDescription = "Show drive time to ${member.displayName}",
+                        modifier = Modifier.size(20.dp),
                         tint = MaterialTheme.colorScheme.primary
-                    )
+                        )
+                    }
                 }
                 IconButton(onClick = onShowHistory, modifier = Modifier.size(36.dp)) {
                     Icon(
@@ -414,7 +430,7 @@ private fun MemberCard(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                if (!isMe) {
+                if (!isMe && canRemove) {
                     IconButton(
                         onClick = { showRemoveDialog = true },
                         modifier = Modifier.size(36.dp)

@@ -14,7 +14,6 @@ import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.sync.ChangeType
 import com.example.familysafety.sync.GroupSyncManager
 import com.example.familysafety.transport.MqttConfig
-import com.example.familysafety.transport.MqttTransport
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -72,14 +71,6 @@ class InviteManager @Inject constructor(
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
         }
-    }
-
-    /**
-     * Wire up MqttTransport.
-     * Legacy method - no longer used with TransportProvider.
-     */
-    fun setMqttTransport(transport: MqttTransport) {
-        // No-op
     }
 
     /**
@@ -217,6 +208,16 @@ class InviteManager @Inject constructor(
             val stateManager = groupStateManager
                 ?: return Result.failure(IllegalStateException("No group state manager"))
 
+            // The requester's claimed member ID must be the hash of the key they sent,
+            // otherwise the roster entry would be internally inconsistent (memberId is
+            // used for topic routing while the key is used for crypto).
+            val derivedRequesterId =
+                JoinApprovalValidator.deriveMemberId(request.ed25519PublicKey.toHexString())
+            if (derivedRequesterId != request.requesterId) {
+                Timber.e("InviteManager: join request member ID does not match its key — rejecting")
+                return Result.failure(IllegalArgumentException("Join request ID/key mismatch"))
+            }
+
             val newMember = FamilyMember(
                 memberId = request.requesterId,
                 displayName = request.displayName,
@@ -272,8 +273,21 @@ class InviteManager @Inject constructor(
             if (groupDefForApproval != null) {
                 val approvalTopic = MqttConfig.getJoinApprovalTopic(request.requesterId)
                 val groupDefJson = json.encodeToString(groupDefForApproval)
-                val approvalPayload = groupDefJson.toByteArray(Charsets.UTF_8)
-                Timber.i("InviteManager: publishing approval to $approvalTopic (${groupDefJson.length} bytes, retained=true)")
+                // Encrypt the roster to the joiner's X25519 key and sign with our Ed25519
+                // key (inside encryptMessage). The joiner authenticates our Ed25519 key by
+                // hashing it against the inviterMemberId from the QR invite they scanned —
+                // a plaintext approval on a public broker would let anyone forge a "family".
+                val approval = JoinApprovalMessage(
+                    inviterEd25519PublicKey = cryptoProvider.getLocalEd25519PublicKey(),
+                    inviterX25519PublicKey = cryptoProvider.getLocalX25519PublicKey(),
+                    encryptedGroupDefinition = e2eeManager.encryptMessage(
+                        plaintext = groupDefJson,
+                        recipientMemberId = request.requesterId,
+                        recipientX25519PublicKey = request.x25519PublicKey
+                    )
+                )
+                val approvalPayload = json.encodeToString(approval).toByteArray(Charsets.UTF_8)
+                Timber.i("InviteManager: publishing encrypted approval to $approvalTopic (${approvalPayload.size} bytes, retained=true)")
                 val published = transportProvider.sendMessage(
                     recipientId = request.requesterId,
                     topic = approvalTopic,
@@ -312,7 +326,8 @@ class InviteManager @Inject constructor(
     }
 
     /**
-     * Rejects a pending join request.
+     * Rejects a pending join request and notifies the joiner, so they don't wait
+     * on the pending screen (re-publishing their request every 30 s) forever.
      */
     suspend fun rejectJoinRequest(request: JoinRequest): Result<Unit> {
         return try {
@@ -333,6 +348,40 @@ class InviteManager @Inject constructor(
                     retained = true
                 )
             }
+
+            // Tell the joiner. Encrypted + signed like the approval; retained so an
+            // offline joiner still learns on reconnect. Best effort — local rejection
+            // state is already cleared either way.
+            try {
+                val rejectionPayload = json.encodeToString(
+                    JoinRejectionPayload(
+                        requestId = request.requestId,
+                        joinerMemberId = request.requesterId,
+                        timestamp = System.currentTimeMillis()
+                    )
+                )
+                val rejection = JoinRejectionMessage(
+                    inviterEd25519PublicKey = cryptoProvider.getLocalEd25519PublicKey(),
+                    inviterX25519PublicKey = cryptoProvider.getLocalX25519PublicKey(),
+                    encryptedRejection = e2eeManager.encryptMessage(
+                        plaintext = rejectionPayload,
+                        recipientMemberId = request.requesterId,
+                        recipientX25519PublicKey = request.x25519PublicKey
+                    )
+                )
+                transportProvider.sendMessage(
+                    recipientId = request.requesterId,
+                    topic = MqttConfig.getJoinApprovalTopic(request.requesterId),
+                    payload = json.encodeToString(rejection).toByteArray(Charsets.UTF_8),
+                    qos = MqttConfig.DEFAULT_QOS,
+                    retained = true
+                )
+                // The requester never became a member — drop their cached shared secret.
+                e2eeManager.removeSharedSecret(request.requesterId)
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to notify joiner of rejection")
+            }
+
             Timber.i("Rejected join request from ${request.displayName}")
             Result.success(Unit)
         } catch (e: Exception) {

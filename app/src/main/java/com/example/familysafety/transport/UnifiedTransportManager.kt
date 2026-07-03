@@ -146,14 +146,19 @@ class UnifiedTransportManager @Inject constructor(
                 // Route based on topic structure (Extracted from legacy MqttTransport)
                 when {
                     topic.endsWith("/chat") -> {
-                        val senderId = extractSenderFromTopic(topic) ?: extractSenderFromEncryptedEnvelope(payload)
+                        // The chat topic names the RECIPIENT (our own inbox), so the sender
+                        // can only come from the encrypted envelope metadata.
+                        val senderId = extractSenderFromEncryptedEnvelope(payload)
                         if (senderId != null) {
                             chatRepositoryProvider.get().handleIncomingMessage(payload, senderId)
                         }
                     }
 
                     topic.endsWith("/chat/receipt") || topic.endsWith("/chat/read") -> {
-                        chatRepositoryProvider.get().handleDeliveryReceipt(payload)
+                        val senderId = extractSenderFromEncryptedEnvelope(payload)
+                        if (senderId != null) {
+                            chatRepositoryProvider.get().handleDeliveryReceipt(payload, senderId)
+                        }
                     }
 
                     topic.endsWith("/replication/request") -> {
@@ -193,8 +198,12 @@ class UnifiedTransportManager @Inject constructor(
                         groupSyncManagerProvider.get().handleSyncRequestMessage(payload)
                     }
 
+                    topic.endsWith("/location_inbox") -> {
+                        mqttTransport.handleLocationInbox(payload)
+                    }
+
                     topic.endsWith("/location") -> {
-                        // Forward to specialized handler (can be kept in UnifiedTransport or moved)
+                        // Legacy sender-keyed topic (older peers). Forward to specialized handler.
                         handleEncryptedLocation(topic, payload)
                     }
 
@@ -228,17 +237,8 @@ class UnifiedTransportManager @Inject constructor(
         mqttTransport.handleLocationOrPresencePublic(topic, encryptedPayload)
     }
 
-    private fun extractSenderFromTopic(topic: String): String? {
-        val parts = topic.split("/")
-        return if (parts.size >= 2 && parts[0] == "familysafe") parts[1] else null
-    }
-
-    private fun extractSenderFromEncryptedEnvelope(payload: String): String? {
-        return try {
-            val regex = """"senderMemberId"\s*:\s*"([^"]+)"""".toRegex()
-            regex.find(payload)?.groupValues?.getOrNull(1)
-        } catch (e: Exception) { null }
-    }
+    private fun extractSenderFromEncryptedEnvelope(payload: String): String? =
+        com.example.familysafety.crypto.E2EEManager.peekSenderMemberId(payload)
 
     private fun extractSenderFromAnnounceTopic(payload: String): String? {
         return try {

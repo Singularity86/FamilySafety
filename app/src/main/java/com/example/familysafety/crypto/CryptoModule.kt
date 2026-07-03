@@ -3,7 +3,7 @@ package com.example.familysafety.crypto
 import android.content.Context
 import com.example.familysafety.group.AndroidKeyStoreLocalKeyStore
 import com.example.familysafety.group.LazysodiumCryptoProvider
-import com.example.familysafety.group.Slip10CryptoProvider
+import com.example.familysafety.group.LocalKeyStore
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -19,14 +19,14 @@ object CryptoModule {
     @Singleton
     fun provideLocalKeyStore(
         @ApplicationContext context: Context
-    ): Slip10CryptoProvider.LocalKeyStore {
+    ): LocalKeyStore {
         return AndroidKeyStoreLocalKeyStore(context)
     }
 
     @Provides
     @Singleton
     fun provideLazysodiumCryptoProvider(
-        keyStore: Slip10CryptoProvider.LocalKeyStore
+        keyStore: LocalKeyStore
     ): LazysodiumCryptoProvider {
         return LazysodiumCryptoProvider(keyStore)
     }

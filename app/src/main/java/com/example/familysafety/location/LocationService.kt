@@ -73,9 +73,6 @@ class LocationService : Service() {
     // trusting the speed signal. Prevents flicker at traffic lights / brief stops.
     private var consecutiveStillCount = 0
 
-    // Last reported movement state so we only call notifyMovementState on changes
-    private var lastReportedMoving: Boolean? = null
-
     private var activityMonitoringJob: Job? = null
     private var vehicleMonitoringJob: Job? = null
     private var reconnectObserverJob: Job? = null
@@ -438,20 +435,6 @@ class LocationService : Service() {
                 requestLocationUpdates()
             }
         }
-        if (isMoving != lastReportedMoving) {
-            lastReportedMoving = isMoving
-            
-            scope.launch {
-                try {
-                    val id = memberId ?: return@launch
-                    val topic = MqttConfig.getMovementTopic(id)
-                    val payload = if (isMoving) "moving" else "stationary"
-                    transportProvider.broadcastMessage(topic, payload.toByteArray(), MqttConfig.QOS_AT_MOST_ONCE, true)
-                } catch (e: Exception) {
-                    Timber.e(e, "Failed to broadcast movement state")
-                }
-            }
-        }
     }
 
     private fun handleLocationUpdate(location: Location) {
@@ -523,8 +506,6 @@ class LocationService : Service() {
             Timber.w("LocationService: no member id available for location publish")
             return false
         }
-        // Publish to OUR OWN sender topic — peers subscribe to getLocationTopic(sender).
-        val topic = MqttConfig.getLocationTopic(myId)
         val peers = group.members.filter { it.memberId != myId }
         if (peers.isEmpty()) {
             Timber.d("LocationService: no peer recipients for location publish")
@@ -532,6 +513,9 @@ class LocationService : Service() {
         }
         var anySucceeded = false
 
+        // One ciphertext per recipient, published to THAT recipient's location inbox.
+        // (Publishing all per-recipient ciphertexts to a shared topic made every peer
+        // receive N copies it couldn't decrypt, logging spurious decrypt failures.)
         peers.forEach { peer ->
                 try {
                     val encryptedPayload = e2eeManager.encryptMessage(
@@ -539,8 +523,9 @@ class LocationService : Service() {
                         recipientMemberId = peer.memberId,
                         recipientX25519PublicKey = peer.x25519PublicKey.hexToByteArray()
                     )
-                    transportProvider.broadcastMessage(
-                        topic = topic,
+                    transportProvider.sendMessage(
+                        recipientId = peer.memberId,
+                        topic = MqttConfig.getLocationInboxTopic(peer.memberId),
                         payload = encryptedPayload.toByteArray(),
                         qos = MqttConfig.QOS_AT_LEAST_ONCE,
                         retained = false

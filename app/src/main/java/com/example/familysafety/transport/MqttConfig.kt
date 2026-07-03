@@ -10,8 +10,7 @@ object MqttConfig {
     
     const val DEFAULT_QOS = QOS_AT_LEAST_ONCE
     
-    const val KEEP_ALIVE_MOVING = 30      // seconds — short enough to survive typical NAT idle timeouts
-    const val KEEP_ALIVE_STATIONARY = 300 // 5 min — device is still (saves broker pings)
+    const val KEEP_ALIVE_SECONDS = 30 // short enough to survive typical NAT idle timeouts
     const val CONNECTION_TIMEOUT = 30
     const val RECONNECT_DELAY_MS = 5000L
     
@@ -19,22 +18,29 @@ object MqttConfig {
         return "familysafe_${memberId}"
     }
     
+    /**
+     * Legacy shared location topic keyed by SENDER. Deprecated for publishing:
+     * every subscriber received all per-recipient ciphertexts and could only
+     * decrypt its own, producing spurious decrypt failures. Still subscribed
+     * so peers running older builds keep working.
+     */
     fun getLocationTopic(memberId: String): String {
         return "familysafe/$memberId/location"
+    }
+
+    /**
+     * Per-recipient location inbox keyed by RECIPIENT. Each member subscribes to
+     * their own inbox; senders publish one ciphertext per recipient here. The
+     * sender is identified by the envelope's senderMemberId, not the topic.
+     */
+    fun getLocationInboxTopic(memberId: String): String {
+        return "familysafe/$memberId/location_inbox"
     }
     
     fun getPresenceTopic(memberId: String): String {
         return "familysafe/$memberId/presence"
     }
 
-    fun getMovementTopic(memberId: String): String {
-        return "familysafe/$memberId/movement"
-    }
-
-    fun getGroupSyncTopic(groupId: String): String {
-        return "familysafe/group/$groupId/sync"
-    }
-    
     fun getGroupAckTopic(groupId: String): String {
         return "familysafe/group/$groupId/ack"
     }
@@ -49,10 +55,6 @@ object MqttConfig {
     
     fun getJoinRequestTopic(inviterMemberId: String): String {
         return "familysafe/$inviterMemberId/join_request"
-    }
-    
-    fun getJoinResponseTopic(inviterMemberId: String, requestId: String): String {
-        return "familysafe/$inviterMemberId/join_response/$requestId"
     }
 
     /**
@@ -81,18 +83,6 @@ object MqttConfig {
      */
     fun getReplicationDataTopic(memberId: String): String {
         return "familysafe/$memberId/replication/data"
-    }
-
-    /**
-     * Topic for broadcasting data availability to all group members.
-     * "I have data for memberX from timestamp Y to Z"
-     *
-     * Legacy plaintext topic, retained for backward compatibility with older
-     * peers but no longer used for new announcements (which go per-peer to
-     * [getReplicationAnnounceInboxTopic] so they can be E2E-encrypted).
-     */
-    fun getReplicationAnnounceTopic(groupId: String): String {
-        return "familysafe/group/$groupId/replication/announce"
     }
 
     /**

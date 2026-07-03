@@ -7,7 +7,9 @@ import com.example.familysafety.core.SecurityEventRepository
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.crypto.RecipientKeys
 import com.example.familysafety.group.FamilyMember
+import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.group.LazysodiumCryptoProvider
+import com.example.familysafety.group.PresenceStatus
 import com.example.familysafety.location.LocationRepository
 import com.example.familysafety.location.MemberLocation
 import com.example.familysafety.sync.GroupSyncManager
@@ -29,7 +31,8 @@ class MqttTransport @Inject constructor(
     private val locationRepository: LocationRepository,
     private val e2eeManager: E2EEManager,
     private val cryptoProvider: LazysodiumCryptoProvider,
-    private val networkMonitor: NetworkMonitor
+    private val networkMonitor: NetworkMonitor,
+    private val groupStateManager: GroupStateManager
 ) {
     private var mqttClient: MqttAsyncClient? = null
     private var memberId: String? = null
@@ -47,7 +50,6 @@ class MqttTransport @Inject constructor(
 
     private val pendingMessages = ConcurrentLinkedQueue<PendingMessage>()
     private var familyMemberKeys = mutableMapOf<String, RecipientKeys>()
-    private var currentKeepAlive = MqttConfig.KEEP_ALIVE_MOVING
     private var networkObserverJob: Job? = null
 
     // Setter-injected to avoid circular dependency: MqttTransport ← TransportProvider ← GroupSyncManager
@@ -107,7 +109,7 @@ class MqttTransport @Inject constructor(
                     isCleanSession = false
                     isAutomaticReconnect = false  // we handle reconnect via scheduleReconnect()
                     connectionTimeout = MqttConfig.CONNECTION_TIMEOUT
-                    keepAliveInterval = currentKeepAlive
+                    keepAliveInterval = MqttConfig.KEEP_ALIVE_SECONDS
                     
                     // Set offline will so peers know if we drop off abruptly
                     val willJson = MessageProtocol.encodePresenceUpdate(memberIdParam, false)
@@ -179,11 +181,12 @@ class MqttTransport @Inject constructor(
                     val topicStr = topic ?: ""
                     val payloadStr = String(it.payload)
                     scope.launch {
-                        // Location and presence are decrypted here — e2eeManager + familyMemberKeys live here
-                        if (topicStr.endsWith("/location") || topicStr.endsWith("/presence")) {
-                            handleLocationOrPresence(topicStr, payloadStr)
-                        } else {
-                            onMessageReceived?.invoke(topicStr, payloadStr)
+                        // Location and presence are handled here — e2eeManager + familyMemberKeys live here
+                        when {
+                            topicStr.endsWith("/location_inbox") -> handleLocationInbox(payloadStr)
+                            topicStr.endsWith("/location") || topicStr.endsWith("/presence") ->
+                                handleLocationOrPresence(topicStr, payloadStr)
+                            else -> onMessageReceived?.invoke(topicStr, payloadStr)
                         }
                     }
                 }
@@ -204,6 +207,10 @@ class MqttTransport @Inject constructor(
 
         // Chat inbox
         topics.add(MqttConfig.getChatTopic(id))
+        qosLevels.add(MqttConfig.DEFAULT_QOS)
+
+        // Per-recipient encrypted location inbox
+        topics.add(MqttConfig.getLocationInboxTopic(id))
         qosLevels.add(MqttConfig.DEFAULT_QOS)
 
         // Chat receipts/read receipts
@@ -264,13 +271,14 @@ class MqttTransport @Inject constructor(
 
     private suspend fun subscribeToMember(otherMemberId: String) {
         withContext(Dispatchers.IO) {
+            // Legacy location topic kept so peers on older builds still work;
+            // new builds publish to our location_inbox instead.
             val locationTopic = MqttConfig.getLocationTopic(otherMemberId)
             val presenceTopic = MqttConfig.getPresenceTopic(otherMemberId)
-            val movementTopic = MqttConfig.getMovementTopic(otherMemberId)
-            
+
             mqttClient?.subscribe(
-                arrayOf(locationTopic, presenceTopic, movementTopic),
-                intArrayOf(MqttConfig.DEFAULT_QOS, MqttConfig.DEFAULT_QOS, MqttConfig.DEFAULT_QOS),
+                arrayOf(locationTopic, presenceTopic),
+                intArrayOf(MqttConfig.DEFAULT_QOS, MqttConfig.DEFAULT_QOS),
                 null,
                 object : IMqttActionListener {
                     override fun onSuccess(asyncActionToken: IMqttToken?) {
@@ -420,8 +428,62 @@ class MqttTransport @Inject constructor(
     suspend fun handleLocationOrPresencePublic(topic: String, encryptedPayload: String) =
         handleLocationOrPresence(topic, encryptedPayload)
 
-    private suspend fun handleLocationOrPresence(topic: String, encryptedPayload: String) {
+    private suspend fun handleLocationOrPresence(topic: String, payload: String) {
+        if (topic.endsWith("/presence")) {
+            handlePresence(topic, payload)
+            return
+        }
+        // Legacy shared location topic: the sender is named in the topic path.
         val senderId = topic.split("/").getOrNull(1) ?: return
+        handleEncryptedLocation(senderId, payload)
+    }
+
+    /**
+     * Presence is plaintext by design: the MQTT last-will message is published by the
+     * broker on our behalf when we drop, so it cannot be encrypted per-recipient.
+     * The topic path names the sender; the payload must agree with it.
+     */
+    private suspend fun handlePresence(topic: String, payload: String) {
+        val senderId = topic.split("/").getOrNull(1) ?: return
+        if (senderId == memberId) return
+        if (!familyMemberKeys.containsKey(senderId)) return
+
+        val presenceUpdate = try {
+            val envelope = MessageProtocol.decodeEnvelope(payload)
+            if (envelope.type != "presence_update") return
+            MessageProtocol.decodePresenceUpdate(envelope.payload)
+        } catch (e: Exception) {
+            Timber.w("$TAG: Failed to decode presence from $senderId: ${e.message}")
+            return
+        }
+        // Presence is unauthenticated — ignore payloads claiming to be someone else.
+        if (presenceUpdate.memberId != senderId) {
+            Timber.w("$TAG: Presence payload sender mismatch on $topic — ignoring")
+            return
+        }
+
+        Timber.d("$TAG: $senderId is ${if (presenceUpdate.isOnline) "online" else "offline"}")
+        groupStateManager.updatePresenceStatus(
+            memberId = senderId,
+            newStatus = if (presenceUpdate.isOnline) PresenceStatus.ACTIVE else PresenceStatus.OFFLINE
+        )
+    }
+
+    /**
+     * Per-recipient location inbox: the topic names US (the recipient), so the sender
+     * comes from the envelope metadata and is authenticated by signature verification
+     * inside decryptMessage.
+     */
+    suspend fun handleLocationInbox(encryptedPayload: String) {
+        val senderId = E2EEManager.peekSenderMemberId(encryptedPayload) ?: run {
+            Timber.w("$TAG: Location inbox message without sender metadata — ignoring")
+            return
+        }
+        if (senderId == memberId) return
+        handleEncryptedLocation(senderId, encryptedPayload)
+    }
+
+    private suspend fun handleEncryptedLocation(senderId: String, encryptedPayload: String) {
         val senderKeys = familyMemberKeys[senderId] ?: return
 
         val decryptResult = ErrorHandler.withRetry(maxAttempts = 2, initialDelayMs = 100) {
@@ -455,20 +517,14 @@ class MqttTransport @Inject constructor(
             Timber.w("$TAG: Failed to decode envelope from $senderId: ${e.message}")
             return
         }
-        when (envelope.type) {
-            "location_update" -> {
-                val locationUpdate = MessageProtocol.decodeLocationUpdate(envelope.payload)
-                val memberLocation = MessageProtocol.locationUpdateToMemberLocation(locationUpdate)
-                if (DataValidator.validateLocation(memberLocation) !is ValidationResult.Valid) {
-                    Timber.w("$TAG: Rejected invalid location from $senderId")
-                    return
-                }
-                locationRepository.updateMemberLocation(memberLocation)
+        if (envelope.type == "location_update") {
+            val locationUpdate = MessageProtocol.decodeLocationUpdate(envelope.payload)
+            val memberLocation = MessageProtocol.locationUpdateToMemberLocation(locationUpdate)
+            if (DataValidator.validateLocation(memberLocation) !is ValidationResult.Valid) {
+                Timber.w("$TAG: Rejected invalid location from $senderId")
+                return
             }
-            "presence_update" -> {
-                val presenceUpdate = MessageProtocol.decodePresenceUpdate(envelope.payload)
-                Timber.d("$TAG: ${presenceUpdate.memberId} is ${if (presenceUpdate.isOnline) "online" else "offline"}")
-            }
+            locationRepository.updateMemberLocation(memberLocation)
         }
     }
 

@@ -82,46 +82,6 @@ class ModelsTest {
         assertNotEquals(group1.computeStateHash(), group2.computeStateHash())
     }
 
-    // ── computeTopicHash ────────────────────────────────────────
-
-    @Test
-    fun `computeTopicHash is deterministic`() {
-        val key = "abcdef1234567890".repeat(4)
-        assertEquals(
-            FamilyMember.computeTopicHash(key),
-            FamilyMember.computeTopicHash(key)
-        )
-    }
-
-    @Test
-    fun `computeTopicHash returns 64 hex characters`() {
-        val hash = FamilyMember.computeTopicHash("somekey")
-        assertEquals(64, hash.length)
-        assertTrue(hash.matches(Regex("^[0-9a-f]{64}$")))
-    }
-
-    @Test
-    fun `computeTopicHash different keys produce different hashes`() {
-        val hash1 = FamilyMember.computeTopicHash("a".repeat(64))
-        val hash2 = FamilyMember.computeTopicHash("b".repeat(64))
-        assertNotEquals(hash1, hash2)
-    }
-
-    // ── mqttInboxTopic ──────────────────────────────────────────
-
-    @Test
-    fun `mqttInboxTopic has correct prefix`() {
-        val member = createMember()
-        assertTrue(member.mqttInboxTopic.startsWith("inbox/"))
-    }
-
-    @Test
-    fun `mqttInboxTopic uses computeTopicHash of ed25519 key`() {
-        val member = createMember()
-        val expectedHash = FamilyMember.computeTopicHash(member.ed25519PublicKey)
-        assertEquals("inbox/$expectedHash", member.mqttInboxTopic)
-    }
-
     // ── findMemberById / containsMember ─────────────────────────
 
     @Test
