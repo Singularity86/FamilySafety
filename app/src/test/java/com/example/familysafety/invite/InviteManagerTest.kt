@@ -1,12 +1,20 @@
 package com.example.familysafety.invite
 
+import android.app.NotificationManager
+import android.content.Context
+import android.content.SharedPreferences
+import androidx.core.app.NotificationManagerCompat
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.group.GroupDefinition
 import com.example.familysafety.group.FamilyMember
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.group.LazysodiumCryptoProvider
+import com.example.familysafety.sync.GroupSyncManager
+import com.example.familysafety.transport.TransportProvider
+import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
@@ -17,6 +25,11 @@ class InviteManagerTest {
 
     private lateinit var mockCryptoProvider: LazysodiumCryptoProvider
     private lateinit var mockE2EEManager: E2EEManager
+    private lateinit var mockTransportProvider: TransportProvider
+    private lateinit var mockContext: Context
+    private lateinit var mockNotificationManagerCompat: NotificationManagerCompat
+    private lateinit var mockSharedPreferences: SharedPreferences
+    private lateinit var mockSharedPreferencesEditor: SharedPreferences.Editor
     private lateinit var inviteManager: InviteManager
 
     private fun makeRequest(id: String = "req_001") = JoinRequest(
@@ -33,7 +46,37 @@ class InviteManagerTest {
     fun setup() {
         mockCryptoProvider = mockk(relaxed = true)
         mockE2EEManager = mockk(relaxed = true)
-        inviteManager = InviteManager(mockCryptoProvider, mockE2EEManager)
+        mockTransportProvider = mockk(relaxed = true)
+        mockContext = mockk(relaxed = true)
+        mockNotificationManagerCompat = mockk(relaxed = true)
+        mockSharedPreferences = mockk(relaxed = true)
+        mockSharedPreferencesEditor = mockk(relaxed = true)
+        mockkStatic(NotificationManagerCompat::class)
+
+        every {
+            mockContext.getSystemService(Context.NOTIFICATION_SERVICE)
+        } returns mockk<NotificationManager>(relaxed = true)
+        every { NotificationManagerCompat.from(mockContext) } returns mockNotificationManagerCompat
+        every { mockContext.getSharedPreferences(any(), any()) } returns mockSharedPreferences
+        every { mockSharedPreferences.getStringSet(any(), any()) } returns emptySet()
+        every { mockSharedPreferences.edit() } returns mockSharedPreferencesEditor
+        every {
+            mockSharedPreferencesEditor.putStringSet(any(), any())
+        } returns mockSharedPreferencesEditor
+        every { mockSharedPreferencesEditor.apply() } returns Unit
+        coEvery {
+            mockTransportProvider.broadcastMessage(any(), any(), any(), any())
+        } returns true
+        coEvery {
+            mockTransportProvider.sendMessage(any(), any(), any(), any(), any())
+        } returns true
+
+        inviteManager = InviteManager(
+            context = mockContext,
+            cryptoProvider = mockCryptoProvider,
+            e2eeManager = mockE2EEManager,
+            transportProvider = mockTransportProvider
+        )
     }
 
     // ── pendingJoinRequests ──────────────────────────────────────
@@ -155,13 +198,10 @@ class InviteManagerTest {
     private fun injectGroupStateManager(groupDef: GroupDefinition) {
         val mockGSM = mockk<GroupStateManager>(relaxed = true)
         every { mockGSM.groupDefinition } returns MutableStateFlow(groupDef)
-
-        val field = InviteManager::class.java.getDeclaredField("groupStateManager")
-        field.isAccessible = true
-        field.set(inviteManager, mockGSM)
-
-        val memberIdField = InviteManager::class.java.getDeclaredField("currentMemberId")
-        memberIdField.isAccessible = true
-        memberIdField.set(inviteManager, "member_001")
+        inviteManager.initialize(
+            memberId = "member_001",
+            groupStateManager = mockGSM,
+            groupSyncManager = mockk<GroupSyncManager>(relaxed = true)
+        )
     }
 }

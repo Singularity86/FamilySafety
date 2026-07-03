@@ -10,6 +10,8 @@ import com.example.familysafety.storage.ChatMessageEntity
 import com.example.familysafety.storage.LocationHistoryRepository
 import com.example.familysafety.storage.MessageStatus
 import com.example.familysafety.storage.MessageType
+import com.example.familysafety.transport.TransportProvider
+import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +30,7 @@ class ReplicationManagerTest {
     private lateinit var mockLocationHistoryRepository: LocationHistoryRepository
     private lateinit var mockChatMessageDao: ChatMessageDao
     private lateinit var mockE2EEManager: E2EEManager
+    private lateinit var mockTransportProvider: TransportProvider
     private lateinit var replicationManager: ReplicationManager
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -39,17 +42,22 @@ class ReplicationManagerTest {
         mockLocationHistoryRepository = mockk(relaxed = true)
         mockChatMessageDao = mockk(relaxed = true)
         mockE2EEManager = mockk(relaxed = true)
+        mockTransportProvider = mockk(relaxed = true)
 
         // No group by default
         every { mockGroupStateManager.groupDefinition } returns MutableStateFlow(null)
         every { mockGroupStateManager.localMember } returns MutableStateFlow(null)
+        coEvery {
+            mockTransportProvider.sendMessage(any(), any(), any(), any(), any())
+        } returns true
 
         replicationManager = ReplicationManager(
             mockGroupStateManager,
             mockLocationRepository,
             mockLocationHistoryRepository,
             mockChatMessageDao,
-            mockE2EEManager
+            mockE2EEManager,
+            mockTransportProvider
         )
     }
 
@@ -61,11 +69,6 @@ class ReplicationManagerTest {
     }
 
     // ── setMqttPublisher ──────────────────────────────────────────────────────
-
-    @Test
-    fun `setMqttPublisher does not throw`() {
-        replicationManager.setMqttPublisher { _, _, _ -> true }
-    }
 
     // ── requestFullSync ───────────────────────────────────────────────────────
 

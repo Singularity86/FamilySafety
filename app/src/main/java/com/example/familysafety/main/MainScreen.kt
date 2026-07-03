@@ -104,6 +104,7 @@ fun MainScreen(
     onReplayTutorial: () -> Unit = {},
     navigateTo: String? = null
 ) {
+    val driveEstimateState by viewModel.driveEstimateState.collectAsState()
     val navController = rememberNavController()
 
     NavHost(
@@ -170,6 +171,16 @@ fun MainScreen(
                     }
                 }
             }
+
+            DriveEstimateDialog(
+                state = driveEstimateState,
+                onDismiss = viewModel::dismissDriveEstimate,
+                onShowOnMap = { memberId ->
+                    viewModel.dismissDriveEstimate()
+                    viewModel.focusOnMember(memberId)
+                    navigatePagerTo(0)
+                }
+            )
 
             // When opened from a notification, map route string to pager page.
             LaunchedEffect(navigateTo) {

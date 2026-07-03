@@ -323,6 +323,10 @@ fun MapScreen(
                 snippet = "Updated ${getTimeAgo(location.timestamp)} · ±${location.accuracy.toInt()}m"
                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                 icon = BitmapDrawable(context.resources, bmp)
+                setOnMarkerClickListener { _, _ ->
+                    viewModel.requestDriveEstimate(memberId)
+                    true
+                }
             }
             mapView.overlays.add(marker)
         }

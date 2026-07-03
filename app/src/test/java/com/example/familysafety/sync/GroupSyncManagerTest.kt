@@ -4,6 +4,7 @@ import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.group.FamilyMember
 import com.example.familysafety.group.GroupDefinition
 import com.example.familysafety.group.LazysodiumCryptoProvider
+import com.example.familysafety.transport.TransportProvider
 import io.mockk.mockk
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
@@ -16,6 +17,7 @@ class GroupSyncManagerTest {
 
     private lateinit var mockE2EEManager: E2EEManager
     private lateinit var mockCryptoProvider: LazysodiumCryptoProvider
+    private lateinit var mockTransportProvider: TransportProvider
     private lateinit var syncManager: GroupSyncManager
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -24,7 +26,8 @@ class GroupSyncManagerTest {
     fun setup() {
         mockE2EEManager = mockk(relaxed = true)
         mockCryptoProvider = mockk(relaxed = true)
-        syncManager = GroupSyncManager(mockE2EEManager, mockCryptoProvider)
+        mockTransportProvider = mockk(relaxed = true)
+        syncManager = GroupSyncManager(mockE2EEManager, mockCryptoProvider, mockTransportProvider)
     }
 
     // ── Initial state ────────────────────────────────────────────
