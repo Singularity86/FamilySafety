@@ -18,3 +18,6 @@ bugreport_extracted/
 *.log
 "Context from Claude.txt"
 .kotlin/
+
+# Play upload keystore - NEVER commit; back up outside the repo
+keystore/

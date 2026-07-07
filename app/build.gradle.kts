@@ -1,3 +1,6 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -8,12 +11,34 @@ plugins {
 
 }
 
+// Upload-key signing for Play. keystore/keystore.properties and the .jks are
+// gitignored — back both up outside the repo; losing the upload key means a
+// support ticket with Google to rotate it.
+val keystoreProperties = Properties().apply {
+    val propsFile = rootProject.file("keystore/keystore.properties")
+    if (propsFile.exists()) load(FileInputStream(propsFile))
+}
+
+// Optional broker credentials, kept out of git (keystore/ is ignored).
+// Create keystore/mqtt.properties with:
+//   username=...
+//   password=...
+// Absent file → anonymous connection (current dev behavior on public HiveMQ).
+// Avoid double quotes and backslashes in the password.
+val mqttProperties = Properties().apply {
+    val propsFile = rootProject.file("keystore/mqtt.properties")
+    if (propsFile.exists()) load(FileInputStream(propsFile))
+}
+
 android {
+    // namespace stays com.example.* on purpose: it only scopes source code and R,
+    // is never seen by Play, and changing it would mean moving every package.
     namespace = "com.example.familysafety"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.familysafety"
+        // Play identity — permanent once published. Must never be com.example.*.
+        applicationId = "jibaro.spacepirate.love"
         minSdk = 26
         targetSdk = 35
         versionCode = 11
@@ -32,9 +57,22 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            if (keystoreProperties.isNotEmpty()) {
+                storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         debug {
             buildConfigField("String", "MQTT_ENVIRONMENT", "\"DEVELOPMENT\"")
+            buildConfigField("String", "MQTT_USERNAME", "\"${mqttProperties.getProperty("username", "")}\"")
+            buildConfigField("String", "MQTT_PASSWORD", "\"${mqttProperties.getProperty("password", "")}\"")
         }
         release {
             isMinifyEnabled = false
@@ -43,6 +81,13 @@ android {
                 "proguard-rules.pro"
             )
             buildConfigField("String", "MQTT_ENVIRONMENT", "\"PRODUCTION\"")
+            buildConfigField("String", "MQTT_USERNAME", "\"${mqttProperties.getProperty("username", "")}\"")
+            buildConfigField("String", "MQTT_PASSWORD", "\"${mqttProperties.getProperty("password", "")}\"")
+            // Unsigned release builds still work when the keystore is absent
+            // (e.g. a fresh clone); Play uploads require the keystore.
+            signingConfig = if (keystoreProperties.isNotEmpty()) {
+                signingConfigs.getByName("release")
+            } else null
         }
     }
     compileOptions {

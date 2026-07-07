@@ -324,6 +324,11 @@ class MembershipViewModel @Inject constructor(
                     connectionTimeout = 30
                     keepAliveInterval = 30
                     isAutomaticReconnect = true
+
+                    // Broker authentication (absent = anonymous)
+                    val broker = com.example.familysafety.transport.BrokerConfig.getCurrentBroker()
+                    broker.username?.let { userName = it }
+                    broker.password?.let { password = it.toCharArray() }
                 }
                 mqttClient.connect(options).waitForCompletion(30_000)
 

@@ -11,28 +11,39 @@ object BrokerConfig {
     private var currentEnvironment: Environment = runCatching {
         Environment.valueOf(com.example.familysafety.BuildConfig.MQTT_ENVIRONMENT)
     }.getOrDefault(Environment.DEVELOPMENT)
-    
+
+    // Credentials come from keystore/mqtt.properties at build time (gitignored);
+    // blank means anonymous — the current public-dev-broker behavior.
+    private val buildUsername: String? =
+        com.example.familysafety.BuildConfig.MQTT_USERNAME.ifBlank { null }
+    private val buildPassword: String? =
+        com.example.familysafety.BuildConfig.MQTT_PASSWORD.ifBlank { null }
+
+    // EMQX Cloud serverless: TLS on 8883, publicly trusted CA, auth required —
+    // credentials must be present in keystore/mqtt.properties or connect fails.
+    private const val EMQX_URL = "ssl://r161feb1.ala.us-east-1.emqxsl.com:8883"
+
     private val brokers = mapOf(
         Environment.DEVELOPMENT to BrokerSettings(
-            url = "ssl://broker.hivemq.com:8883",
-            username = null,
-            password = null,
+            url = EMQX_URL,
+            username = buildUsername,
+            password = buildPassword,
             useTls = true,
-            description = "Public HiveMQ broker over TLS (development only)"
+            description = "Private EMQX Cloud broker (dev builds)"
         ),
         Environment.STAGING to BrokerSettings(
-            url = "tcp://staging-mqtt.familysafety.app:1883",
-            username = "familysafety-staging",
-            password = null,
+            url = EMQX_URL,
+            username = buildUsername,
+            password = buildPassword,
             useTls = true,
-            description = "Private staging broker"
+            description = "Private EMQX Cloud broker (staging)"
         ),
         Environment.PRODUCTION to BrokerSettings(
-            url = "ssl://mqtt.familysafety.app:8883",
-            username = "familysafety-prod",
-            password = null,
+            url = EMQX_URL,
+            username = buildUsername,
+            password = buildPassword,
             useTls = true,
-            description = "Private production broker"
+            description = "Private EMQX Cloud broker (production)"
         )
     )
     

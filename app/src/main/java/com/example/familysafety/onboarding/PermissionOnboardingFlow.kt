@@ -148,8 +148,13 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
             STEP_BG_LOCATION -> PermissionRationaleCard(
                 permission = Manifest.permission.ACCESS_BACKGROUND_LOCATION,
                 title = "Always-On Location",
-                rationale = "To keep sharing your location when your screen is off or the app is " +
-                    "in the background, FamilySafety needs background location access.",
+                // Wording deliberately follows Google Play's prominent-disclosure
+                // formula for background location; changing it can fail app review.
+                rationale = "FamilySafety collects location data to enable real-time " +
+                    "location sharing with your family group, even when the app is " +
+                    "closed or not in use. Your location is end-to-end encrypted, is " +
+                    "shared only with your family members, and is never sold or given " +
+                    "to anyone else.",
                 coaching = "On the next screen, choose 'Allow all the time' — " +
                     "this keeps your location visible when your phone is in your pocket.",
                 onRequestPermission = {

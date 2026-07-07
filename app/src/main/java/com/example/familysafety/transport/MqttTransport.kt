@@ -110,7 +110,12 @@ class MqttTransport @Inject constructor(
                     isAutomaticReconnect = false  // we handle reconnect via scheduleReconnect()
                     connectionTimeout = MqttConfig.CONNECTION_TIMEOUT
                     keepAliveInterval = MqttConfig.KEEP_ALIVE_SECONDS
-                    
+
+                    // Broker authentication (absent = anonymous, e.g. public dev broker)
+                    val broker = BrokerConfig.getCurrentBroker()
+                    broker.username?.let { userName = it }
+                    broker.password?.let { password = it.toCharArray() }
+
                     // Set offline will so peers know if we drop off abruptly
                     val willJson = MessageProtocol.encodePresenceUpdate(memberIdParam, false)
                     setWill(MqttConfig.getPresenceTopic(memberIdParam), willJson.toByteArray(), MqttConfig.DEFAULT_QOS, true)
