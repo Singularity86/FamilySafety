@@ -12,11 +12,17 @@ import timber.log.Timber
 /**
  * AlarmManager-based watchdog that ensures LocationService stays alive.
  *
- * Complements ServiceWatchdogWorker (WorkManager). AlarmManager alarms are more
- * precise and can fire during Doze idle windows when WorkManager jobs are deferred.
+ * Complements ServiceWatchdogWorker (WorkManager). The receiver reschedules
+ * itself on every tick, so a single call to schedule() keeps the chain going
+ * until cancel() is called or the session ends.
  *
- * The receiver reschedules itself on every tick, so a single call to schedule()
- * keeps the chain going until cancel() is called or the session ends.
+ * The periodic chain deliberately uses INEXACT alarms: Android allows only one
+ * setExactAndAllowWhileIdle firing per app per ~9 minutes during Doze, and that
+ * budget belongs to LocationHeartbeatReceiver (which also restarts the service,
+ * making this chain a redundant backstop). When this watchdog competed for the
+ * budget, it deferred heartbeats unpredictably — causing the very location gaps
+ * it exists to prevent. Only scheduleSoon() (rare, one-shot recovery after task
+ * removal / service death) uses the exact whileIdle path.
  */
 class ServiceWatchdogReceiver : BroadcastReceiver() {
 
@@ -65,19 +71,19 @@ class ServiceWatchdogReceiver : BroadcastReceiver() {
         }
 
         fun schedule(context: Context) {
-            schedule(context, INTERVAL_MS)
+            schedule(context, INTERVAL_MS, exact = false)
         }
 
         fun scheduleSoon(context: Context) {
-            schedule(context, SOON_INTERVAL_MS)
+            schedule(context, SOON_INTERVAL_MS, exact = true)
         }
 
-        private fun schedule(context: Context, delayMs: Long) {
+        private fun schedule(context: Context, delayMs: Long, exact: Boolean) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             val pi = buildPendingIntent(context)
             val triggerAt = SystemClock.elapsedRealtime() + delayMs
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (exact && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 try {
                     alarmManager.setExactAndAllowWhileIdle(
                         AlarmManager.ELAPSED_REALTIME_WAKEUP,
@@ -85,15 +91,15 @@ class ServiceWatchdogReceiver : BroadcastReceiver() {
                         pi
                     )
                     Timber.i("ServiceWatchdog: exact alarm scheduled in ${delayMs / 1000}s")
+                    return
                 } catch (e: SecurityException) {
-                    // SCHEDULE_EXACT_ALARM not granted by user - use inexact fallback.
-                    alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
                     Timber.w("ServiceWatchdog: exact alarm denied - using inexact fallback")
                 }
-            } else {
-                alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
-                Timber.i("ServiceWatchdog: alarm scheduled in ${delayMs / 1000}s")
             }
+            // Inexact: fires in Doze maintenance windows without consuming the
+            // per-app whileIdle budget reserved for the location heartbeat.
+            alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+            Timber.i("ServiceWatchdog: inexact alarm scheduled in ~${delayMs / 1000}s")
         }
 
         fun cancel(context: Context) {

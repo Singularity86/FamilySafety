@@ -406,6 +406,28 @@ class MqttTransport @Inject constructor(
         }
     }
 
+    /**
+     * Wake-time reconnect for alarm-driven heartbeats. The exponential-backoff
+     * reconnect uses coroutine delays, which do not advance while the CPU sleeps
+     * in Doze — so a connection dropped during sleep stays down until something
+     * else wakes the process. A heartbeat that wants to deliver must revive the
+     * connection itself, synchronously, while it still holds a wakelock.
+     */
+    suspend fun ensureConnectedNow() {
+        when (_connectionState.value) {
+            ConnectionState.Connected -> return
+            ConnectionState.Connecting -> return  // attempt already in flight
+            else -> {}
+        }
+        val id = memberId ?: return
+        val gId = groupId ?: return
+        Timber.i("$TAG: wake-triggered reconnect")
+        reconnectJob?.cancel()
+        reconnectJob = null
+        reconnectAttempts = 0
+        initialize(id, emptyList(), gId)
+    }
+
     fun setGroupId(newGroupId: String) {
         val old = groupId
         groupId = newGroupId

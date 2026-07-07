@@ -61,6 +61,7 @@ class LocationService : Service() {
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
+    private var passiveCallback: LocationCallback? = null
 
     private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -94,6 +95,11 @@ class LocationService : Service() {
         const val LOCATION_INTERVAL_STATIONARY = 5 * 60_000L
         private const val MOVEMENT_THRESHOLD_MS = 1.0f
         private const val GPS_STILL_DEBOUNCE_COUNT = 3
+
+        // Heartbeat fresh-fix budget: bounded so an alarm wake can't outlive its wakelock.
+        private const val FRESH_FIX_TIMEOUT_MS = 20_000L
+        // Throttle for the free piggyback fixes harvested from other apps' requests.
+        private const val PASSIVE_INTERVAL_MS = 30_000L
 
         // Safety timeout for the publish wakelock. With 3 retries × ~1–4 s backoff,
         // worst-case publish take ~15 s; double it to be safe but still bounded
@@ -188,10 +194,9 @@ class LocationService : Service() {
                         appInitializer.initialize()
                         startLocationUpdates()
                     } else {
-                        scope.launch { flushPendingLocationPublishes() }
+                        performAlarmHeartbeat()
                     }
                     LocationHeartbeatReceiver.schedule(this)
-                    ServiceWatchdogReceiver.schedule(this)
                     ServiceWatchdogWorker.scheduleIfNeeded(this)
                 } else {
                     Timber.d("LocationService: heartbeat received but no active session")
@@ -349,28 +354,114 @@ class LocationService : Service() {
         }
 
         // Heartbeat: if GPS goes quiet for a full stationary interval (e.g. Doze mode,
-        // OEM battery management), republish the last known location so members don't
-        // see a growing stale "Updated Xh ago" with no explanation.
+        // OEM battery management), get a fix out so members don't see a growing
+        // stale "Updated Xh ago" with no explanation. This timer only runs while
+        // the CPU is awake; LocationHeartbeatReceiver's exact alarm covers Doze.
         heartbeatJob = scope.launch {
             while (isActive) {
                 delay(LOCATION_INTERVAL_STATIONARY)
                 val sinceLastPublish = System.currentTimeMillis() - lastPublishedAt
                 if (sinceLastPublish >= LOCATION_INTERVAL_STATIONARY) {
-                    val lastLocation = locationRepository.myLocation.value
-                    if (lastLocation != null) {
-                        Timber.i("LocationService: heartbeat — republishing last known location (${sinceLastPublish / 1000}s since last publish)")
-                        maybeQueueHeartbeatSnapshot(lastLocation)
-                        if (flushPendingLocationPublishes()) {
-                            lastPublishedAt = System.currentTimeMillis()
-                        } else {
-                            Timber.w("LocationService: heartbeat flush did not reach any peers")
-                        }
-                    }
+                    runHeartbeat("timer")
                 }
             }
         }
 
         requestLocationUpdates()
+    }
+
+    /**
+     * Alarm-driven heartbeat (Doze wake). The alarm's implicit wakelock ends when
+     * onStartCommand returns, so hold our own for the duration — otherwise the CPU
+     * can be asleep again before the reconnect and publish complete, which is how
+     * multi-cycle location gaps used to happen.
+     */
+    private fun performAlarmHeartbeat() {
+        wakeLock.acquire(WAKELOCK_TIMEOUT_MS)
+        scope.launch {
+            try {
+                runHeartbeat("alarm")
+            } finally {
+                if (wakeLock.isHeld) wakeLock.release()
+            }
+        }
+    }
+
+    /**
+     * One productive heartbeat: revive the relay connection (backoff timers don't
+     * advance while the CPU sleeps, so the wake must do its own kicking), try for
+     * a fresh fix, fall back to re-stamping the last known position, then flush.
+     */
+    private suspend fun runHeartbeat(trigger: String) {
+        val id = memberId ?: return
+
+        try {
+            mqttTransport.ensureConnectedNow()
+        } catch (e: Exception) {
+            Timber.w(e, "LocationService: heartbeat ($trigger) reconnect failed")
+        }
+
+        val fresh = requestFreshFix()
+        val lastKnown = locationRepository.myLocation.value
+        if (fresh != null && (lastKnown == null || fresh.time > lastKnown.timestamp)) {
+            val memberLocation = MemberLocation(
+                memberId = id,
+                latitude = fresh.latitude,
+                longitude = fresh.longitude,
+                accuracy = fresh.accuracy,
+                timestamp = fresh.time,
+                speed = if (fresh.hasSpeed()) fresh.speed else null,
+                bearing = if (fresh.hasBearing()) fresh.bearing else null
+            )
+            if (DataValidator.validateLocation(memberLocation) is ValidationResult.Valid) {
+                Timber.i("LocationService: heartbeat ($trigger) captured a fresh fix")
+                locationRepository.updateMyLocation(memberLocation)
+                locationPublishOutboxRepository.enqueue(memberLocation)
+            }
+        } else {
+            lastKnown?.let {
+                Timber.i("LocationService: heartbeat ($trigger) re-stamping last known location")
+                maybeQueueHeartbeatSnapshot(it)
+            }
+        }
+
+        if (flushPendingLocationPublishes()) {
+            lastPublishedAt = System.currentTimeMillis()
+        } else {
+            Timber.w("LocationService: heartbeat ($trigger) flush did not reach any peers")
+        }
+    }
+
+    /**
+     * Single on-demand fix for heartbeats. Accepts a recent cached fix (other
+     * apps' requests) to avoid spinning up GPS when a fresh answer already exists.
+     */
+    private suspend fun requestFreshFix(): Location? {
+        if (!LocationPermissionHelper.hasAlwaysOnLocationPrerequisites(this)) return null
+        return try {
+            withTimeoutOrNull(FRESH_FIX_TIMEOUT_MS) {
+                suspendCancellableCoroutine { continuation ->
+                    val cancellation = com.google.android.gms.tasks.CancellationTokenSource()
+                    fusedLocationClient.getCurrentLocation(
+                        CurrentLocationRequest.Builder()
+                            .setPriority(Priority.PRIORITY_BALANCED_POWER_ACCURACY)
+                            .setMaxUpdateAgeMillis(60_000)
+                            .setDurationMillis(FRESH_FIX_TIMEOUT_MS - 2_000)
+                            .build(),
+                        cancellation.token
+                    ).addOnSuccessListener { location ->
+                        continuation.resume(location) {}
+                    }.addOnFailureListener { e ->
+                        Timber.w(e, "LocationService: getCurrentLocation failed")
+                        continuation.resume(null) {}
+                    }
+                    continuation.invokeOnCancellation { cancellation.cancel() }
+                }
+            }
+        } catch (e: SecurityException) {
+            Timber.w(e, "LocationService: fresh fix denied — missing permission")
+            null
+        }
     }
 
     private fun requestLocationUpdates() {
@@ -403,6 +494,32 @@ class LocationService : Service() {
         } catch (e: SecurityException) {
             Timber.e(e, "LocationService: missing location permission — cannot start GPS")
         }
+
+        registerPassiveListener()
+    }
+
+    /**
+     * Passive listener: receives fixes whenever ANY other app requests location
+     * (Maps, weather, ride-share…) at zero additional battery cost. Densifies
+     * history and shortens gaps without spinning up GPS ourselves.
+     */
+    private fun registerPassiveListener() {
+        if (passiveCallback != null) return
+        val callback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                result.lastLocation?.let { handleLocationUpdate(it) }
+            }
+        }
+        val request = LocationRequest.Builder(Priority.PRIORITY_PASSIVE, PASSIVE_INTERVAL_MS)
+            .setMinUpdateIntervalMillis(PASSIVE_INTERVAL_MS)
+            .build()
+        try {
+            fusedLocationClient.requestLocationUpdates(request, callback, Looper.getMainLooper())
+            passiveCallback = callback
+            Timber.i("LocationService: passive location listener registered")
+        } catch (e: SecurityException) {
+            Timber.e(e, "LocationService: cannot register passive listener")
+        }
     }
 
     private fun stopLocationUpdates() {
@@ -412,6 +529,8 @@ class LocationService : Service() {
         }
         Timber.i("LocationService: stopping location updates")
         fusedLocationClient.removeLocationUpdates(locationCallback)
+        passiveCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
+        passiveCallback = null
         isTracking = false
         activityMonitoringJob?.cancel(); activityMonitoringJob = null
         vehicleMonitoringJob?.cancel(); vehicleMonitoringJob = null
@@ -607,7 +726,8 @@ class LocationService : Service() {
         scope.cancel()
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
             .putBoolean(PREF_SERVICE_ALIVE, false).apply()
-        // Schedule a recovery alarm so the watchdog fires even if WorkManager is deferred
-        ServiceWatchdogReceiver.schedule(this)
+        // Fast recovery: the service dying is exactly the case worth spending a
+        // one-shot exact alarm on (30s), rather than waiting for the 15-min chain.
+        ServiceWatchdogReceiver.scheduleSoon(this)
     }
 }
