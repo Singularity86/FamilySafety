@@ -24,7 +24,7 @@ fun WelcomeScreen(
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "FamilySafety",
+            text = "Jibaro Family Safety",
             style = MaterialTheme.typography.displayMedium,
             modifier = Modifier.padding(bottom = 8.dp)
         )

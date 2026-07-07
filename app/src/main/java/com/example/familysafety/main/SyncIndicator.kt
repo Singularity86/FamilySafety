@@ -61,7 +61,7 @@ fun SyncIndicator(
         }
         is GroupSyncManager.SyncState.Syncing -> SyncInfoSlot(
             title = "Syncing family state",
-            message = "Working. FamilySafety is checking the family list, member keys, and group version.",
+            message = "Working. Jibaro Family Safety is checking the family list, member keys, and group version.",
             modifier = modifier
         ) {
             SyncChip(
@@ -91,7 +91,7 @@ fun SyncIndicator(
         }
         is GroupSyncManager.SyncState.Error -> SyncInfoSlot(
             title = "Sync error",
-            message = "Needs attention. FamilySafety could not complete the latest family-list sync.",
+            message = "Needs attention. Jibaro Family Safety could not complete the latest family-list sync.",
             modifier = modifier
         ) {
             SyncChip(

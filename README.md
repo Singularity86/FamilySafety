@@ -1,8 +1,8 @@
-# Family Safety
+# Jibaro Family Safety
 
 **Private, end-to-end encrypted family location sharing for Android.**
 
-Family Safety lets a family see each other on a live map, chat, and get safety
+Jibaro Family Safety lets a family see each other on a live map, chat, and get safety
 alerts — with a design goal most location apps don't attempt: **nobody outside
 the family can see any of it. Including us.**
 

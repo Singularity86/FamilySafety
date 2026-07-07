@@ -120,12 +120,12 @@ private fun SecurityVerdictCard(
         )
         waitingForSync -> Triple(
             "Waiting for devices",
-            "FamilySafety is checking the family list or waiting for other devices to answer.",
+            "Jibaro Family Safety is checking the family list or waiting for other devices to answer.",
             Color(0xFFFF9800)
         )
         else -> Triple(
             "All clear",
-            "FamilySafety has a working route and no current key issues.",
+            "Jibaro Family Safety has a working route and no current key issues.",
             GreenOk
         )
     }

@@ -28,7 +28,7 @@ private data class TutorialSlide(
 
 private val slides = listOf(
     TutorialSlide(
-        title = "Welcome to FamilySafety",
+        title = "Welcome to Jibaro Family Safety",
         body = "Private location sharing for the people who matter most. " +
             "All data is end-to-end encrypted — nobody but your family can ever read it.",
         glossaryTerms = listOf("end-to-end encrypted")

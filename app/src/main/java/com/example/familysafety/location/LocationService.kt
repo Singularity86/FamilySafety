@@ -275,7 +275,7 @@ class LocationService : Service() {
             this, 0, intent, PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("FamilySafety — Location active")
+            .setContentTitle("Jibaro Family Safety — Location active")
             .setContentText("Notification required for location sharing to work. Tap to open.")
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)

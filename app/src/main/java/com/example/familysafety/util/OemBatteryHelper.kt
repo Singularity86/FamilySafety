@@ -248,80 +248,80 @@ object OemBatteryHelper {
             "Tap Battery.",
             "Tap Background usage limits.",
             "Tap Never sleeping apps.",
-            "Tap the + button and add FamilySafety to the list."
+            "Tap the + button and add Jibaro Family Safety to the list."
         )
 
         Oem.XIAOMI -> listOf(
             "Open Settings → Apps → Manage apps.",
-            "Find and tap FamilySafety.",
+            "Find and tap Jibaro Family Safety.",
             "Tap Battery saver and choose No restrictions.",
-            "Go back to FamilySafety → Other permissions.",
+            "Go back to Jibaro Family Safety → Other permissions.",
             "Enable Autostart so MIUI does not block background launch."
         )
 
         Oem.HUAWEI -> listOf(
-            "Open Settings → Apps → FamilySafety.",
+            "Open Settings → Apps → Jibaro Family Safety.",
             "Tap Battery.",
             "Set App launch to Manage manually.",
             "Enable Auto-launch, Secondary launch, and Run in background.",
-            "Also open Phone Manager → Startup manager and enable FamilySafety."
+            "Also open Phone Manager → Startup manager and enable Jibaro Family Safety."
         )
 
         Oem.HONOR -> listOf(
-            "Open Settings → Apps → FamilySafety.",
+            "Open Settings → Apps → Jibaro Family Safety.",
             "Tap Battery.",
             "Set App launch to Manage manually.",
             "Enable Auto-launch and Run in background.",
-            "Open Phone Manager → Startup manager and enable FamilySafety."
+            "Open Phone Manager → Startup manager and enable Jibaro Family Safety."
         )
 
         Oem.OPPO -> listOf(
             "Open Settings → Battery → Battery optimization.",
-            "Find FamilySafety and choose Don't optimize.",
+            "Find Jibaro Family Safety and choose Don't optimize.",
             "Open Security Center → Privacy Permissions.",
-            "Tap Startup manager and enable FamilySafety.",
-            "Also enable Background app refresh for FamilySafety."
+            "Tap Startup manager and enable Jibaro Family Safety.",
+            "Also enable Background app refresh for Jibaro Family Safety."
         )
 
         Oem.ONEPLUS -> listOf(
             "Open Settings → Battery → Battery optimization.",
-            "Find FamilySafety and choose Don't optimize.",
-            "Open Settings → Apps → FamilySafety → Battery.",
+            "Find Jibaro Family Safety and choose Don't optimize.",
+            "Open Settings → Apps → Jibaro Family Safety → Battery.",
             "Enable Allow background activity.",
-            "If present, open Security → App freeze and unfreeze FamilySafety."
+            "If present, open Security → App freeze and unfreeze Jibaro Family Safety."
         )
 
         Oem.VIVO -> listOf(
             "Open iManager (or Settings → More → Permission manager).",
-            "Tap Autostart manager and enable FamilySafety.",
+            "Tap Autostart manager and enable Jibaro Family Safety.",
             "Go back and tap Background app refresh.",
-            "Enable FamilySafety.",
+            "Enable Jibaro Family Safety.",
             "Open Settings → Battery → High background power consumption.",
-            "Add FamilySafety to the allow list."
+            "Add Jibaro Family Safety to the allow list."
         )
 
         Oem.REALME -> listOf(
             "Open Settings → Battery → Battery optimization.",
-            "Find FamilySafety and choose Don't optimize.",
+            "Find Jibaro Family Safety and choose Don't optimize.",
             "Open Security Center → App management → Startup manager.",
-            "Enable FamilySafety.",
-            "Also enable Background app refresh for FamilySafety."
+            "Enable Jibaro Family Safety.",
+            "Also enable Background app refresh for Jibaro Family Safety."
         )
 
         Oem.MEIZU -> listOf(
             "Open Settings → Battery → Battery saver.",
-            "Tap Standby power consumption and disable restrictions for FamilySafety.",
-            "Open Settings → Apps → FamilySafety → Permissions.",
+            "Tap Standby power consumption and disable restrictions for Jibaro Family Safety.",
+            "Open Settings → Apps → Jibaro Family Safety → Permissions.",
             "Enable Autostart.",
             "Open Flyme Security → Permission manager → Background manage.",
-            "Enable FamilySafety."
+            "Enable Jibaro Family Safety."
         )
 
         Oem.GENERIC -> listOf(
             "Open Settings → Battery.",
             "Look for Battery optimization or Unrestricted access.",
-            "Find FamilySafety in the list and set it to Don't optimize.",
-            "If your phone has an Autostart or Background app permission, enable it for FamilySafety."
+            "Find Jibaro Family Safety in the list and set it to Don't optimize.",
+            "If your phone has an Autostart or Background app permission, enable it for Jibaro Family Safety."
         )
     }
 }

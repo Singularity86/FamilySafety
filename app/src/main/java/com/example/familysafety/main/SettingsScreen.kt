@@ -174,7 +174,7 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "Android may pause location tracking in the background. " +
-                            "Tap below to keep FamilySafety running reliably.",
+                            "Tap below to keep Jibaro Family Safety running reliably.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onErrorContainer
                     )

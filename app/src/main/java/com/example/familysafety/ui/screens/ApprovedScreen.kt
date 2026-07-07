@@ -81,7 +81,7 @@ fun ApprovedScreen(
             Spacer(modifier = Modifier.height(Spacing.sm))
 
             Text(
-                text = "You've been added to $familyName.\nFamilySafety must now restart.",
+                text = "You've been added to $familyName.\nJibaro Family Safety must now restart.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary,
                 textAlign = TextAlign.Center

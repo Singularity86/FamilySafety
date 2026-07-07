@@ -131,7 +131,7 @@ class ServiceWatchdogWorker(
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(appContext, BATTERY_ALERT_CHANNEL_ID)
-            .setContentTitle("FamilySafety battery protection disabled")
+            .setContentTitle("Jibaro Family Safety battery protection disabled")
             .setContentText("Location sharing may stop. Tap to restore.")
             .setSmallIcon(R.drawable.ic_notification)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -159,7 +159,7 @@ class ServiceWatchdogWorker(
     private fun buildForegroundInfo(): ForegroundInfo {
         ensureChannel()
         val notification: Notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
-            .setContentTitle("FamilySafety")
+            .setContentTitle("Jibaro Family Safety")
             .setContentText("Checking location service…")
             .setSmallIcon(R.drawable.ic_notification)
             .setOngoing(true)

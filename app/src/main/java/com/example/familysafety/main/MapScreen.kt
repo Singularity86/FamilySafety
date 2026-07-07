@@ -126,7 +126,7 @@ fun MapScreen(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "FamilySafety needs access to your location to show you and your family members on the map.",
+                text = "Jibaro Family Safety needs access to your location to show you and your family members on the map.",
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

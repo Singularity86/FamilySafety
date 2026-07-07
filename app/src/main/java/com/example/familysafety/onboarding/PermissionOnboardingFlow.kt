@@ -130,10 +130,10 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
             STEP_LOCATION -> PermissionRationaleCard(
                 permission = Manifest.permission.ACCESS_FINE_LOCATION,
                 title = "Location Access",
-                rationale = "FamilySafety shares your location with your family group in real time. " +
+                rationale = "Jibaro Family Safety shares your location with your family group in real time. " +
                     "Your location is end-to-end encrypted — only your family can ever see it.",
                 coaching = "When prompted, choose 'While using the app' — " +
-                    "this lets your family see your location whenever FamilySafety is open.",
+                    "this lets your family see your location whenever Jibaro Family Safety is open.",
                 onRequestPermission = {
                     locationLauncher.launch(
                         arrayOf(
@@ -150,7 +150,7 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
                 title = "Always-On Location",
                 // Wording deliberately follows Google Play's prominent-disclosure
                 // formula for background location; changing it can fail app review.
-                rationale = "FamilySafety collects location data to enable real-time " +
+                rationale = "Jibaro Family Safety collects location data to enable real-time " +
                     "location sharing with your family group, even when the app is " +
                     "closed or not in use. Your location is end-to-end encrypted, is " +
                     "shared only with your family members, and is never sold or given " +

@@ -1,8 +1,8 @@
-# Family Safety — Privacy Policy
+# Jibaro Family Safety — Privacy Policy
 
 _Last updated: July 6, 2026_
 
-Family Safety is a private, family-only location-sharing app. It was built on a
+Jibaro Family Safety is a private, family-only location-sharing app. It was built on a
 simple principle: **your family's location and messages belong to your family,
 not to us.** We operate no accounts, no analytics, and no server that can read
 your data.
@@ -52,7 +52,7 @@ parties beyond the message relay described above.
 
 ## Children
 
-Family Safety is intended to be set up and administered by adults. A parent or
+Jibaro Family Safety is intended to be set up and administered by adults. A parent or
 guardian may choose to install it on a child's device as part of their family
 group; the child's location is then visible only to that family group, under
 the same encryption described above.

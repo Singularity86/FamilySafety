@@ -72,7 +72,7 @@ fun BatteryOptimizationScreen(
             )
             Spacer(modifier = Modifier.height(Spacing.sm))
             Text(
-                text = "Android can pause FamilySafety to save battery, which stops location " +
+                text = "Android can pause Jibaro Family Safety to save battery, which stops location " +
                     "sharing. Granting this exemption keeps your location visible to your family " +
                     "even when the screen is off.",
                 style = MaterialTheme.typography.bodyMedium,

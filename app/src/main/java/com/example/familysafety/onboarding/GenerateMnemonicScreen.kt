@@ -95,7 +95,7 @@ fun GenerateMnemonicScreen(
                         modifier = Modifier.size(18.dp).padding(top = 2.dp)
                     )
                     Text(
-                        text = "If you ever reinstall FamilySafety, your recovery phrase lets you " +
+                        text = "If you ever reinstall Jibaro Family Safety, your recovery phrase lets you " +
                             "restore your account. Find it anytime under Settings → Recovery Phrase.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

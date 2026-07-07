@@ -238,7 +238,7 @@ fun MainScreen(
                         ),
                         title = {
                             Column {
-                                Text("FamilySafety", style = MaterialTheme.typography.titleMedium)
+                                Text("Jibaro Family Safety", style = MaterialTheme.typography.titleMedium)
                                 if (groupName.isNotBlank()) {
                                     Text(
                                         text = groupName,

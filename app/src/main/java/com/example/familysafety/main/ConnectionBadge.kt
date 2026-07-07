@@ -96,7 +96,7 @@ fun ConnectionBadge(
         message = when (mode) {
             MainViewModel.ConnectionMode.LAN ->
                 routeSummary(
-                    leading = "Working locally. FamilySafety can reach a family device directly on this network.",
+                    leading = "Working locally. Jibaro Family Safety can reach a family device directly on this network.",
                     routeHealth = routeHealth
                 )
             MainViewModel.ConnectionMode.RELAY ->
@@ -106,7 +106,7 @@ fun ConnectionBadge(
                 )
             MainViewModel.ConnectionMode.OFFLINE ->
                 routeSummary(
-                    leading = "Needs attention. FamilySafety does not currently have a local device or relay route.",
+                    leading = "Needs attention. Jibaro Family Safety does not currently have a local device or relay route.",
                     routeHealth = routeHealth
                 )
             MainViewModel.ConnectionMode.MIXED ->

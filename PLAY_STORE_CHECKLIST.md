@@ -60,9 +60,9 @@ accounts/infrastructure only you can create.
 
 ## Store listing
 
-- App name: currently "Family Safety" — ⚠ collides with **Microsoft Family
-  Safety**; consider a distinct name (listing title, `app_name` string) to avoid
-  impersonation flags and to be findable.
+- App name: **"Jibaro Family Safety"** (app_name string, docs, store assets all
+  renamed 2026-07) — resolves the Microsoft Family Safety collision. Note:
+  launchers truncate long labels; the home-screen icon may show "Jibaro Fam…".
 - Target audience: **18+ account holders** (parents). Do NOT opt into
   child-directed / Designed for Families — a kids-targeted location app triggers
   far stricter rules.
