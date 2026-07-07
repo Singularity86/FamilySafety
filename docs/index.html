@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Family Safety — private, end-to-end encrypted family location sharing</title>
+<meta name="description" content="Family Safety is a privacy-first family location-sharing app. End-to-end encrypted, no accounts, no ads, no server that can read your data.">
+<style>
+  :root {
+    --bg: #f6f8f8;
+    --surface: #ffffff;
+    --ink: #1d2c32;
+    --ink-soft: #56696f;
+    --line: #dde6e7;
+    --accent: #157a70;
+    --accent-soft: #e2f1ef;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111a1e;
+      --surface: #182428;
+      --ink: #e3edee;
+      --ink-soft: #96aab0;
+      --line: #273940;
+      --accent: #47b9ab;
+      --accent-soft: #1b3733;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.6;
+    font-size: 16px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 56px 20px 80px; }
+
+  .eyebrow {
+    font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600; margin-bottom: 10px;
+  }
+  h1 { font-size: 34px; line-height: 1.15; margin: 0 0 14px; font-weight: 650; text-wrap: balance; }
+  .lede { font-size: 18px; color: var(--ink-soft); margin: 0 0 26px; max-width: 58ch; }
+
+  .links { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 48px; }
+  .btn {
+    display: inline-block; text-decoration: none; font-weight: 600; font-size: 15px;
+    padding: 10px 18px; border-radius: 8px;
+  }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.quiet { background: var(--surface); color: var(--ink); border: 1px solid var(--line); }
+  .btn:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+  h2 { font-size: 20px; margin: 40px 0 12px; font-weight: 650; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card b { display: block; font-weight: 650; margin-bottom: 4px; }
+  .card p { margin: 0; color: var(--ink-soft); font-size: 14.5px; }
+
+  .trust {
+    background: var(--accent-soft); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 20px; margin-top: 40px;
+  }
+  .trust h2 { margin-top: 0; }
+  .trust p { margin: 8px 0; }
+  .trust p:last-child { margin-bottom: 0; }
+
+  a { color: var(--accent); }
+  footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--ink-soft); font-size: 13.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Family Safety</div>
+  <h1>Know where your family is. Without anyone else knowing.</h1>
+  <p class="lede">Family Safety is a private location-sharing and messaging app for families.
+  Everything is end-to-end encrypted between your family's own devices — there are no
+  accounts, no ads, and no company server that can read your locations or messages.</p>
+
+  <div class="links">
+    <a class="btn primary" href="privacy.html">Privacy policy</a>
+    <a class="btn quiet" href="https://github.com/Singularity86/FamilySafety">Source code</a>
+    <a class="btn quiet" href="mailto:omar@courageonpurpose.org">Contact</a>
+  </div>
+
+  <h2>What it does</h2>
+  <div class="grid">
+    <div class="card"><b>Live family map</b><p>See every family member's location in real time, with location history and drive-time estimates.</p></div>
+    <div class="card"><b>Private messaging</b><p>Family chat and one-to-one messages, encrypted end to end with delivery and read receipts.</p></div>
+    <div class="card"><b>Safety alerts</b><p>Place arrival and departure alerts, and optional vehicle crash detection that notifies your family.</p></div>
+    <div class="card"><b>No accounts</b><p>No email, phone number, or password. Your identity is a recovery phrase generated on your own device.</p></div>
+    <div class="card"><b>Family-run backup</b><p>History is stored encrypted on your family's own devices and replicated between them — no cloud copy.</p></div>
+    <div class="card"><b>Works on home Wi-Fi</b><p>Devices on the same network talk directly to each other, no internet required.</p></div>
+  </div>
+
+  <div class="trust">
+    <h2>Why you don't have to trust us</h2>
+    <p>Locations and messages are encrypted on your phone with keys that never leave it
+    (libsodium: X25519, XSalsa20-Poly1305, Ed25519). The relay server that forwards
+    messages between devices sees only sealed envelopes it cannot open — and neither
+    can we.</p>
+    <p>Don't take our word for it: <a href="https://github.com/Singularity86/FamilySafety">the
+    source code is public</a>. Read it, build it yourself, or point out something we got wrong.</p>
+  </div>
+
+  <footer>Family Safety · <a href="privacy.html">Privacy policy</a> ·
+  <a href="https://github.com/Singularity86/FamilySafety">GitHub</a> ·
+  <a href="mailto:omar@courageonpurpose.org">omar@courageonpurpose.org</a></footer>
+</div>
+</body>
+</html>
