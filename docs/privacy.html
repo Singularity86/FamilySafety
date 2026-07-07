@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Family Safety — Privacy Policy</title>
+<style>
+  :root {
+    --bg: #f6f8f8;
+    --surface: #ffffff;
+    --ink: #1d2c32;
+    --ink-soft: #56696f;
+    --line: #dde6e7;
+    --accent: #157a70;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111a1e;
+      --surface: #182428;
+      --ink: #e3edee;
+      --ink-soft: #96aab0;
+      --line: #273940;
+      --accent: #47b9ab;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.6;
+    font-size: 16px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 48px 20px 80px; }
+  .eyebrow {
+    font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600; margin-bottom: 8px;
+  }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0 0 6px; font-weight: 650; }
+  .updated { color: var(--ink-soft); font-size: 14px; margin-bottom: 28px; }
+  .lede {
+    background: var(--surface); border: 1px solid var(--line);
+    border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0;
+    padding: 14px 18px; margin-bottom: 36px;
+  }
+  h2 { font-size: 20px; margin: 40px 0 10px; font-weight: 650; }
+  p { margin: 10px 0; }
+  strong { font-weight: 650; }
+  .tablewrap { overflow-x: auto; }
+  table {
+    border-collapse: collapse; width: 100%; font-size: 14.5px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }
+  tr:last-child td { border-bottom: none; }
+  ul { padding-left: 22px; }
+  li { margin: 6px 0; }
+  a { color: var(--accent); }
+  footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--ink-soft); font-size: 13.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Family Safety</div>
+  <h1>Privacy Policy</h1>
+  <div class="updated">Last updated: July 6, 2026</div>
+
+  <div class="lede">
+    Family Safety is a private, family-only location-sharing app built on a simple
+    principle: <strong>your family's location and messages belong to your family, not to
+    us.</strong> We operate no accounts, no analytics, and no server that can read your data.
+  </div>
+
+  <h2>What the app collects, and who can see it</h2>
+  <div class="tablewrap">
+    <table>
+      <tr><th>Data</th><th>Purpose</th><th>Who can see it</th></tr>
+      <tr><td>Precise location (including in the background)</td><td>Real-time location sharing and location history with your family group</td><td>Only members of your family group</td></tr>
+      <tr><td>Chat messages and shared files</td><td>Family messaging</td><td>Only members of your family group</td></tr>
+      <tr><td>Display name, avatar photo, color choice</td><td>Identifying you inside your group</td><td>Only members of your family group</td></tr>
+      <tr><td>Motion/activity state (moving vs. still)</td><td>Adjusting GPS frequency to save battery</td><td>Processed on your device only</td></tr>
+      <tr><td>Online/offline status</td><td>Showing whether a family member's device is connected</td><td>Your family group; see “Message relay” below</td></tr>
+    </table>
+  </div>
+  <p>The app does <strong>not</strong> collect contacts, advertising identifiers, or usage
+  analytics, and contains no third-party advertising or tracking SDKs.</p>
+
+  <h2>End-to-end encryption</h2>
+  <p>Locations, messages, files, and group membership data are end-to-end encrypted on
+  your device using libsodium (X25519 key agreement, XSalsa20-Poly1305 encryption,
+  Ed25519 signatures). Encryption keys are derived from a recovery phrase generated on
+  your device and are stored in your device's hardware-backed keystore.
+  <strong>We never possess your keys and cannot decrypt your data.</strong> There is no
+  password reset and no backdoor: if you lose your recovery phrase and your devices,
+  your data is unrecoverable — by design.</p>
+
+  <h2>Message relay (the one server involved)</h2>
+  <p>Encrypted messages travel through an MQTT relay server, which functions like a post
+  office for sealed envelopes: it forwards ciphertext but cannot read it. The relay
+  necessarily sees network metadata — connection times, message sizes, pseudonymous
+  member identifiers, and unencrypted online/offline status signals. It never sees
+  locations, messages, names, or photos in readable form.</p>
+
+  <h2>Where your data lives</h2>
+  <p>Your family's data is stored on <strong>your family's own devices</strong>, in an
+  encrypted database (SQLCipher), and is replicated between family members' devices as
+  an encrypted backup. Location history is kept for 30 days and chat messages for 90
+  days, then deleted automatically. There is no cloud copy we hold.</p>
+
+  <h2>Sharing with third parties</h2>
+  <p>We do not sell, rent, or share your data with anyone. There are no third parties
+  beyond the message relay described above.</p>
+
+  <h2>Children</h2>
+  <p>Family Safety is intended to be set up and administered by adults. A parent or
+  guardian may choose to install it on a child's device as part of their family group;
+  the child's location is then visible only to that family group, under the same
+  encryption described above.</p>
+
+  <h2>Your controls</h2>
+  <ul>
+    <li><strong>Leave a family</strong> at any time (Settings → Leave Family): your device
+    wipes its group data and tells the group to stop sharing with you.</li>
+    <li><strong>Remove a member</strong> (group creator): the removed device stops sharing
+    and is removed from every member's app.</li>
+    <li><strong>Delete conversations and history</strong> from within the app; automatic
+    retention limits apply regardless.</li>
+    <li><strong>Uninstalling the app</strong> removes all app data from the device.</li>
+  </ul>
+  <p>Because data is replicated among family devices as an encrypted backup, copies of
+  past shared data may remain on your family members' devices until their retention
+  windows expire.</p>
+
+  <h2>Permissions the app requests</h2>
+  <ul>
+    <li><strong>Location (all the time)</strong> — the app's core function: sharing your
+    location with your family, including when the app is closed or not in use.</li>
+    <li><strong>Notifications</strong> — safety alerts, place arrivals, crash alerts, messages.</li>
+    <li><strong>Camera</strong> — scanning family invite QR codes only; no images are captured.</li>
+    <li><strong>Physical activity</strong> — detecting driving/walking to tune GPS battery use.</li>
+    <li><strong>Nearby Wi-Fi devices</strong> — direct device-to-device sharing on home Wi-Fi.</li>
+    <li><strong>Battery optimization exemption</strong> — keeps location sharing alive in the
+    background; without it some phones stop the app during long idle periods.</li>
+  </ul>
+
+  <h2>Changes and contact</h2>
+  <p>If this policy changes, the updated version will be posted at this address with a
+  new date. Questions: <a href="mailto:omar@courageonpurpose.org">omar@courageonpurpose.org</a></p>
+
+  <footer>Family Safety — privacy-first, end-to-end-encrypted family location sharing</footer>
+</div>
+</body>
+</html>
