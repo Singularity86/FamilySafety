@@ -372,8 +372,8 @@ own pending `requestId` + memberId (anti-replay).
 |---|---|
 | Kotlin + Compose | Swift 5.10+ / SwiftUI (iOS 16+) |
 | Hilt DI | Simple environment/initializer injection (don't over-engineer) |
-| Lazysodium (libsodium) | **swift-sodium** (exposes `Clibsodium` for the raw calls below) |
-| BouncyCastle PBKDF2 | CommonCrypto `CCKeyDerivationPBKDF(kCCPRFHmacAlgSHA512)` |
+| Lazysodium (libsodium) | **swift-sodium**'s `Clibsodium` product, called via raw C functions directly (not swift-sodium's Swift wrapper — see `ios/FamilySafety/Sources/FamilySafetyCore/SodiumRaw.swift`) |
+| BouncyCastle PBKDF2 | Pure-Swift PBKDF2-HMAC-SHA512 built on CryptoKit `HMAC<SHA512>` (not CommonCrypto — avoids an SPM bridging-header/module-map requirement; see `Bip39.swift`) |
 | HMAC-SHA512 (SLIP-10) | CryptoKit `HMAC<SHA512>` |
 | AES-256-GCM (files) | CryptoKit `AES.GCM` (`SealedBox.combined` == Android blob layout) |
 | Paho MQTT | **CocoaMQTT** (3.1.1, cleanSession=false, LWT, QoS1) |
@@ -487,31 +487,45 @@ file_key: 615d9ec6399937470f89418ab98e10f3107c56d7a09b6bf234263d8ad842becd
 
 ---
 
-## 13. Suggested Xcode project structure
+## 13. Project structure (scaffolded)
+
+`ios/FamilySafety/` is a SwiftPM package — open the folder directly in Xcode (no
+`.xcodeproj` needed). Structure actually on disk, mapped against the original plan:
 
 ```
-FamilySafety-iOS/
-  Core/            Bip39.swift, Slip10.swift, Identity.swift, SodiumCrypto.swift (E2EE envelope)
-  Transport/       MqttConfig.swift (topic builders — port MqttConfig.kt 1:1),
-                   MqttTransport.swift, PendingQueue.swift
-  Group/           Models.swift (GroupDefinition/FamilyMember + stateHash),
-                   GroupTransitionValidator.swift, GroupStateStore.swift
-  Sync/            GroupSyncManager.swift
-  Invite/          InviteCode.swift, JoinFlow.swift
-  Location/        LocationPublisher.swift, LocationStore.swift
-  Chat/            ChatRepository.swift, models
-  Replication/     ReplicationManager.swift, models
-  Files/           SharedFileRepository.swift (AES-GCM, chunking)
-  Storage/         GRDB database, Keychain wrapper
-  UI/              SwiftUI screens (Onboarding, Map, Members, Chat, Settings)
-  Tests/           VectorTests (from §12), schema round-trip tests, validator tests
+ios/FamilySafety/
+  Package.swift                              depends on swift-sodium (Clibsodium product only)
+  Sources/FamilySafetyCore/
+    Hex.swift                                 hex codec
+    SodiumRaw.swift                           raw libsodium C calls (Core)
+    Bip39.swift                               BIP-39 + pure-Swift PBKDF2 (Core)
+    Slip10.swift                              SLIP-10 derivation (Core)
+    Identity.swift                            FamilySafeIdentity / key derivation (Core)
+    SodiumCrypto.swift                        E2EE envelope encrypt/decrypt (Core)
+    Resources/bip39_english.txt               byte-for-byte copy of the Android wordlist
+    Group/Models.swift                        GroupDefinition/FamilyMember + stateHash (Group, partial — Phase 1 adds GroupTransitionValidator, GroupStateStore)
+    Files/SharedFileCrypto.swift               file-key derivation only (Files, partial — Phase 6 adds the rest)
+    Transport/, Sync/, Invite/, Chat/, Replication/   empty — fill in per phase below
+  Tests/FamilySafetyCoreTests/
+    VectorTests.swift                         every §12 vector as an XCTest — this is Phase 0's acceptance test
 ```
+
+Not yet created (add when that phase starts): `Location/`, `Storage/`, and the SwiftUI
+`UI/` target + app target with Info.plist (§11) — those need an actual app target, not
+just a library package, and are Phase 4/6/7 concerns respectively.
 
 ## 14. Phased build plan (one budget-friendly session per phase)
 
-**Phase 0 — Crypto core.** Bip39 + Slip10 + Identity + E2EE envelope. *Done when:* every
-vector in §12 passes as an XCTest (identities, shared secret, envelope encrypt with the
-fixed nonce, decrypt+verify, state hash, both signatures, file key).
+**Phase 0 — Crypto core.** Bip39 + Slip10 + Identity + E2EE envelope.
+**Scaffolded already** (§13) — Bip39.swift, Slip10.swift, Identity.swift,
+SodiumCrypto.swift, SodiumRaw.swift, plus the Group/Models.swift + Files/SharedFileCrypto.swift
+needed for the state-hash/signature/file-key vectors. **Not yet done:** this was
+scaffolded on Windows, which has no Swift toolchain — nobody has run `swift test` yet.
+*Done when:* on a Mac, `cd ios/FamilySafety && swift test` passes every case in
+`VectorTests.swift` (identities, shared secret, envelope encrypt with the fixed nonce,
+decrypt+verify, state hash, both signatures, file key). Fix whatever the compiler or a
+failing assertion turns up — the vectors are ground truth, the Swift code is not yet
+proven correct.
 
 **Phase 1 — Models & validation.** GroupDefinition/FamilyMember Codable + `computeStateHash`
 + GroupTransitionValidator + all wire structs in §6 with round-trip tests (including
