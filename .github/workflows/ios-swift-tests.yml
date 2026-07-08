@@ -1,0 +1,50 @@
+name: iOS Swift Package Tests
+
+# Runs the ios/FamilySafety SwiftPM package's test suite on a macOS runner.
+# This is how the iOS crypto scaffold (see ios/IOS_PORT_SPEC.md §14 Phase 0) gets
+# verified without owning or renting a Mac — GitHub's hosted runner is a real macOS
+# machine with Xcode preinstalled. It cannot run the Simulator UI or sign/submit an
+# app, but `swift build` / `swift test` behave identically to running them locally.
+
+on:
+  push:
+    paths:
+      - 'ios/FamilySafety/**'
+      - '.github/workflows/ios-swift-tests.yml'
+  pull_request:
+    paths:
+      - 'ios/FamilySafety/**'
+      - '.github/workflows/ios-swift-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: swift test
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: ios/FamilySafety
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain versions
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ios/FamilySafety/.build
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('ios/FamilySafety/Package.resolved', 'ios/FamilySafety/Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Build
+        run: swift build -v
+
+      - name: Test
+        run: swift test -v
