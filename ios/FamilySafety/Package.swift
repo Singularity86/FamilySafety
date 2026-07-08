@@ -26,7 +26,12 @@ import PackageDescription
 let package = Package(
     name: "FamilySafety",
     platforms: [
-        .iOS(.v16)
+        .iOS(.v16),
+        // `swift test` runs the test target on the HOST platform (macOS), not iOS —
+        // this is what CI actually exercises. Without a macOS floor here, SwiftPM
+        // falls back to an old default deployment target and CryptoKit's SHA256 (which
+        // needs macOS 10.15+) fails to type-check. The app itself still only ships iOS.
+        .macOS(.v13)
     ],
     products: [
         .library(name: "FamilySafetyCore", targets: ["FamilySafetyCore"])
