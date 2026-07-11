@@ -2,6 +2,8 @@ package com.example.familysafety.onboarding
 
 import android.content.Context
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -96,12 +98,17 @@ fun TutorialScreen(
         ) {
             AnimatedContent(
                 targetState = page,
+                modifier = Modifier.weight(1f),
+                contentAlignment = Alignment.Center,
                 transitionSpec = {
-                    if (targetState > initialState) {
+                    val transform = if (targetState > initialState) {
                         slideInHorizontally { it } togetherWith slideOutHorizontally { -it }
                     } else {
                         slideInHorizontally { -it } togetherWith slideOutHorizontally { it }
                     }
+                    transform.using(
+                        SizeTransform(clip = false, sizeAnimationSpec = { _, _ -> snap() })
+                    )
                 },
                 label = "tutorial_slide"
             ) { targetPage ->

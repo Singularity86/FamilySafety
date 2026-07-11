@@ -198,7 +198,7 @@ fun GeofenceEditorScreen(
             )
 
             // Location display
-            Card(modifier = Modifier.fillMaxWidth()) {
+            OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     Text("Center", style = MaterialTheme.typography.labelMedium)
                     if (hasLocation) {
@@ -272,7 +272,7 @@ fun GeofenceEditorScreen(
             }
 
             // Enter/Exit alert toggles + sound pickers
-            Card(modifier = Modifier.fillMaxWidth()) {
+            OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     Text("Alerts", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(8.dp))
@@ -327,7 +327,7 @@ fun GeofenceEditorScreen(
 
             // Member filter
             if (familyMembers.isNotEmpty()) {
-                Card(modifier = Modifier.fillMaxWidth()) {
+                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text("Watch members", style = MaterialTheme.typography.titleSmall)
                         Text(

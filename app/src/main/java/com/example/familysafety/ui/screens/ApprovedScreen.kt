@@ -23,11 +23,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.familysafety.ui.theme.Black
 import com.example.familysafety.ui.theme.Spacing
 import com.example.familysafety.ui.theme.TealPrimary
-import com.example.familysafety.ui.theme.TextPrimary
-import com.example.familysafety.ui.theme.TextSecondary
 import kotlinx.coroutines.delay
 
 /**
@@ -64,7 +61,7 @@ fun ApprovedScreen(
                 Icon(
                     imageVector = Icons.Default.Check,
                     contentDescription = null,
-                    tint = Black,
+                    tint = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier.size(44.dp)
                 )
             }
@@ -74,7 +71,7 @@ fun ApprovedScreen(
             Text(
                 text = "You're In!",
                 style = MaterialTheme.typography.displayLarge.copy(fontWeight = FontWeight.Bold),
-                color = TextPrimary,
+                color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center
             )
 
@@ -83,7 +80,7 @@ fun ApprovedScreen(
             Text(
                 text = "You've been added to $familyName.\nJibaro Family Safety must now restart.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = TextSecondary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
 
@@ -93,7 +90,7 @@ fun ApprovedScreen(
                 onClick = onContinue,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = TealPrimary,
-                    contentColor = Black
+                    contentColor = MaterialTheme.colorScheme.onPrimary
                 )
             ) {
                 Text("Open Now")

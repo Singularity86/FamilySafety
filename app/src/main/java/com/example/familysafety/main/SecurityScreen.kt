@@ -20,8 +20,8 @@ import com.example.familysafety.core.SecurityEventRepository
 import com.example.familysafety.group.GroupDefinition
 import com.example.familysafety.sync.GroupSyncManager
 import com.example.familysafety.transport.MqttTransport
-
-private val GreenOk = Color(0xFF4CAF50)
+import com.example.familysafety.ui.theme.AmberWarning
+import com.example.familysafety.ui.theme.ColorSuccess
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -121,16 +121,16 @@ private fun SecurityVerdictCard(
         waitingForSync -> Triple(
             "Waiting for devices",
             "Jibaro Family Safety is checking the family list or waiting for other devices to answer.",
-            Color(0xFFFF9800)
+            AmberWarning
         )
         else -> Triple(
             "All clear",
             "Jibaro Family Safety has a working route and no current key issues.",
-            GreenOk
+            ColorSuccess
         )
     }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
+    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -161,32 +161,32 @@ private fun NetworkStatusCard(
     deviceNetworkAvailable: Boolean,
     routeHealth: MainViewModel.RouteHealth
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text("Network", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(12.dp))
 
             StatusRow(
-                color = if (deviceNetworkAvailable) GreenOk else MaterialTheme.colorScheme.error,
+                color = if (deviceNetworkAvailable) ColorSuccess else MaterialTheme.colorScheme.error,
                 label = "Device internet: ${if (deviceNetworkAvailable) "Available" else "Unavailable"}"
             )
 
             Spacer(Modifier.height(6.dp))
 
             val (mqttColor, mqttLabel) = when (mqttState) {
-                is MqttTransport.ConnectionState.Connected   -> GreenOk to "Connected"
-                is MqttTransport.ConnectionState.Connecting  -> Color(0xFFFF9800) to "Connecting…"
+                is MqttTransport.ConnectionState.Connected   -> ColorSuccess to "Connected"
+                is MqttTransport.ConnectionState.Connecting  -> AmberWarning to "Connecting…"
                 is MqttTransport.ConnectionState.Error       -> MaterialTheme.colorScheme.error to "Error"
-                else                                         -> Color(0xFF9E9E9E) to "Disconnected"
+                else                                         -> MaterialTheme.colorScheme.onSurfaceVariant to "Disconnected"
             }
             StatusRow(mqttColor, "Relay: $mqttLabel")
 
             Spacer(Modifier.height(6.dp))
 
             val localColor = when {
-                routeHealth.totalPeerCount == 0 -> Color(0xFF9E9E9E)
-                routeHealth.localPeerCount > 0 -> GreenOk
-                else -> Color(0xFF9E9E9E)
+                routeHealth.totalPeerCount == 0 -> MaterialTheme.colorScheme.onSurfaceVariant
+                routeHealth.localPeerCount > 0 -> ColorSuccess
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
             }
             StatusRow(
                 localColor,
@@ -204,9 +204,9 @@ private fun NetworkStatusCard(
                 else -> "No active route"
             }
             val routeColor = when (routeLabel) {
-                "Local" -> GreenOk
-                "Mixed local + relay" -> Color(0xFFFF9800)
-                "Relay" -> Color(0xFFFF9800)
+                "Local" -> ColorSuccess
+                "Mixed local + relay" -> AmberWarning
+                "Relay" -> AmberWarning
                 else -> MaterialTheme.colorScheme.error
             }
             StatusRow(routeColor, "App route: $routeLabel")
@@ -214,11 +214,11 @@ private fun NetworkStatusCard(
             Spacer(Modifier.height(6.dp))
 
             val (syncColor, syncLabel) = when (val s = syncState) {
-                is GroupSyncManager.SyncState.Synced   -> GreenOk to "Synced v${s.version}"
-                is GroupSyncManager.SyncState.Syncing  -> Color(0xFFFF9800) to "Syncing…"
+                is GroupSyncManager.SyncState.Synced   -> ColorSuccess to "Synced v${s.version}"
+                is GroupSyncManager.SyncState.Syncing  -> AmberWarning to "Syncing…"
                 is GroupSyncManager.SyncState.Conflict -> MaterialTheme.colorScheme.error to "Conflict detected"
                 is GroupSyncManager.SyncState.Error    -> MaterialTheme.colorScheme.error to "Error: ${s.message}"
-                else                                   -> Color(0xFF9E9E9E) to "Idle"
+                else                                   -> MaterialTheme.colorScheme.onSurfaceVariant to "Idle"
             }
             StatusRow(syncColor, "Family list: $syncLabel")
         }
@@ -244,7 +244,7 @@ private fun GroupIntegrityCard(
     keySyncRequestState: MainViewModel.KeySyncRequestState,
     viewModel: MainViewModel
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text("Family List", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(12.dp))
@@ -284,17 +284,17 @@ private fun GroupIntegrityCard(
 private fun KeySyncStatus(state: MainViewModel.KeySyncRequestState) {
     val (color, text) = when (state) {
         MainViewModel.KeySyncRequestState.Idle ->
-            Color(0xFF9E9E9E) to "Ready to ask family devices for their latest member list."
+            MaterialTheme.colorScheme.onSurfaceVariant to "Ready to ask family devices for their latest member list."
         MainViewModel.KeySyncRequestState.Sending ->
-            Color(0xFFFF9800) to "Sending sync request..."
+            AmberWarning to "Sending sync request..."
         is MainViewModel.KeySyncRequestState.Requested ->
-            Color(0xFFFF9800) to "Asked ${state.peerCount} device${if (state.peerCount != 1) "s" else ""}. ${state.sentCount} reachable, ${state.failedCount} no response so far."
+            AmberWarning to "Asked ${state.peerCount} device${if (state.peerCount != 1) "s" else ""}. ${state.sentCount} reachable, ${state.failedCount} no response so far."
         is MainViewModel.KeySyncRequestState.Updated ->
-            GreenOk to "Updated family list from v${state.fromVersion} to v${state.toVersion}."
+            ColorSuccess to "Updated family list from v${state.fromVersion} to v${state.toVersion}."
         is MainViewModel.KeySyncRequestState.NoNewerUpdate ->
-            GreenOk to "No newer family list came back. ${state.sentCount} reachable, ${state.failedCount} no response. This device is on v${state.version}."
+            ColorSuccess to "No newer family list came back. ${state.sentCount} reachable, ${state.failedCount} no response. This device is on v${state.version}."
         MainViewModel.KeySyncRequestState.NoPeers ->
-            Color(0xFF9E9E9E) to "No other family devices are in this family yet."
+            MaterialTheme.colorScheme.onSurfaceVariant to "No other family devices are in this family yet."
         is MainViewModel.KeySyncRequestState.Error ->
             MaterialTheme.colorScheme.error to state.message
     }
@@ -336,7 +336,7 @@ private fun MemberKeysCard(
         !it.hasActiveFailure && it.failureCount > 0
     }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
+    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text("Member Keys", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(6.dp))
@@ -425,7 +425,7 @@ private fun MemberKeysCard(
                         Icon(
                             Icons.Default.CheckCircle,
                             contentDescription = "OK",
-                            tint = GreenOk,
+                            tint = ColorSuccess,
                             modifier = Modifier.size(20.dp)
                         )
                     }

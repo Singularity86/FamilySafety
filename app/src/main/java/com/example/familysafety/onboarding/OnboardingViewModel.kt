@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.familysafety.group.*
 import com.example.familysafety.invite.JoinRequest
+import com.example.familysafety.transport.BrokerConfig
 import com.example.familysafety.transport.MqttConfig
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -198,6 +199,11 @@ class OnboardingViewModel @Inject constructor(
                     connectionTimeout = 30
                     keepAliveInterval = 30
                     isAutomaticReconnect = false
+
+                    // Broker authentication (absent = anonymous, e.g. public dev broker)
+                    val broker = BrokerConfig.getCurrentBroker()
+                    broker.username?.let { userName = it }
+                    broker.password?.let { password = it.toCharArray() }
                 }
                 Timber.i("sendJoinRequest: connecting to broker…")
                 mqttClient.connect(options).waitForCompletion(30_000)

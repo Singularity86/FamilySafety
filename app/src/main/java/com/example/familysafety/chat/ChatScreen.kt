@@ -32,11 +32,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -219,13 +219,27 @@ private fun MessageBubble(
 ) {
     val isOutgoing = message.isOutgoing
 
-    // Incoming bubbles use the sender's chosen color (or auto-derived from ID).
+    // One consistent treatment: filled, borderless bubbles. Outgoing keeps the
+    // accent fill; incoming uses a calm neutral fill so per-member color lives
+    // only on the sender-name label above the bubble, not the whole shape.
     val bubbleColor = if (isOutgoing) {
         MaterialTheme.colorScheme.primary
     } else {
-        memberBubbleColor(message.senderId, senderColorHue)
+        MaterialTheme.colorScheme.surfaceVariant
     }
-    val textColor = Color.White
+    val contentColor = if (isOutgoing) {
+        MaterialTheme.colorScheme.onPrimary
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    // Timestamp/status are de-emphasized relative to message content.
+    val secondaryColor = if (isOutgoing) {
+        MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    // Sender identity in group chat still reads via the label color.
+    val labelColor = memberBubbleColor(message.senderId, senderColorHue)
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -237,11 +251,11 @@ private fun MessageBubble(
                 text = senderName,
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                color = bubbleColor,
+                color = labelColor,
                 modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
             )
         }
-        OutlinedCard(
+        Card(
             modifier = Modifier.widthIn(max = 280.dp),
             shape = RoundedCornerShape(
                 topStart = 16.dp,
@@ -249,7 +263,8 @@ private fun MessageBubble(
                 bottomStart = if (isOutgoing) 16.dp else 4.dp,
                 bottomEnd = if (isOutgoing) 4.dp else 16.dp
             ),
-            colors = CardDefaults.cardColors(containerColor = bubbleColor)
+            colors = CardDefaults.cardColors(containerColor = bubbleColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 // Content
@@ -258,13 +273,13 @@ private fun MessageBubble(
                         Text(
                             text = message.content,
                             style = MaterialTheme.typography.bodyMedium,
-                            color = textColor
+                            color = contentColor
                         )
                     }
                     MessageType.LOCATION -> {
                         LocationMessageContent(
                             content = message.content,
-                            isOutgoing = true  // always white text on colored bg
+                            isOutgoing = isOutgoing
                         )
                     }
                     MessageType.SYSTEM -> {
@@ -288,14 +303,14 @@ private fun MessageBubble(
                     Text(
                         text = formatTime(message.timestamp),
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color.White.copy(alpha = 0.7f)
+                        color = secondaryColor
                     )
 
                     if (isOutgoing) {
                         Spacer(modifier = Modifier.width(4.dp))
                         MessageStatusIcon(
                             status = message.status,
-                            tint = Color.White.copy(alpha = 0.7f)
+                            tint = secondaryColor
                         )
                     }
                 }
@@ -313,7 +328,7 @@ private fun LocationMessageContent(
     val textColor = if (isOutgoing) {
         MaterialTheme.colorScheme.onPrimary
     } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
+        MaterialTheme.colorScheme.onSurface
     }
 
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -409,13 +424,14 @@ private fun MessageInput(
     onSend: () -> Unit,
     isSending: Boolean
 ) {
-    Surface(
-        tonalElevation = 3.dp,
-        shadowElevation = 3.dp
-    ) {
+    Column {
+        // A single hairline delineates the input row from the message list —
+        // no shadow, matching the app's border-based elevation convention.
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface)
                 .padding(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {

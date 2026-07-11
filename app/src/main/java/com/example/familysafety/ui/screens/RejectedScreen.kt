@@ -21,8 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.theme.Spacing
-import com.example.familysafety.ui.theme.TextPrimary
-import com.example.familysafety.ui.theme.TextSecondary
 
 /**
  * Shown when the inviter declines a join request. Terminal until the user
@@ -47,7 +45,7 @@ fun RejectedScreen(
                 modifier = Modifier
                     .size(80.dp)
                     .background(
-                        color = MaterialTheme.colorScheme.errorContainer,
+                        color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = CircleShape
                     ),
                 contentAlignment = Alignment.Center
@@ -56,7 +54,7 @@ fun RejectedScreen(
                     imageVector = Icons.Default.Close,
                     contentDescription = null,
                     modifier = Modifier.size(40.dp),
-                    tint = MaterialTheme.colorScheme.onErrorContainer
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
@@ -65,7 +63,7 @@ fun RejectedScreen(
             Text(
                 text = "Request Declined",
                 style = MaterialTheme.typography.displayLarge,
-                color = TextPrimary,
+                color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center
             )
 
@@ -78,7 +76,7 @@ fun RejectedScreen(
                     "Your request to join $familyName was declined."
                 },
                 style = MaterialTheme.typography.bodyMedium,
-                color = TextSecondary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
 

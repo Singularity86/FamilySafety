@@ -4,13 +4,8 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -36,7 +31,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.familysafety.invite.JoinRequest
 import com.example.familysafety.ui.components.ShimmerBox
-import kotlinx.coroutines.delay
 
 
 @Composable
@@ -95,38 +89,25 @@ fun MembersScreen(
                     }
                 }
             } else {
-                itemsIndexed(familyMembers, key = { _, member -> member.memberId }) { index, member ->
-                    var visible by remember { mutableStateOf(false) }
-                    LaunchedEffect(index) {
-                        delay(minOf(index, 7) * 40L)
-                        visible = true
-                    }
-                    AnimatedVisibility(
-                        visible = visible,
-                        enter = fadeIn(tween(150)) + slideInVertically(
-                            initialOffsetY = { it / 4 },
-                            animationSpec = tween(150)
-                        )
-                    ) {
-                        MemberCard(
-                            member = member,
-                            location = memberLocations[member.memberId],
-                            routeStatus = memberRouteStatuses[member.memberId],
-                            avatar = memberAvatars[member.memberId],
-                            isMe = member.memberId == myMemberId,
-                            onShowOnMap = {
-                                viewModel.focusOnMember(member.memberId)
-                                onNavigateToMap()
-                            },
-                            onShowDriveEstimate = {
-                                viewModel.requestDriveEstimate(member.memberId)
-                            },
-                            onShowHistory = { onNavigateToHistory(member.memberId) },
-                            onRemove = { viewModel.removeMember(member.memberId) },
-                            canRemove = canRemoveOthers,
-                            colorHue = member.colorHue
-                        )
-                    }
+                items(familyMembers, key = { member -> member.memberId }) { member ->
+                    MemberCard(
+                        member = member,
+                        location = memberLocations[member.memberId],
+                        routeStatus = memberRouteStatuses[member.memberId],
+                        avatar = memberAvatars[member.memberId],
+                        isMe = member.memberId == myMemberId,
+                        onShowOnMap = {
+                            viewModel.focusOnMember(member.memberId)
+                            onNavigateToMap()
+                        },
+                        onShowDriveEstimate = {
+                            viewModel.requestDriveEstimate(member.memberId)
+                        },
+                        onShowHistory = { onNavigateToHistory(member.memberId) },
+                        onRemove = { viewModel.removeMember(member.memberId) },
+                        canRemove = canRemoveOthers,
+                        colorHue = member.colorHue
+                    )
                 }
             }
         }

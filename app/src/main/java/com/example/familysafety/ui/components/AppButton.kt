@@ -23,7 +23,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.example.familysafety.ui.theme.Black
 import com.example.familysafety.ui.theme.ButtonShape
 import com.example.familysafety.ui.theme.RedDanger
 import com.example.familysafety.ui.theme.TealPrimary
@@ -42,11 +41,18 @@ fun AppButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Idle/Loading/Success stay on the single accent (primary emphasis); only the
+    // Error state borrows RedDanger, and only because it represents a genuine
+    // failure to retry — not a destructive action.
     val containerColor = when (state) {
         is ButtonState.Idle    -> TealPrimary
         is ButtonState.Loading -> TealPrimary
         is ButtonState.Success -> TealPrimary.copy(alpha = 0.8f)
         is ButtonState.Error   -> RedDanger
+    }
+    val contentColor = when (state) {
+        is ButtonState.Error -> MaterialTheme.colorScheme.onError
+        else                 -> MaterialTheme.colorScheme.onPrimary
     }
 
     Button(
@@ -55,9 +61,9 @@ fun AppButton(
         shape = ButtonShape,
         colors = ButtonDefaults.buttonColors(
             containerColor = containerColor,
-            contentColor = Black,
+            contentColor = contentColor,
             disabledContainerColor = containerColor,
-            disabledContentColor = Black
+            disabledContentColor = contentColor
         )
     ) {
         AnimatedContent(
@@ -77,7 +83,7 @@ fun AppButton(
                 )
                 is ButtonState.Loading -> CircularProgressIndicator(
                     modifier = Modifier.size(18.dp),
-                    color = Black,
+                    color = MaterialTheme.colorScheme.onPrimary,
                     strokeWidth = 2.dp
                 )
                 is ButtonState.Success -> Row(verticalAlignment = Alignment.CenterVertically) {

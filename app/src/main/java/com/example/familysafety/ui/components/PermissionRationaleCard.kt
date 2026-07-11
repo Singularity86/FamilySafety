@@ -11,13 +11,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.familysafety.ui.theme.Black
-import com.example.familysafety.ui.theme.CardShape
 import com.example.familysafety.ui.theme.Spacing
-import com.example.familysafety.ui.theme.Surface1
 import com.example.familysafety.ui.theme.TealPrimary
-import com.example.familysafety.ui.theme.TextPrimary
-import com.example.familysafety.ui.theme.TextSecondary
 
 @SuppressLint("InlinedApi")
 @Composable
@@ -40,11 +35,7 @@ fun PermissionRationaleCard(
         else                                           -> Icons.Default.Security
     }
 
-    Surface(
-        modifier = modifier,
-        color = Surface1,
-        shape = CardShape
-    ) {
+    OutlinedCard(modifier = modifier) {
         Column(modifier = Modifier.padding(Spacing.lg)) {
             Icon(
                 imageVector = icon,
@@ -56,13 +47,13 @@ fun PermissionRationaleCard(
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                color = TextPrimary
+                color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(Spacing.sm))
             Text(
                 text = rationale,
                 style = MaterialTheme.typography.bodyMedium,
-                color = TextSecondary
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             if (coaching != null) {
                 Spacer(modifier = Modifier.height(Spacing.md))
@@ -84,14 +75,14 @@ fun PermissionRationaleCard(
                 horizontalArrangement = Arrangement.End
             ) {
                 TextButton(onClick = onDismiss) {
-                    Text("Not Now", color = TextSecondary)
+                    Text("Not Now", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Spacer(modifier = Modifier.width(Spacing.sm))
                 Button(
                     onClick = onRequestPermission,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = TealPrimary,
-                        contentColor = Black
+                        contentColor = MaterialTheme.colorScheme.onPrimary
                     )
                 ) {
                     Text("Continue")

@@ -6,7 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
@@ -120,11 +119,11 @@ fun InviteScreen(
                 // QR code card
                 val bmp = qrBitmap
                 if (bmp != null) {
-                    Card(
+                    // Container stays white regardless of theme — the QR code's quiet
+                    // zone needs light margin around the dark modules to stay scannable.
+                    OutlinedCard(
                         modifier = Modifier.size(240.dp),
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                        colors = CardDefaults.outlinedCardColors(containerColor = Color.White)
                     ) {
                         Image(
                             bitmap = bmp.asImageBitmap(),
@@ -149,17 +148,15 @@ fun InviteScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
-                        Surface(
-                            shape = MaterialTheme.shapes.medium,
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
+                        OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                             Text(
                                 text = code,
                                 style = MaterialTheme.typography.bodySmall.copy(
                                     fontFamily = FontFamily.Monospace
                                 ),
-                                modifier = Modifier.padding(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
                                 textAlign = TextAlign.Center
                             )
                         }

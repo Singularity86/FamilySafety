@@ -4,7 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -27,7 +27,7 @@ fun RestoreMnemonicScreen(
                 title = { Text("Restore Account") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -52,23 +52,25 @@ fun RestoreMnemonicScreen(
                 modifier = Modifier.padding(bottom = 24.dp)
             )
 
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                contentPadding = PaddingValues(vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                items(12) { index ->
-                    OutlinedTextField(
-                        value = words[index],
-                        onValueChange = { newValue ->
-                            words = words.toMutableList().also { it[index] = newValue }
-                        },
-                        label = { Text("${index + 1}") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+            OutlinedCard(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    contentPadding = PaddingValues(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(12) { index ->
+                        OutlinedTextField(
+                            value = words[index],
+                            onValueChange = { newValue ->
+                                words = words.toMutableList().also { it[index] = newValue }
+                            },
+                            label = { Text("${index + 1}") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
 

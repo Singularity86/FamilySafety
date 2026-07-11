@@ -56,7 +56,7 @@ fun BatteryOptimizationScreen(
 
     val instructions = remember { OemBatteryHelper.getInstructions() }
 
-    Surface(color = Surface1, shape = CardShape) {
+    OutlinedCard {
         Column(modifier = Modifier.padding(Spacing.lg)) {
             Icon(
                 imageVector = Icons.Default.BatteryAlert,
@@ -68,7 +68,7 @@ fun BatteryOptimizationScreen(
             Text(
                 text = "Background Activity",
                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                color = TextPrimary
+                color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(Spacing.sm))
             Text(
@@ -76,7 +76,7 @@ fun BatteryOptimizationScreen(
                     "sharing. Granting this exemption keeps your location visible to your family " +
                     "even when the screen is off.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = TextSecondary
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(modifier = Modifier.height(Spacing.md))
 
@@ -166,7 +166,7 @@ fun BatteryOptimizationScreen(
                 horizontalArrangement = Arrangement.End
             ) {
                 TextButton(onClick = onSkip) {
-                    Text("Not Now", color = TextSecondary)
+                    Text("Not Now", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Spacer(modifier = Modifier.width(Spacing.sm))
                 Button(
@@ -183,7 +183,7 @@ fun BatteryOptimizationScreen(
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = TealPrimary,
-                        contentColor = Black
+                        contentColor = MaterialTheme.colorScheme.onPrimary
                     )
                 ) {
                     Text("Allow")

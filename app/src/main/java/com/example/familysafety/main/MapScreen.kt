@@ -16,6 +16,7 @@ import android.provider.Settings
 import android.view.MotionEvent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.runtime.saveable.rememberSaveable
 import com.example.familysafety.BuildConfig
 import com.example.familysafety.geofence.GeofenceZone
+import com.example.familysafety.ui.theme.AmberWarning
 import kotlinx.coroutines.launch
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
@@ -56,6 +58,9 @@ import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 import timber.log.Timber
+
+/** Beyond this age, a member marker is dimmed to signal it's no longer fresh. */
+private const val STALE_LOCATION_THRESHOLD_MS = 30 * 60_000L
 
 private val MAP_TILES = object : OnlineTileSourceBase(
     "OsmStandard", 0, 19, 256, ".png",
@@ -317,12 +322,18 @@ fun MapScreen(
                 sizePx = markerSizePx,
                 colorHue = member?.colorHue
             )
+            // Dim (not alarm-color) a marker once its location is old enough that it's
+            // no longer a good stand-in for "live" — well past the ~5 min stationary
+            // heartbeat interval, so a few missed cycles are still shown as fresh.
+            val isStale = System.currentTimeMillis() - location.timestamp > STALE_LOCATION_THRESHOLD_MS
             val marker = Marker(mapView).apply {
                 position = GeoPoint(location.latitude, location.longitude)
                 title = member?.displayName ?: memberId
                 snippet = "Updated ${getTimeAgo(location.timestamp)} · ±${location.accuracy.toInt()}m"
                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                icon = BitmapDrawable(context.resources, bmp)
+                icon = BitmapDrawable(context.resources, bmp).apply {
+                    alpha = if (isStale) 140 else 255
+                }
                 setOnMarkerClickListener { _, _ ->
                     viewModel.requestDriveEstimate(memberId)
                     true
@@ -369,14 +380,14 @@ fun MapScreen(
                     )
                     if (isLarge && !tooMany) {
                         Surface(
-                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                            color = AmberWarning.copy(alpha = 0.16f),
                             shape = MaterialTheme.shapes.extraSmall
                         ) {
                             Text(
                                 text = "Large download — make sure you're on Wi-Fi.",
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                                color = AmberWarning
                             )
                         }
                     }
@@ -448,9 +459,9 @@ fun MapScreen(
                 .padding(end = 2.dp)
                 .width(18.dp)
                 .height(72.dp),
-            shape = RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp),
+            shape = RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp),
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.58f),
-            tonalElevation = 2.dp
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
@@ -493,7 +504,7 @@ fun MapScreen(
                     .widthIn(min = 180.dp, max = 260.dp),
                 shape = MaterialTheme.shapes.small,
                 color = MaterialTheme.colorScheme.surfaceVariant,
-                tonalElevation = 4.dp
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
                 Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                     Row(
@@ -561,7 +572,7 @@ fun MapScreen(
                     .padding(bottom = 80.dp, start = 16.dp, end = 16.dp),
                 shape = MaterialTheme.shapes.small,
                 color = MaterialTheme.colorScheme.errorContainer,
-                tonalElevation = 4.dp
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.3f))
             ) {
                 Text(
                     text = downloadErrorMessage!!,

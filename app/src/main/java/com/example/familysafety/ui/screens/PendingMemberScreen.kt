@@ -29,8 +29,6 @@ import com.example.familysafety.main.EncryptionChip
 import com.example.familysafety.ui.theme.Spacing
 import com.example.familysafety.ui.theme.TealPrimary
 import com.example.familysafety.ui.theme.TextDisabled
-import com.example.familysafety.ui.theme.TextPrimary
-import com.example.familysafety.ui.theme.TextSecondary
 
 @Composable
 fun PendingMemberScreen(
@@ -71,7 +69,7 @@ fun PendingMemberScreen(
             Text(
                 text = "Waiting for Approval",
                 style = MaterialTheme.typography.displayLarge,
-                color = TextPrimary,
+                color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center
             )
 
@@ -80,7 +78,7 @@ fun PendingMemberScreen(
             Text(
                 text = "${state.familyName} is reviewing your request.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = TextSecondary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
 

@@ -16,10 +16,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.familysafety.ui.theme.Spacing
-import com.example.familysafety.ui.theme.Surface2
 import com.example.familysafety.ui.theme.TealPrimary
 import com.example.familysafety.ui.theme.TextDisabled
-import com.example.familysafety.ui.theme.TextSecondary
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,7 +52,7 @@ fun PrivacyScreen(navController: NavController) {
 
             HorizontalDivider(
                 modifier = Modifier.padding(vertical = Spacing.md),
-                color = Surface2
+                color = MaterialTheme.colorScheme.outlineVariant
             )
 
             PrivacySectionHeader("Transmitted Over Encrypted Channel")
@@ -64,7 +62,7 @@ fun PrivacyScreen(navController: NavController) {
 
             HorizontalDivider(
                 modifier = Modifier.padding(vertical = Spacing.md),
-                color = Surface2
+                color = MaterialTheme.colorScheme.outlineVariant
             )
 
             PrivacySectionHeader("Never Transmitted")
@@ -111,14 +109,14 @@ private fun PrivacyItem(icon: ImageVector, text: String) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = TextSecondary,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(16.dp)
         )
         Spacer(modifier = Modifier.width(Spacing.sm))
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall,
-            color = TextSecondary
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

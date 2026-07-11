@@ -474,6 +474,7 @@ private fun LocationHistoryRow(
         Text(
             text = time,
             style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.width(72.dp)
         )
         Surface(

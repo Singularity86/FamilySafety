@@ -31,6 +31,7 @@ import com.example.familysafety.storage.SharedFileEntity
 import com.example.familysafety.ui.components.AppButton
 import com.example.familysafety.ui.components.ButtonState
 import com.example.familysafety.ui.components.ShimmerBox
+import com.example.familysafety.ui.theme.AmberWarning
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -198,7 +199,7 @@ private fun StorageBar(usedBytes: Long, maxBytes: Long) {
             Text(
                 "$usedMb MB / $maxMb MB",
                 style = MaterialTheme.typography.labelMedium,
-                color = if (isNearFull) MaterialTheme.colorScheme.error
+                color = if (isNearFull) AmberWarning
                         else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -209,7 +210,7 @@ private fun StorageBar(usedBytes: Long, maxBytes: Long) {
                 .fillMaxWidth()
                 .height(6.dp)
                 .clip(RoundedCornerShape(3.dp)),
-            color = if (isNearFull) MaterialTheme.colorScheme.error
+            color = if (isNearFull) AmberWarning
                     else MaterialTheme.colorScheme.primary
         )
         if (isNearFull) {
@@ -217,7 +218,7 @@ private fun StorageBar(usedBytes: Long, maxBytes: Long) {
             Text(
                 "Storage almost full — delete files to make room",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error
+                color = AmberWarning
             )
         }
     }
@@ -235,11 +236,10 @@ private fun FileCard(
     val isDownloading = file.downloadState == "DOWNLOADING"
     val isPending = file.downloadState == "PENDING"
 
-    Card(
+    OutlinedCard(
         modifier = Modifier
             .aspectRatio(1f)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
-        shape = RoundedCornerShape(12.dp)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             // Background layer — shimmer while downloading, thumbnail/icon when ready
