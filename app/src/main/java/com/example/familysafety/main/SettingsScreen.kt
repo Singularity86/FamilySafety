@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import com.example.familysafety.BuildConfig
 import com.example.familysafety.crash.CrashDetectionMonitor
 import com.example.familysafety.location.LocationService
 import com.example.familysafety.location.LocationPermissionHelper
@@ -988,7 +989,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "Version 1.0.0",
+            text = "Version ${BuildConfig.VERSION_NAME}",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.align(Alignment.CenterHorizontally)
