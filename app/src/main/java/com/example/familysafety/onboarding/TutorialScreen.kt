@@ -92,28 +92,34 @@ fun TutorialScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
                 .padding(horizontal = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            AnimatedContent(
-                targetState = page,
-                modifier = Modifier.weight(1f),
-                contentAlignment = Alignment.Center,
-                transitionSpec = {
-                    val transform = if (targetState > initialState) {
-                        slideInHorizontally { it } togetherWith slideOutHorizontally { -it }
-                    } else {
-                        slideInHorizontally { -it } togetherWith slideOutHorizontally { it }
-                    }
-                    transform.using(
-                        SizeTransform(clip = false, sizeAnimationSpec = { _, _ -> snap() })
-                    )
-                },
-                label = "tutorial_slide"
-            ) { targetPage ->
-                val s = slides[targetPage]
-                SlideContent(slide = s)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                AnimatedContent(
+                    targetState = page,
+                    transitionSpec = {
+                        val transform = if (targetState > initialState) {
+                            slideInHorizontally { it } togetherWith slideOutHorizontally { -it }
+                        } else {
+                            slideInHorizontally { -it } togetherWith slideOutHorizontally { it }
+                        }
+                        transform.using(
+                            SizeTransform(clip = false, sizeAnimationSpec = { _, _ -> snap() })
+                        )
+                    },
+                    label = "tutorial_slide"
+                ) { targetPage ->
+                    val s = slides[targetPage]
+                    SlideContent(slide = s)
+                }
             }
         }
 
