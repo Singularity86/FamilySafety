@@ -55,6 +55,9 @@ private val tips = listOf(
     ),
     Tip(
         body = "The app keeps sharing your location even when your screen is off, using a background service."
+    ),
+    Tip(
+        body = "Enjoying the app? There's a \"Support This App\" tip jar near the bottom of Settings — completely optional, any amount."
     )
 )
 
