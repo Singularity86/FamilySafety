@@ -244,19 +244,19 @@ object OemBatteryHelper {
     fun getInstructions(): List<String> = when (detectOem()) {
 
         Oem.SAMSUNG -> listOf(
-            "Open Settings → Device Care (or Device Maintenance).",
-            "Tap Battery.",
+            "Open Settings → Battery and device care → Battery.",
             "Tap Background usage limits.",
             "Tap Never sleeping apps.",
             "Tap the + button and add Jibaro Family Safety to the list."
         )
 
         Oem.XIAOMI -> listOf(
-            "Open Settings → Apps → Manage apps.",
-            "Find and tap Jibaro Family Safety.",
+            "Open Settings → Apps → Manage apps, then find Jibaro Family Safety.",
             "Tap Battery saver and choose No restrictions.",
-            "Go back to Jibaro Family Safety → Other permissions.",
-            "Enable Autostart so MIUI does not block background launch."
+            "Look for an autostart-related permission — it may appear as \"Autostart\" or " +
+                "\"Background autostart\", either directly on the app's page or under a " +
+                "separate Permissions section.",
+            "Enable it so MIUI/HyperOS does not block background launch."
         )
 
         Oem.HUAWEI -> listOf(

@@ -10,6 +10,8 @@ import android.os.PowerManager
 import android.provider.Settings
 import com.example.familysafety.crash.CrashDetectionMonitor
 import com.example.familysafety.location.LocationService
+import com.example.familysafety.location.LocationPermissionHelper
+import com.example.familysafety.onboarding.PermissionCopy
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -508,6 +510,25 @@ fun SettingsScreen(
                         else true
                     )
                 }
+                var hasNotifications by remember {
+                    mutableStateOf(
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                            ContextCompat.checkSelfPermission(
+                                context, Manifest.permission.POST_NOTIFICATIONS
+                            ) == PackageManager.PERMISSION_GRANTED
+                    )
+                }
+                var hasNearbyWifi by remember {
+                    mutableStateOf(
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                            ContextCompat.checkSelfPermission(
+                                context, Manifest.permission.NEARBY_WIFI_DEVICES
+                            ) == PackageManager.PERMISSION_GRANTED
+                    )
+                }
+                var hasExactAlarms by remember {
+                    mutableStateOf(LocationPermissionHelper.canScheduleExactAlarms(context))
+                }
                 DisposableEffect(lifecycleOwner) {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME) {
@@ -519,6 +540,15 @@ fun SettingsScreen(
                                     context, Manifest.permission.ACCESS_BACKGROUND_LOCATION
                                 ) == PackageManager.PERMISSION_GRANTED
                             else true
+                            hasNotifications = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                                ContextCompat.checkSelfPermission(
+                                    context, Manifest.permission.POST_NOTIFICATIONS
+                                ) == PackageManager.PERMISSION_GRANTED
+                            hasNearbyWifi = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                                ContextCompat.checkSelfPermission(
+                                    context, Manifest.permission.NEARBY_WIFI_DEVICES
+                                ) == PackageManager.PERMISSION_GRANTED
+                            hasExactAlarms = LocationPermissionHelper.canScheduleExactAlarms(context)
                         }
                     }
                     lifecycleOwner.lifecycle.addObserver(observer)
@@ -528,6 +558,14 @@ fun SettingsScreen(
                 val appSettingsLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.StartActivityForResult()
                 ) { /* permission re-check happens via ON_RESUME */ }
+
+                val notificationsLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission()
+                ) { granted -> hasNotifications = granted }
+
+                val nearbyWifiLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission()
+                ) { granted -> hasNearbyWifi = granted }
 
                 PermissionStatusRow(
                     label = "Location while using app",
@@ -557,6 +595,40 @@ fun SettingsScreen(
                             } else {
                                 // Android 10: show rationale card before the system dialog
                                 showBgRationaleCard = true
+                            }
+                        }
+                    )
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    PermissionStatusRow(
+                        label = "Safety alert notifications",
+                        granted = hasNotifications,
+                        onGrant = { notificationsLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
+                    )
+                    PermissionStatusRow(
+                        label = "Nearby WiFi devices",
+                        granted = hasNearbyWifi,
+                        onGrant = { nearbyWifiLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES) }
+                    )
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    PermissionStatusRow(
+                        label = "Precise alarms (reliable background wake-up)",
+                        granted = hasExactAlarms,
+                        onGrant = {
+                            try {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                                        data = Uri.parse("package:${context.packageName}")
+                                    }
+                                )
+                            } catch (_: Exception) {
+                                context.startActivity(
+                                    Intent(
+                                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
+                                )
                             }
                         }
                     )
@@ -927,8 +999,9 @@ fun SettingsScreen(
         Dialog(onDismissRequest = { showBgRationaleCard = false }) {
             PermissionRationaleCard(
                 permission = Manifest.permission.ACCESS_BACKGROUND_LOCATION,
-                title = "Background Location",
-                rationale = "Background location allows your family to see your location when the app is not open. This only activates if you choose to share continuously. Your location is sent directly to your family circle — never to a server, never stored beyond 24 hours on your device.",
+                title = PermissionCopy.BackgroundLocation.title,
+                rationale = PermissionCopy.BackgroundLocation.rationale,
+                coaching = PermissionCopy.BackgroundLocation.coachingText(context),
                 onRequestPermission = {
                     showBgRationaleCard = false
                     bgPermissionState.launchPermissionRequest()

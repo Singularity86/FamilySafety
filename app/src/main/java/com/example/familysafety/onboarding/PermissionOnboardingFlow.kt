@@ -129,11 +129,9 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
         when (step) {
             STEP_LOCATION -> PermissionRationaleCard(
                 permission = Manifest.permission.ACCESS_FINE_LOCATION,
-                title = "Location Access",
-                rationale = "Jibaro Family Safety shares your location with your family group in real time. " +
-                    "Your location is end-to-end encrypted — only your family can ever see it.",
-                coaching = "When prompted, choose 'While using the app' — " +
-                    "this lets your family see your location whenever Jibaro Family Safety is open.",
+                title = PermissionCopy.Location.title,
+                rationale = PermissionCopy.Location.rationale,
+                coaching = PermissionCopy.Location.coachingText(context),
                 onRequestPermission = {
                     locationLauncher.launch(
                         arrayOf(
@@ -147,16 +145,9 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
 
             STEP_BG_LOCATION -> PermissionRationaleCard(
                 permission = Manifest.permission.ACCESS_BACKGROUND_LOCATION,
-                title = "Always-On Location",
-                // Wording deliberately follows Google Play's prominent-disclosure
-                // formula for background location; changing it can fail app review.
-                rationale = "Jibaro Family Safety collects location data to enable real-time " +
-                    "location sharing with your family group, even when the app is " +
-                    "closed or not in use. Your location is end-to-end encrypted, is " +
-                    "shared only with your family members, and is never sold or given " +
-                    "to anyone else.",
-                coaching = "On the next screen, choose 'Allow all the time' — " +
-                    "this keeps your location visible when your phone is in your pocket.",
+                title = PermissionCopy.BackgroundLocation.title,
+                rationale = PermissionCopy.BackgroundLocation.rationale,
+                coaching = PermissionCopy.BackgroundLocation.coachingText(context),
                 onRequestPermission = {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         appSettingsLauncher.launch(
@@ -174,10 +165,9 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
 
             STEP_NOTIFICATIONS -> PermissionRationaleCard(
                 permission = Manifest.permission.POST_NOTIFICATIONS,
-                title = "Safety Alerts",
-                rationale = "Notifications are how safety alerts — geofence arrivals, crash " +
-                    "detection, and new messages — reach you instantly.",
-                coaching = "Choose 'Allow' — without this, safety alerts from your family can't reach you.",
+                title = PermissionCopy.Notifications.title,
+                rationale = PermissionCopy.Notifications.rationale,
+                coaching = PermissionCopy.Notifications.coachingText(context),
                 onRequestPermission = {
                     notificationsLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 },
@@ -186,11 +176,9 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
 
             STEP_NEARBY_WIFI -> PermissionRationaleCard(
                 permission = Manifest.permission.NEARBY_WIFI_DEVICES,
-                title = "Local WiFi Mode",
-                rationale = "When you're on the same WiFi as your family, the app communicates " +
-                    "directly — no internet required. This needs access to see nearby devices.",
-                coaching = "Choose 'Allow' — this enables faster, internet-free location sharing " +
-                    "on your home or work network.",
+                title = PermissionCopy.NearbyWifi.title,
+                rationale = PermissionCopy.NearbyWifi.rationale,
+                coaching = PermissionCopy.NearbyWifi.coachingText(context),
                 onRequestPermission = {
                     nearbyWifiLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
                 },

@@ -131,6 +131,13 @@ fun BatteryOptimizationScreen(
                 !LocationPermissionHelper.canScheduleExactAlarms(context)
             ) {
                 Spacer(modifier = Modifier.height(Spacing.sm))
+                Text(
+                    text = "Jibaro Family Safety also uses precise alarms to reliably wake up " +
+                        "location sharing after your phone goes idle.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(Spacing.xs))
                 OutlinedButton(
                     onClick = {
                         try {
