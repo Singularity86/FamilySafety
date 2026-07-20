@@ -55,6 +55,9 @@ fun SyncIndicator(
         is GroupSyncManager.SyncState.Idle -> SyncInfoSlot(
             title = "Sync idle",
             message = "Okay. No family-list sync is running right now.",
+            details = "The family list is the shared record of who's in your family, their device keys, and " +
+                "group settings like the family name. It's kept in sync automatically whenever something " +
+                "changes — there's nothing to do while it's idle.",
             modifier = modifier
         ) {
             SyncPlaceholder()
@@ -62,6 +65,10 @@ fun SyncIndicator(
         is GroupSyncManager.SyncState.Syncing -> SyncInfoSlot(
             title = "Syncing family state",
             message = "Working. Jibaro Family Safety is checking the family list, member keys, and group version.",
+            details = "Devices keep the family list in sync using a version number, so everyone ends up with " +
+                "the same up-to-date list of members, keys, and settings even if updates arrive out of order " +
+                "or a device was briefly offline. This exchange is happening now and normally finishes in a " +
+                "few seconds.",
             modifier = modifier
         ) {
             SyncChip(
@@ -79,6 +86,11 @@ fun SyncIndicator(
         is GroupSyncManager.SyncState.Conflict -> SyncInfoSlot(
             title = "Sync issue",
             message = "Needs attention. This device saw two different family lists. Open Security for details.",
+            details = "Two devices produced different versions of the family list at the same time — for " +
+                "example, two people editing the family name or a member's keys within moments of each other. " +
+                "Jibaro Family Safety resolves this automatically by requesting the missing versions from " +
+                "other family devices and rebuilding a single, consistent list. It's usually harmless and " +
+                "clears on its own; open Settings → Security if it doesn't resolve after a few minutes.",
             modifier = modifier
         ) {
             SyncChip(
@@ -92,6 +104,10 @@ fun SyncIndicator(
         is GroupSyncManager.SyncState.Error -> SyncInfoSlot(
             title = "Sync error",
             message = "Needs attention. Jibaro Family Safety could not complete the latest family-list sync.",
+            details = "The last attempt to exchange the family list with other devices didn't complete — " +
+                "usually because no family device was reachable, locally or through relay, at that moment. " +
+                "Jibaro Family Safety will keep retrying automatically once a connection is available. Your " +
+                "local copy of the family list is unaffected in the meantime.",
             modifier = modifier
         ) {
             SyncChip(
@@ -124,6 +140,9 @@ private fun SyncedChip(version: Long, modifier: Modifier = Modifier) {
     SyncInfoSlot(
         title = "Synced",
         message = "Working. This device has family list version $version, including the current members and their keys.",
+        details = "The family list is the shared record of who's in your family, their device keys, and " +
+            "group settings. Every device keeps its own copy in sync using a version number, so all devices " +
+            "agree on the same members and keys. Version $version is the most recent one this device has seen.",
         modifier = modifier
     ) {
         if (closed) {
@@ -146,9 +165,10 @@ private fun SyncInfoSlot(
     title: String,
     message: String,
     modifier: Modifier = Modifier,
+    details: String? = null,
     content: @Composable () -> Unit
 ) {
-    ChipInfoPopup(title = title, message = message, modifier = modifier) {
+    ChipInfoPopup(title = title, message = message, details = details, modifier = modifier) {
         content()
     }
 }

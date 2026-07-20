@@ -5,9 +5,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -21,9 +23,11 @@ internal fun ChipInfoPopup(
     title: String,
     message: String,
     modifier: Modifier = Modifier,
+    details: String? = null,
     content: @Composable () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var showDetails by remember { mutableStateOf(false) }
 
     Box(modifier = modifier) {
         Box(modifier = Modifier.clickable { expanded = true }) {
@@ -49,7 +53,34 @@ internal fun ChipInfoPopup(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp)
                 )
+                if (details != null) {
+                    TextButton(
+                        onClick = {
+                            expanded = false
+                            showDetails = true
+                        },
+                        modifier = Modifier.padding(top = 4.dp)
+                    ) {
+                        Text("Learn more")
+                    }
+                }
             }
         }
+    }
+
+    if (showDetails && details != null) {
+        AlertDialog(
+            onDismissRequest = { showDetails = false },
+            title = { Text(title) },
+            text = {
+                Text(
+                    text = details,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showDetails = false }) { Text("Got it") }
+            }
+        )
     }
 }

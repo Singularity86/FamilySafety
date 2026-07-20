@@ -84,6 +84,7 @@ fun ConnectionBadge(
                 leading = "Working. Some family devices are nearby on this network, and others are being reached through relay.",
                 routeHealth = routeHealth
             ),
+            details = connectionDetails(MainViewModel.ConnectionMode.MIXED),
             modifier = modifier
         ) {
             MixedConnectionPill()
@@ -115,6 +116,7 @@ fun ConnectionBadge(
                     routeHealth = routeHealth
                 )
         },
+        details = connectionDetails(mode),
         modifier = modifier,
     ) {
         StatusPill(
@@ -131,6 +133,27 @@ fun ConnectionBadge(
             )
         }
     }
+}
+
+private fun connectionDetails(mode: MainViewModel.ConnectionMode): String = when (mode) {
+    MainViewModel.ConnectionMode.LAN ->
+        "Jibaro Family Safety always looks for family devices on your local network first, since that's the " +
+            "fastest and most private route — updates travel directly between phones without touching the " +
+            "internet. Right now at least one family device is reachable that way. If a device leaves this " +
+            "network, the app automatically falls back to relay so updates keep flowing."
+    MainViewModel.ConnectionMode.RELAY ->
+        "No family device is reachable on your local network right now, so updates are going through an " +
+            "encrypted relay server instead. The relay only ever sees locked messages it can't open — it just " +
+            "passes them along between devices, wherever they are. This is normal whenever family members " +
+            "aren't on the same network."
+    MainViewModel.ConnectionMode.MIXED ->
+        "Some family devices are on the same local network as you, so updates to them travel directly. " +
+            "Others are elsewhere, so their updates go through an encrypted relay server instead, which can't " +
+            "read them either way. Seeing a mix like this is normal for a family that isn't all in one place."
+    MainViewModel.ConnectionMode.OFFLINE ->
+        "Jibaro Family Safety can't currently reach any family device — not on this network, and not through " +
+            "relay. Check your internet connection. Updates you make will be queued and sent automatically " +
+            "once a route becomes available again."
 }
 
 private fun routeSummary(

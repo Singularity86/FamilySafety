@@ -25,6 +25,18 @@ fun EncryptionChip(
         } else {
             "Working. Your family updates are locked on your device and can only be opened by your family's devices."
         },
+        details = if (isLocalOnly) {
+            "Every location and chat update is scrambled on your device before it's sent, using a key pair " +
+                "only your family holds. Right now your devices are on the same network, so updates travel " +
+                "directly between phones without touching the internet at all. Even so, they're still fully " +
+                "end-to-end encrypted — if a relay were ever used instead, nobody but your family's devices " +
+                "could open the message."
+        } else {
+            "Every location and chat update is scrambled on your device before it ever leaves, using a key " +
+                "pair only your family holds. Only a device that holds one of those private keys can unscramble " +
+                "it — not the relay server that passes it along, not Jibaro, nobody else. This is called " +
+                "end-to-end encryption (E2EE), and it protects every update in this app, all the time."
+        },
         modifier = modifier
     ) {
         StatusPill(
