@@ -34,15 +34,15 @@ android {
     // namespace stays com.example.* on purpose: it only scopes source code and R,
     // is never seen by Play, and changing it would mean moving every package.
     namespace = "com.example.familysafety"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         // Play identity — permanent once published. Must never be com.example.*.
         applicationId = "jibaro.spacepirate.love"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 13
-        versionName = "1.11.1"
+        targetSdk = 36
+        versionCode = 14
+        versionName = "1.11.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
