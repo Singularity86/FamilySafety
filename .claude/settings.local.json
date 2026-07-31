@@ -39,7 +39,8 @@
       "Bash(\"C:/Users/omarj/AppData/Local/Android/Sdk/platform-tools/adb.exe\" -s 55534343444b3498 install \"app/build/outputs/apk/debug/app-debug.apk\")",
       "Bash(ANDROID_HOME=\"C:/Users/omarj/AppData/Local/Android/Sdk\" JAVA_HOME=\"C:/Program Files/Android/Android Studio/jbr\" ./gradlew compileDebugKotlin --no-daemon)",
       "PowerShell(& \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\" install -r \"D:\\\\AndroidSDK\\\\FamilySafety\\\\app\\\\build\\\\outputs\\\\apk\\\\debug\\\\app-debug.apk\")",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "mcp__Claude_Code_Remote__send_later"
     ]
   }
 }
