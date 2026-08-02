@@ -42,6 +42,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import com.example.familysafety.BuildConfig
 import com.example.familysafety.geofence.GeofenceZone
 import com.example.familysafety.ui.theme.AmberWarning
+import kotlin.math.ceil
+import kotlin.math.log2
 import kotlinx.coroutines.launch
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
@@ -198,6 +200,7 @@ fun MapScreen(
         MapView(context).apply {
             setTileSource(MAP_TILES)
             setMultiTouchControls(true)
+            confineToSingleWorld(context.resources.displayMetrics)
             controller.setZoom(savedMapZoom)
             controller.setCenter(GeoPoint(savedMapLatitude, savedMapLongitude))
         }
@@ -583,6 +586,28 @@ fun MapScreen(
             }
         }
     }
+}
+
+/**
+ * Stops the map from drawing repeated copies of the world.
+ *
+ * osmdroid wraps tiles edge-to-edge in both axes by default, so at low zoom —
+ * including the zoom 2 we start at before any member location arrives — the
+ * world is narrower/shorter than the screen and gets tiled two or three times
+ * across and down it. Turning repetition off leaves grey voids instead, so we
+ * also clamp panning to the world bounds and raise the minimum zoom to the
+ * smallest level at which a single world still covers the screen.
+ */
+private fun MapView.confineToSingleWorld(metrics: android.util.DisplayMetrics) {
+    setHorizontalMapRepetitionEnabled(false)
+    setVerticalMapRepetitionEnabled(false)
+    val tileSystem = MapView.getTileSystem()
+    setScrollableAreaLimitLatitude(tileSystem.maxLatitude, tileSystem.minLatitude, 0)
+    setScrollableAreaLimitLongitude(tileSystem.minLongitude, tileSystem.maxLongitude, 0)
+    // Tiles are 256 px and are not DPI-scaled, so the world spans 256 * 2^zoom px.
+    val longestEdgePx = maxOf(metrics.widthPixels, metrics.heightPixels).coerceAtLeast(256)
+    val minZoom = ceil(log2(longestEdgePx / 256.0))
+    setMinZoomLevel(minZoom.coerceIn(3.0, 6.0))
 }
 
 /** Small blue dot used for the device's own GPS location. */
