@@ -335,7 +335,7 @@ fun MainScreen(
                         .fillMaxSize()
                         .padding(pagerPadding),
                     userScrollEnabled = pagerState.currentPage != 0,
-                    beyondViewportPageCount = pagerTabs.lastIndex
+                    beyondViewportPageCount = 1
                 ) { page ->
                     when (page) {
                         0 -> MapScreen(
