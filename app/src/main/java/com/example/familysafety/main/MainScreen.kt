@@ -102,7 +102,8 @@ fun MainScreen(
     geofenceViewModel: GeofenceViewModel = hiltViewModel(),
     onThemeChanged: (ThemeMode) -> Unit = {},
     onReplayTutorial: () -> Unit = {},
-    navigateTo: String? = null
+    navigateTo: String? = null,
+    onNavigationHandled: () -> Unit = {}
 ) {
     val driveEstimateState by viewModel.driveEstimateState.collectAsState()
     val navController = rememberNavController()
@@ -183,10 +184,14 @@ fun MainScreen(
             )
 
             // When opened from a notification, map route string to pager page.
+            // The target is cleared once handled so tapping a second notification
+            // with the same destination re-triggers this effect instead of being
+            // swallowed as an unchanged key.
             LaunchedEffect(navigateTo) {
                 if (!navigateTo.isNullOrBlank()) {
                     if (navigateTo == "battery_fix") {
                         showBatteryFixDialog = true
+                        onNavigationHandled()
                         return@LaunchedEffect
                     }
                     val page = when {
@@ -202,6 +207,7 @@ fun MainScreen(
                     } else {
                         navController.navigate(navigateTo) { launchSingleTop = true }
                     }
+                    onNavigationHandled()
                 }
             }
 

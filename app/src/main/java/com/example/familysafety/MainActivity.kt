@@ -114,6 +114,7 @@ class MainActivity : ComponentActivity() {
                                     navigateToSettings = false
                                     "settings"
                                 } else navigateTo.value,
+                                onNavigationHandled = { navigateTo.value = null },
                                 onThemeChanged = { mode ->
                                     ThemePreference.set(this@MainActivity, mode)
                                     themeMode = mode

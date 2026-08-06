@@ -138,7 +138,9 @@ class InviteManager @Inject constructor(
                 .getLaunchIntentForPackage(context.packageName)
                 ?.apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    putExtra("navigate_to", "members")
+                    // The invite screen lists pending requests with approve/reject
+                    // at the top, so the tap lands directly on the decision.
+                    putExtra("navigate_to", "invite")
                 }
             val pendingIntent = launchIntent?.let {
                 PendingIntent.getActivity(
