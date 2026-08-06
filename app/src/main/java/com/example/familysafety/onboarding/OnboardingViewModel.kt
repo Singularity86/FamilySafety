@@ -156,6 +156,11 @@ class OnboardingViewModel @Inject constructor(
                 return JoinSubmitResult.Failed("Invite code is empty.")
             }
 
+            // Strip whitespace before decoding — copy-pasting the code from SMS/chat/email
+            // commonly appends a trailing newline, and some apps line-wrap long text, which
+            // would otherwise make the strict Base64 decoder below throw on a valid code.
+            val cleanedInviteCode = inviteCode.filterNot { it.isWhitespace() }
+
             // 1. Initialize keys from mnemonic
             val mnemonicString = _mnemonic.value.joinToString(" ")
             val seed = Bip39.mnemonicToSeed(mnemonicString)
@@ -167,7 +172,7 @@ class OnboardingViewModel @Inject constructor(
             val memberId = cryptoProvider.getMemberId()
 
             // 2. Decode invite code
-            val inviteJson = String(Base64.getDecoder().decode(inviteCode))
+            val inviteJson = String(Base64.getDecoder().decode(cleanedInviteCode))
             val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
             val inviteData = json.decodeFromString<Map<String, String>>(inviteJson)
             val groupId = inviteData["groupId"]
