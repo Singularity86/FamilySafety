@@ -1,17 +1,18 @@
-# Release notes — 1.11.2 (versionCode 16)
+# Release notes — 1.11.3 (versionCode 16)
 
 Covers everything since 1.11.1 (versionCode 13, commit `cea5fbf`).
 
-Version code history for this release:
+Version history for this release line:
 
-| Code | Fate |
-|---|---|
-| 14 | Burned on an upload Play would not accept |
-| 15 | Uploaded to Play; superseded before wide rollout |
-| 16 | Current — adds the three fixes in "Late additions" below |
+| Code | Name | Fate |
+|---|---|---|
+| 14 | 1.11.2 | Burned on an upload Play would not accept |
+| 15 | 1.11.2 | Uploaded to Play; superseded before wide rollout |
+| 16 | 1.11.3 | Current — adds the three fixes in "Late additions" below |
 
-The app is unchanged between 14 and 15, hence the shared versionName. 16 adds
-real fixes on top; see the open question on versionName at the bottom.
+14 and 15 were byte-identical in app content, so they shared a versionName.
+16 carries real user-facing fixes on top, so it takes its own name rather than
+shipping a second, different build under 1.11.2.
 
 ## Play Console "What's new"
 
@@ -75,19 +76,12 @@ Map fixes, smoother invites, and better battery.
   rebuilds ran continuously in the background while the user was on another tab.
   Only the adjacent tab is kept warm now. (`76de126`)
 
-## Open question — versionName
-
-versionCode 15 already went to Play as versionName **1.11.2**. Code 16 carries
-three additional user-facing fixes but currently reports the same 1.11.2, so two
-materially different builds share one user-visible version. Bumping to **1.11.3**
-would be more honest; left as-is pending a decision.
-
 ## Build details
 
 | | |
 |---|---|
 | Package | `jibaro.spacepirate.love` |
-| versionName / versionCode | 1.11.2 / 16 |
+| versionName / versionCode | 1.11.3 / 16 |
 | targetSdk / minSdk | 36 (Android 16) / 26 |
 | ABIs | arm64-v8a, armeabi-v7a, x86_64 |
 | Upload artifact | `app/build/outputs/bundle/release/app-release.aab` |
