@@ -34,9 +34,14 @@ tester's.
 The per-recipient envelope is sound. Everything below is about what sits
 *outside* it.
 
-Status at time of writing: F1, F6 and F7 are fixed; F2–F5 are open. The F1 and F7 fixes
-only take effect for families created on 1.12.0 or later, because both depend on the
-group key that is generated at group creation — see Phase 0.
+Status at time of writing: F1, F4, F6 and F7 are fixed; F2, F3 and F5 are open. The F1
+and F7 fixes only take effect for families created on 1.12.0 or later, because both
+depend on the group key generated at group creation — see Phase 0.
+
+F4's fix changes the conclusion of Phase 1/2 below. Broker ACLs were the proposed answer
+to presence forgery, but signatures address it more completely — no credential scheme
+prevents one family member forging another's presence, whereas a signature does. Phases
+1 and 2 remain worth doing for F3 (metadata), not for F4.
 
 ## F1 — Shared files are decryptable by anyone on the broker (high) — FIXED in 1.12.0
 
@@ -86,7 +91,7 @@ Even with F1 fixed, an observer still learns, without decrypting anything:
 
 For a location product, movement timing alone reconstructs a household routine.
 
-## F4 — Presence is forgeable (medium)
+## F4 — Presence is forgeable (medium) — FIXED in 1.12.3
 
 `MqttTransport.handlePresence` rejects payloads whose `memberId` disagrees with
 the topic:
@@ -100,8 +105,36 @@ not help when the attacker can publish to arbitrary topics: publishing to
 `familysafe/{victim}/presence` with `memberId = {victim}` satisfies the check.
 
 As of `79bb50f` presence also drives `ConnectionState`, so a forged offline
-message now marks a member offline in peers' UI. The payload check cannot fix
-this; only a publish ACL can.
+message now marks a member offline in peers' UI.
+
+Fixed by signing presence with Ed25519 rather than by ACL. An ACL would have
+been the wrong tool even if one were available: a publish rule stops an
+outsider, but every per-device credential scheme still lets one family member
+forge another's presence, and inside the family is where this matters most.
+The group definition already distributes every member's Ed25519 key, so the
+check can be cryptographic rather than positional.
+
+- Signed over a canonical `presence:{memberId}:{isOnline}:{timestamp}` rather
+  than the serialized JSON, so field order or a future additive field cannot
+  change what was signed.
+- The last-will is signed at **connect** time and handed to the broker
+  pre-signed, since the device is by definition gone when the broker publishes
+  it.
+- **Replay** rejected by timestamp: a captured "offline" message cannot be
+  republished later. Equal timestamps are allowed, because the broker
+  redelivers retained messages on every resubscribe.
+- **Downgrade** rejected by memory: once a member has been seen signing, an
+  unsigned update claiming to be them is an attacker stripping the signature,
+  not an old client. Before that first signature unsigned is accepted, so peers
+  on older builds do not appear permanently offline.
+
+Residual: a member never yet seen signing can still be impersonated, which is
+unavoidable while older clients exist. That window closes per member on their
+first signed update after upgrading.
+
+Presence padding moved from 256 to 512 bytes as a consequence — the 128-character
+signature pushes the envelope past 256, and leaving it would have split presence
+into two buckets, making signed and unsigned senders distinguishable by size.
 
 ## F5 — Retained-message pollution (low)
 

@@ -55,6 +55,16 @@ class MqttTransport @Inject constructor(
     private var familyMemberKeys = mutableMapOf<String, RecipientKeys>()
     private var networkObserverJob: Job? = null
 
+    /**
+     * Members from whom a validly signed presence update has been seen. Once a member is
+     * in here, an unsigned update claiming to be them is treated as a downgrade attempt
+     * rather than an old client.
+     */
+    private val presenceSigners = ConcurrentHashMap<String, Boolean>()
+
+    /** Newest accepted presence timestamp per member, used to reject replays. */
+    private val lastPresenceTimestamp = ConcurrentHashMap<String, Long>()
+
     // Setter-injected to avoid circular dependency: MqttTransport ← TransportProvider ← GroupSyncManager
     var groupSyncManager: GroupSyncManager? = null
     var securityEventRepository: SecurityEventRepository? = null
@@ -119,8 +129,14 @@ class MqttTransport @Inject constructor(
                     broker.username?.let { userName = it }
                     broker.password?.let { password = it.toCharArray() }
 
-                    // Set offline will so peers know if we drop off abruptly
-                    val willJson = MessageProtocol.encodePresenceUpdate(memberIdParam, false)
+                    // Set offline will so peers know if we drop off abruptly. Signed here,
+                    // at connect time, because the broker publishes it for us later when
+                    // we are already gone and cannot sign anything.
+                    val willJson = MessageProtocol.encodePresenceUpdate(
+                        memberIdParam,
+                        false,
+                        sign = { cryptoProvider.signMessage(it) }
+                    )
                     setWill(MqttConfig.getPresenceTopic(memberIdParam), willJson.toByteArray(), MqttConfig.DEFAULT_QOS, true)
                 }
 
@@ -341,7 +357,11 @@ class MqttTransport @Inject constructor(
     private suspend fun publishPresence(isOnline: Boolean) {
         val id = memberId ?: return
         val topic = MqttConfig.getPresenceTopic(id)
-        val presenceJson = MessageProtocol.encodePresenceUpdate(id, isOnline)
+        val presenceJson = MessageProtocol.encodePresenceUpdate(
+            id,
+            isOnline,
+            sign = { cryptoProvider.signMessage(it) }
+        )
         publishRaw(topic, presenceJson.toByteArray(), MqttConfig.DEFAULT_QOS, true)
     }
 
@@ -473,6 +493,75 @@ class MqttTransport @Inject constructor(
      * broker on our behalf when we drop, so it cannot be encrypted per-recipient.
      * The topic path names the sender; the payload must agree with it.
      */
+    /**
+     * Whether a presence update really came from the member it names.
+     *
+     * Broker ACLs cannot settle this — even per-device credentials would still let one
+     * family member forge another's presence — so it is settled cryptographically, using
+     * the Ed25519 keys the group definition already distributes.
+     *
+     * Three checks, in order of cost:
+     *  - **Replay.** A captured "offline" message could otherwise be republished later to
+     *    mark someone offline at will. Equal timestamps are allowed because the broker
+     *    redelivers retained messages on every resubscribe.
+     *  - **Downgrade.** An unsigned update from a member previously seen signing is an
+     *    attacker stripping the signature, not an old client.
+     *  - **Signature**, over the canonical payload rather than the raw JSON.
+     */
+    private fun isPresenceAuthentic(
+        senderId: String,
+        update: MessageProtocol.PresenceUpdate
+    ): Boolean {
+        val last = lastPresenceTimestamp[senderId]
+        if (last != null && update.timestamp < last) {
+            Timber.w("$TAG: stale presence for ${senderId.take(8)} — ignoring replay")
+            return false
+        }
+
+        val signatureHex = update.signature
+        if (signatureHex == null) {
+            if (presenceSigners[senderId] == true) {
+                Timber.w("$TAG: unsigned presence for ${senderId.take(8)} after a signed one — ignoring")
+                return false
+            }
+            // Peer predates signed presence. Accepted so it does not appear permanently
+            // offline; forgeable until that peer updates, which is why the downgrade
+            // check above exists.
+            lastPresenceTimestamp[senderId] = update.timestamp
+            return true
+        }
+
+        val publicKey = familyMemberKeys[senderId]?.ed25519PublicKey
+        if (publicKey == null) {
+            Timber.w("$TAG: no key to verify presence for ${senderId.take(8)} — ignoring")
+            return false
+        }
+
+        val valid = try {
+            cryptoProvider.verifySignature(
+                message = MessageProtocol.presenceSigningPayload(
+                    update.memberId,
+                    update.isOnline,
+                    update.timestamp
+                ),
+                signature = signatureHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray(),
+                publicKeyHex = publicKey
+            )
+        } catch (e: Exception) {
+            Timber.w(e, "$TAG: presence signature check failed for ${senderId.take(8)}")
+            false
+        }
+
+        if (!valid) {
+            Timber.w("$TAG: forged or corrupt presence signature for ${senderId.take(8)} — ignoring")
+            return false
+        }
+
+        presenceSigners[senderId] = true
+        lastPresenceTimestamp[senderId] = update.timestamp
+        return true
+    }
+
     private suspend fun handlePresence(topic: String, payload: String) {
         val senderId = topic.split("/").getOrNull(1) ?: return
         if (senderId == memberId) return
@@ -486,11 +575,14 @@ class MqttTransport @Inject constructor(
             Timber.w("$TAG: Failed to decode presence from $senderId: ${e.message}")
             return
         }
-        // Presence is unauthenticated — ignore payloads claiming to be someone else.
+        // Necessary but nowhere near sufficient on its own: anyone who can publish to an
+        // arbitrary topic satisfies this by publishing to the victim's own presence topic.
         if (presenceUpdate.memberId != senderId) {
             Timber.w("$TAG: Presence payload sender mismatch on $topic — ignoring")
             return
         }
+
+        if (!isPresenceAuthentic(senderId, presenceUpdate)) return
 
         Timber.d("$TAG: $senderId is ${if (presenceUpdate.isOnline) "online" else "offline"}")
         groupStateManager.updatePresenceStatus(

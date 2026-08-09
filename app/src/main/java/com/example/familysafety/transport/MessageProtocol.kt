@@ -19,7 +19,11 @@ object MessageProtocol {
      * leaks. Oversized messages round up to the next multiple rather than going out at
      * their true length.
      */
-    private const val PRESENCE_PADDED_BYTES = 256
+    // 512 rather than 256: a signed presence update carries a 128-character hex signature,
+    // which pushes the envelope past 256 and would otherwise split presence across two
+    // buckets — signed at 512, unsigned at 256 — making signed and unsigned trivially
+    // distinguishable and undoing half the point of padding.
+    private const val PRESENCE_PADDED_BYTES = 512
     private const val LOCATION_PADDED_BYTES = 512
 
     /** Filler character. Must not need JSON escaping, or padding would not be 1:1. */
@@ -75,8 +79,30 @@ object MessageProtocol {
     data class PresenceUpdate(
         val memberId: String,
         val isOnline: Boolean,
-        val timestamp: Long = System.currentTimeMillis()
+        val timestamp: Long = System.currentTimeMillis(),
+        /**
+         * Ed25519 signature (hex) over [signingPayload], or null from senders predating
+         * this field.
+         *
+         * Presence is the only message type not inside the encrypted envelope, because an
+         * MQTT last-will cannot be encrypted. That left it forgeable: the receiver checked
+         * that the payload's memberId matched the topic, but anyone able to publish to an
+         * arbitrary topic satisfies that trivially by publishing to the victim's own
+         * presence topic. A signature moves the check from "who claims to have sent this"
+         * to "who could have produced it", which no broker ACL can do for us.
+         */
+        val signature: String? = null
     )
+
+    /**
+     * Canonical bytes covered by [PresenceUpdate.signature].
+     *
+     * Built from the fields rather than the serialized JSON so that key order, whitespace
+     * and any future additive field cannot change what was signed. Any cross-platform
+     * implementation must produce these bytes exactly.
+     */
+    fun presenceSigningPayload(memberId: String, isOnline: Boolean, timestamp: Long): ByteArray =
+        "presence:$memberId:$isOnline:$timestamp".toByteArray(Charsets.UTF_8)
     
     fun encodeLocationUpdate(location: MemberLocation): String {
         val locationUpdate = LocationUpdate(
@@ -100,10 +126,22 @@ object MessageProtocol {
         return encodePadded(envelope, LOCATION_PADDED_BYTES)
     }
     
-    fun encodePresenceUpdate(memberId: String, isOnline: Boolean): String {
+    /**
+     * @param sign produces an Ed25519 signature over the canonical payload. Null only for
+     *   callers with no signing key available, which leaves the message forgeable.
+     */
+    fun encodePresenceUpdate(
+        memberId: String,
+        isOnline: Boolean,
+        sign: ((ByteArray) -> ByteArray)? = null
+    ): String {
+        val timestamp = System.currentTimeMillis()
         val presenceUpdate = PresenceUpdate(
             memberId = memberId,
-            isOnline = isOnline
+            isOnline = isOnline,
+            timestamp = timestamp,
+            signature = sign?.invoke(presenceSigningPayload(memberId, isOnline, timestamp))
+                ?.joinToString("") { "%02x".format(it) }
         )
         
         val envelope = MessageEnvelope(

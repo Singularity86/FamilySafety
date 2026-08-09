@@ -1,7 +1,7 @@
 # FamilySafety — iOS Port Specification & Interop Contract
 
-**Version 1.3 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
-revised 2026-08-08 against Android 1.12.2 (versionCode 20).**
+**Version 1.4 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
+revised 2026-08-08 against Android 1.12.3 (versionCode 21).**
 
 All additions since 1.0 are optional fields that older senders omit, so the wire stays
 backward compatible. Two of them still change what a correct implementation must do:
@@ -16,6 +16,10 @@ backward compatible. Two of them still change what a correct implementation must
   on the retained manifest topic, and `FileManifest` gains `pad`. This one is **not**
   purely additive in effect — a receiver that only understands the bare manifest will
   see no files at all from Android 1.12.2+, because the published shape has changed.
+- **1.4**, presence signatures (§6.2): `PresenceUpdate.signature`, with the canonical
+  signing string and the replay/downgrade rules receivers must apply. Also raises the
+  presence padding target from 256 to **512** bytes (§6.1), since the signature no longer
+  fits in 256 — a client still padding presence to 256 will be distinguishable by size.
 
 This document is the single source of truth for building the iOS version of FamilySafety.
 It captures everything the iOS app must implement **byte-for-byte identically** to
@@ -188,8 +192,10 @@ a device as moving. Coordinate precision leaked the same way.
 Algorithm, which must match byte-for-byte to be useful:
 
 1. Serialize the envelope with `pad` set to `""`; measure its length in **UTF-8 bytes**.
-2. Round that up to the next multiple of the target for the message type — **256** for
-   `presence_update`, **512** for `location_update`.
+2. Round that up to the next multiple of the target for the message type — **512** for
+   both `presence_update` and `location_update`. (Presence was 256 before 1.12.3; the
+   Ed25519 signature added in §6.2 does not fit in 256, and leaving it there would split
+   presence across two buckets, making signed and unsigned senders distinguishable.)
 3. Re-serialize with `pad` set to `.` repeated (target − unpadded) times.
 
 `.` needs no JSON escaping, so N characters add exactly N bytes. Rounding up to a
@@ -207,8 +213,46 @@ padding is a bandwidth trade rather than a free win).
 ```json
 { "memberId": "...", "latitude": 0.0, "longitude": 0.0, "accuracy": 0.0,
   "timestamp": 0, "speed": null, "bearing": null }          // LocationUpdate
-{ "memberId": "...", "isOnline": true, "timestamp": 0 }      // PresenceUpdate
+{ "memberId": "...", "isOnline": true, "timestamp": 0,
+  "signature": "<hex128chars>" }                             // PresenceUpdate
 ```
+
+#### Presence signatures (since 1.12.3)
+
+Presence is the only message type outside the encrypted envelope, because an MQTT
+last-will cannot be encrypted. It was therefore forgeable: the receiver only checked that
+the payload's `memberId` matched the topic, which anyone able to publish to an arbitrary
+topic satisfies by publishing to the victim's own presence topic. No broker ACL fixes
+this in general — even per-device credentials leave one family member able to forge
+another's presence — so it is authenticated by signature.
+
+`signature` is Ed25519-detached, lowercase hex, over the **canonical UTF-8 string**:
+
+```
+presence:{memberId}:{isOnline}:{timestamp}
+```
+
+`isOnline` renders as `true`/`false`. Built from the fields, **not** from the serialized
+JSON, so key order and future additive fields cannot change what was signed. Verify
+against the sender's `ed25519PublicKey` from the group definition.
+
+Senders must sign both the live update and the **last-will**. The will is signed at
+connect time and handed to the broker pre-signed — the device is gone when the broker
+publishes it and cannot sign then.
+
+Receivers must apply three checks:
+
+1. **Replay** — reject a presence whose `timestamp` is older than the newest accepted one
+   for that member, or a captured "offline" can be republished later at will. Allow equal
+   timestamps: the broker redelivers retained messages on every resubscribe.
+2. **Downgrade** — once a member has been seen with a *valid* signature, reject a later
+   unsigned update claiming to be them. That is an attacker stripping the field, not an
+   old client.
+3. **Signature** — reject if present and invalid.
+
+`signature` is absent from senders predating this, and unsigned presence is accepted until
+that member's first valid signature, so peers on older builds do not appear permanently
+offline. Both pieces of per-member state are in-memory only and reset on restart.
 Location flow: build `LocationUpdate` → wrap in `MessageEnvelope` → E2EE-encrypt **once per
 peer** → publish each ciphertext to that peer's `location_inbox`. Presence: `MessageEnvelope`
 published plaintext + retained on **own** presence topic.

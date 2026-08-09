@@ -48,7 +48,19 @@ class MessageProtocolPaddingTest {
     @Test
     fun presence_isPaddedToTheFixedSize() {
         val encoded = MessageProtocol.encodePresenceUpdate("c".repeat(32), true)
-        assertEquals(256, bytesOf(encoded))
+        assertEquals(512, bytesOf(encoded))
+    }
+
+    @Test
+    fun presence_signedAndUnsignedShareOneBucket() {
+        // If a signature pushed presence into a larger bucket, signed and unsigned senders
+        // would be distinguishable by size alone.
+        val unsigned = MessageProtocol.encodePresenceUpdate("c".repeat(32), true)
+        val signed = MessageProtocol.encodePresenceUpdate(
+            "c".repeat(32), true, sign = { ByteArray(64) }
+        )
+
+        assertEquals(bytesOf(unsigned), bytesOf(signed))
     }
 
     @Test
