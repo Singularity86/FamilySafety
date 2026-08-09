@@ -1,12 +1,17 @@
 # FamilySafety — iOS Port Specification & Interop Contract
 
-**Version 1.1 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
-revised 2026-08-08 against Android 1.12.0 (versionCode 18).**
+**Version 1.2 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
+revised 2026-08-08 against Android 1.12.1 (versionCode 19).**
 
-Changes in 1.1, both in the shared-file path (§6.5, §6.7, §7.1):
-`GroupDefinition.fileEncryptionKey` and `FileChunkMessage.keyVersion`. Both are optional
-on the wire and older senders omit them, so this revision is backward compatible — but an
-implementation that ignores `keyVersion` will fail to decrypt files from Android 1.12.0+.
+All additions since 1.0 are optional fields that older senders omit, so the wire stays
+backward compatible. Two of them still change what a correct implementation must do:
+
+- **1.1**, shared files (§6.5, §6.7, §7.1): `GroupDefinition.fileEncryptionKey` and
+  `FileChunkMessage.keyVersion`. Ignoring `keyVersion` means failing to decrypt files
+  from Android 1.12.0+.
+- **1.2**, envelope padding (§6.1): `MessageEnvelope.pad`. Ignoring it on *receive* is
+  harmless, but failing to emit it on *send* leaks online/offline and movement through
+  message length — see §6.1 for the algorithm and why.
 
 This document is the single source of truth for building the iOS version of FamilySafety.
 It captures everything the iOS app must implement **byte-for-byte identically** to
@@ -163,9 +168,36 @@ accept both; enums serialize as their UPPERCASE names; encode all fields includi
 
 ### 6.1 MessageEnvelope (location/presence inner wrapper)
 ```json
-{ "type": "location_update" | "presence_update", "payload": "<JSON string — double-encoded>" }
+{ "type": "location_update" | "presence_update", "payload": "<JSON string — double-encoded>",
+  "pad": "......" }
 ```
 ⚠️ `payload` is a JSON **string** containing the serialized inner object.
+
+`pad` was added in Android 1.12.1 (19). It is meaningless filler and MUST be ignored on
+receive. It is **absent** from older senders, so decode it as optional defaulting to `""`.
+
+**Senders must pad.** Message length is a side channel that survives encryption, and it
+was leaking real behaviour: presence was 136 bytes online and 137 offline (`"true"` vs
+`"false"`), and location payloads grew when `speed`/`bearing` were populated, which marks
+a device as moving. Coordinate precision leaked the same way.
+
+Algorithm, which must match byte-for-byte to be useful:
+
+1. Serialize the envelope with `pad` set to `""`; measure its length in **UTF-8 bytes**.
+2. Round that up to the next multiple of the target for the message type — **256** for
+   `presence_update`, **512** for `location_update`.
+3. Re-serialize with `pad` set to `.` repeated (target − unpadded) times.
+
+`.` needs no JSON escaping, so N characters add exactly N bytes. Rounding up to a
+multiple, rather than failing or truncating, keeps an oversized message on a fixed grid
+instead of revealing its true length.
+
+Pad the **plaintext**, before encryption. Padding ciphertext achieves nothing — its
+length already reflects the plaintext by that point.
+
+Not yet padded on Android, so do not expect uniform sizes there: chat, replication and
+group sync. Chat is a deliberate deferral (its lengths span orders of magnitude, so
+padding is a bandwidth trade rather than a free win).
 
 ### 6.2 LocationUpdate / PresenceUpdate
 ```json

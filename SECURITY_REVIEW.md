@@ -34,7 +34,10 @@ tester's.
 The per-recipient envelope is sound. Everything below is about what sits
 *outside* it.
 
-## F1 — Shared files are decryptable by anyone on the broker (high)
+Status at time of writing: F1 and F6 are fixed; F2–F5 and F7 are open. F1's fix only
+takes effect for families created on 1.12.0 or later — see Phase 0.
+
+## F1 — Shared files are decryptable by anyone on the broker (high) — FIXED in 1.12.0
 
 `SharedFileRepository.deriveFileKey`:
 
@@ -106,6 +109,64 @@ Retained messages persist until overwritten or explicitly cleared, and an
 attacker can write them. At review time **7 stale `join_approval` messages**
 were retained on the broker, the oldest several weeks old. These replay to any
 client that subscribes.
+
+## F6 — Message length leaked behaviour through encryption (medium) — FIXED
+
+Observed on the live broker, not theorised. Presence messages were **136 bytes when
+online and 137 when offline**, because `"true"` is four characters and `"false"` is
+five. The correlation held for all 13 member IDs visible at the time. Online/offline for
+every member was therefore readable without parsing anything at all.
+
+The same channel applied to encrypted location. `LocationUpdate.speed` and `.bearing`
+are optional and only populated when the device is moving, so a moving device emitted a
+measurably longer ciphertext than a stationary one — 745 vs 763 bytes in one capture.
+Coordinate precision leaked similarly: `1.0` and `37.77491234567` serialize to different
+lengths, so payload size varied with position, not just motion.
+
+Encryption does not help here. Ciphertext length tracks plaintext length, so the signal
+survives intact.
+
+Fixed by padding the envelope to a fixed size, applied to the **plaintext** so ciphertext
+inherits the constant length: presence to 256 bytes, location to 512. Fixed sizes rather
+than buckets — a variation straddling a bucket boundary still leaks. Oversized messages
+round up to a multiple instead of going out at their true length.
+`MessageProtocolPaddingTest` asserts on byte counts so the leak cannot silently return.
+
+**Still unpadded:** chat (leaks message length), replication, and group sync. Chat is a
+deliberate deferral — its lengths span orders of magnitude, so padding is a bandwidth
+decision rather than a free fix.
+
+## F7 — Shared file names are published in cleartext (high)
+
+`SharedFileRepository.broadcastManifest` publishes the manifest with no encryption:
+
+```kotlin
+transportProvider.broadcastMessage(
+    topic, json.encodeToString(manifest).toByteArray(), QOS_AT_LEAST_ONCE,
+    true  // retained
+)
+```
+
+`SharedFile` carries `name`, `mimeType`, `sizeBytes`, `contentHash`, `uploaderMemberId`
+and `uploadedAt`. So for every file any family has ever shared, an observer on the broker
+learns the filename, its type, its exact size, who uploaded it and when — and because the
+message is **retained**, it is served to any new subscriber immediately, indefinitely,
+with no need to be listening at the time.
+
+This survives the F1 fix. Encrypting file *contents* with a proper group key does nothing
+for a manifest that was never encrypted in the first place. Filenames are frequently more
+revealing than contents (`custody_agreement.pdf`, `passport_scan.jpg`), so in practice
+this may leak more than F1 did.
+
+Chunk payloads are largely uniform already — `CHUNK_SIZE` is 32 KiB and every chunk but
+the last is exactly that — so the incremental leak from chunk sizing is small next to the
+manifest. `chunkCount` in the manifest already gives file size anyway.
+
+Fix requires a decision, not just code: the manifest is currently a single retained
+broadcast to the whole group, which is what makes it cheap and what lets a new member
+catch up instantly. Encrypting it per recipient means N publishes and losing the retained
+catch-up, so it needs the same treatment as the group sync path rather than a one-line
+change.
 
 ## Remediation
 
