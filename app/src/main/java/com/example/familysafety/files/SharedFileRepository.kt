@@ -100,8 +100,8 @@ class SharedFileRepository @Inject constructor(
             val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
             val fileId = UUID.randomUUID().toString()
 
-            // Derive group file key
-            val fileKey = deriveFileKey(groupId)
+            // Group file key, plus the version tag receivers need to pick the same key
+            val (fileKey, fileKeyVersion) = resolveEncryptionKey(groupId)
 
             // Persist metadata before publishing chunks so receivers can create their
             // pending records from the manifest before chunk messages arrive.
@@ -134,10 +134,11 @@ class SharedFileRepository @Inject constructor(
                     fileId = fileId,
                     chunkIndex = index,
                     totalChunks = totalChunks,
-                    data = Base64.getEncoder().encodeToString(encryptedChunk)
+                    data = Base64.getEncoder().encodeToString(encryptedChunk),
+                    keyVersion = fileKeyVersion
                 )
                 val topic = MqttConfig.getFileChunkTopic(groupId, fileId, index)
-                
+
                 // Use unified transport broadcast
                 transportProvider.broadcastMessage(
                     topic = topic,
@@ -225,7 +226,16 @@ class SharedFileRepository @Inject constructor(
                 if (entity?.downloadState == "COMPLETE") return@launch
 
                 val encryptedBytes = Base64.getDecoder().decode(chunkMsg.data)
-                val fileKey = deriveFileKey(groupId)
+                // Use the key the sender tagged the chunk with, not our current one:
+                // during the upgrade a group holds files under both key versions.
+                val fileKey = keyForVersion(groupId, chunkMsg.keyVersion)
+                if (fileKey == null) {
+                    Timber.w(
+                        "$TAG: chunk $chunkIndex of $fileId needs key version " +
+                            "${chunkMsg.keyVersion}, which this device does not have"
+                    )
+                    return@launch
+                }
                 val plainChunk = decrypt(encryptedBytes, fileKey)
 
                 writeTempChunk(fileId, chunkIndex, plainChunk)
@@ -271,7 +281,10 @@ class SharedFileRepository @Inject constructor(
         scope.launch {
             try {
                 val groupId = groupStateManager.groupDefinition.value?.groupId ?: return@launch
-                val fileKey = deriveFileKey(groupId)
+                // Re-encrypted fresh from the local plaintext, so this uses the current
+                // key regardless of which one the file originally arrived under. That
+                // also quietly migrates legacy files to the group key as they replicate.
+                val (fileKey, fileKeyVersion) = resolveEncryptionKey(groupId)
 
                 broadcastManifest(groupId)
 
@@ -285,7 +298,8 @@ class SharedFileRepository @Inject constructor(
                             fileId = entity.fileId,
                             chunkIndex = index,
                             totalChunks = chunks.size,
-                            data = Base64.getEncoder().encodeToString(encryptedChunk)
+                            data = Base64.getEncoder().encodeToString(encryptedChunk),
+                            keyVersion = fileKeyVersion
                         )
                         val topic = MqttConfig.getFileChunkTopic(groupId, entity.fileId, index)
                         transportProvider.broadcastMessage(topic, json.encodeToString(chunkMsg).toByteArray(), MqttConfig.QOS_AT_LEAST_ONCE, false)
@@ -416,7 +430,42 @@ class SharedFileRepository @Inject constructor(
         Timber.i("$TAG: Assembled file ${entity.name}")
     }
 
-    private fun deriveFileKey(groupId: String): ByteArray {
+    /**
+     * The key to encrypt new uploads with, and the version tag to publish alongside them.
+     *
+     * Prefers the group's random fileEncryptionKey. Falls back to the legacy derivation
+     * for groups created before that field existed — those stay readable, but remain
+     * exposed, because the legacy key is computable from the groupId in the topic name
+     * plus a constant in the APK. See SECURITY_REVIEW.md F1.
+     */
+    private fun resolveEncryptionKey(groupId: String): Pair<ByteArray, Int> {
+        val groupKey = groupStateManager.groupDefinition.value?.fileEncryptionKey
+        return if (!groupKey.isNullOrBlank()) {
+            groupKey.hexToBytes() to FILE_KEY_VERSION_GROUP_SECRET
+        } else {
+            deriveLegacyFileKey(groupId) to FILE_KEY_VERSION_LEGACY
+        }
+    }
+
+    /** The key a received chunk says it was encrypted with. */
+    private fun keyForVersion(groupId: String, keyVersion: Int): ByteArray? =
+        when (keyVersion) {
+            FILE_KEY_VERSION_GROUP_SECRET ->
+                groupStateManager.groupDefinition.value?.fileEncryptionKey
+                    ?.takeIf { it.isNotBlank() }
+                    ?.hexToBytes()
+            else -> deriveLegacyFileKey(groupId)
+        }
+
+    private fun String.hexToBytes(): ByteArray =
+        chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
+    /**
+     * Legacy key: SHA-256(groupId + constant). Retained only so files shared before the
+     * group key existed remain readable. Never use for new uploads — both inputs are
+     * public, so this provides no confidentiality against a broker observer.
+     */
+    private fun deriveLegacyFileKey(groupId: String): ByteArray {
         val material = (groupId + FILE_KEY_SALT).toByteArray(Charsets.UTF_8)
         return MessageDigest.getInstance("SHA-256").digest(material)
     }

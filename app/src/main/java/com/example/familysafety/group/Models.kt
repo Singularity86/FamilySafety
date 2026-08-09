@@ -87,6 +87,12 @@ data class MemberRuntimeState(
  * @property members Set of all family members (including creator)
  * @property version Monotonically increasing version for conflict resolution
  * @property previousStateHash Hash of previous group state (forms hash chain)
+ * @property fileEncryptionKey Random 32-byte AES key (hex) shared by the group, used for
+ *   shared files. Lives here because the definition already travels only inside the
+ *   per-recipient encrypted envelope (join approval, group sync) and is persisted to the
+ *   encrypted DataStore, so it is distributed and stored safely with no new plumbing.
+ *   Null for groups created before this field existed; those fall back to the legacy
+ *   groupId-derived key. Never log or display this value.
  */
 @Serializable
 data class GroupDefinition(
@@ -96,11 +102,16 @@ data class GroupDefinition(
     val creatorMemberId: String,
     val members: Set<FamilyMember>,
     val version: Long,
-    val previousStateHash: String? = null
+    val previousStateHash: String? = null,
+    val fileEncryptionKey: String? = null
 ) {
     /**
      * Computes deterministic hash of this group state for hash chain integrity.
      * Members sign this hash to approve group membership changes.
+     *
+     * Deliberately excludes fileEncryptionKey: the hash covers who is in the group, and
+     * folding a secret into it would both change every existing group's hash (breaking
+     * the chain across the upgrade) and leak nothing useful in return.
      */
     fun computeStateHash(): String {
         val canonical = buildString {

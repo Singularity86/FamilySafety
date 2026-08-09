@@ -116,7 +116,8 @@ class GroupStateManager(
                 creatorMemberId = localMember.memberId,
                 members = setOf(localMember),
                 version = 1,
-                previousStateHash = null
+                previousStateHash = null,
+                fileEncryptionKey = generateFileEncryptionKey()
             )
 
             // Persist before updating in-memory state
@@ -654,6 +655,19 @@ class GroupStateManager(
 
     private fun generateGroupId(): String {
         return UUID.randomUUID().toString()
+    }
+
+    /**
+     * Random 256-bit AES key for the group's shared files, hex encoded.
+     *
+     * This replaces deriving the file key from the groupId, which appears in cleartext
+     * MQTT topic names — that made the key computable by anyone who could reach the
+     * broker, since the only other input was a constant compiled into the app.
+     */
+    private fun generateFileEncryptionKey(): String {
+        val key = ByteArray(32)
+        java.security.SecureRandom().nextBytes(key)
+        return key.joinToString("") { "%02x".format(it) }
     }
 
     private fun buildMemberAdditionApprovalMessage(
