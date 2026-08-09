@@ -1,7 +1,7 @@
 # FamilySafety — iOS Port Specification & Interop Contract
 
-**Version 1.2 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
-revised 2026-08-08 against Android 1.12.1 (versionCode 19).**
+**Version 1.3 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
+revised 2026-08-08 against Android 1.12.2 (versionCode 20).**
 
 All additions since 1.0 are optional fields that older senders omit, so the wire stays
 backward compatible. Two of them still change what a correct implementation must do:
@@ -12,6 +12,10 @@ backward compatible. Two of them still change what a correct implementation must
 - **1.2**, envelope padding (§6.1): `MessageEnvelope.pad`. Ignoring it on *receive* is
   harmless, but failing to emit it on *send* leaks online/offline and movement through
   message length — see §6.1 for the algorithm and why.
+- **1.3**, manifest encryption (§6.7): `EncryptedFileManifest` now wraps `FileManifest`
+  on the retained manifest topic, and `FileManifest` gains `pad`. This one is **not**
+  purely additive in effect — a receiver that only understands the bare manifest will
+  see no files at all from Android 1.12.2+, because the published shape has changed.
 
 This document is the single source of truth for building the iOS version of FamilySafety.
 It captures everything the iOS app must implement **byte-for-byte identically** to
@@ -149,7 +153,7 @@ against the QR invite's `inviterMemberId` (§8.4).
 | `familysafe/{id}/replication/request` | Envelope of `ReplicationRequest` | ✅ | no |
 | `familysafe/{id}/replication/data` | Envelope of `ReplicationResponse` | ✅ | no |
 | `familysafe/{id}/replication/announce` | Envelope of `DataAvailabilityAnnouncement` | ✅ per-recipient | no |
-| `familysafe/group/{groupId}/files/manifest` | plaintext `FileManifest` (metadata only) | ❌ | **yes** |
+| `familysafe/group/{groupId}/files/manifest` | `EncryptedFileManifest` since 1.12.2; bare `FileManifest` from older senders | ✅ group key (was ❌) | **yes** |
 | `familysafe/group/{groupId}/files/chunk/{fileId}/{chunkIndex}` | plaintext `FileChunkMessage` (data field AES-GCM encrypted) | contents ✅ (group key — **version 1 is not confidential**, see §6.7) | no |
 | `familysafe/{id}/files/request` | plaintext `FileRequestMessage` | ❌ | no |
 
@@ -282,8 +286,10 @@ so it needs no separate distribution path. Two consequences for an implementatio
 
 ### 6.7 Shared files
 ```json
-// FileManifest — plaintext, retained on the group manifest topic
-{ "groupId": "...", "files": [ SharedFile... ], "version": 0 }   // version = epoch ms of last change
+// FileManifest — retained on the group manifest topic. ENCRYPTED since 1.12.2; see below.
+{ "groupId": "...", "files": [ SharedFile... ], "version": 0, "pad": "..." }  // version = epoch ms
+// EncryptedFileManifest — what is actually published when the group has a file key
+{ "keyVersion": 2, "data": "<base64 of AES-GCM blob over the FileManifest JSON>" }
 // SharedFile
 { "fileId": "<uuid>", "name": "...", "mimeType": "...", "sizeBytes": 0,
   "contentHash": "<sha256 hex of plaintext>", "uploaderMemberId": "...", "uploadedAt": 0,
@@ -326,6 +332,36 @@ Rules for an implementation:
   `ignoreUnknownKeys = true`; the Swift side should use an optional with a default of 1.
 
 See `SECURITY_REVIEW.md` finding F1 for why version 1 exists and why it is not safe.
+
+#### Manifest encryption (since 1.12.2)
+
+The manifest used to be published as bare `FileManifest` JSON — file names, MIME types,
+exact sizes, uploader and timestamps — retained, so any broker client received it on
+subscribe. It is now wrapped in `EncryptedFileManifest`, encrypted **symmetrically with
+the group file key** rather than per recipient, which keeps it a single retained
+broadcast so a joining member still catches up instantly.
+
+Sending:
+
+1. Pad the `FileManifest` to a **1 KiB** multiple using the same `pad` scheme as §6.1
+   (measure with `pad` empty, round up, fill with `.`). This stops ciphertext length from
+   revealing the file count and name lengths.
+2. AES-256-GCM the serialized manifest with the group key, 12-byte nonce, 128-bit tag,
+   blob layout `nonce ‖ ciphertext ‖ tag`.
+3. Publish `{keyVersion: 2, data: <base64 blob>}`, retained.
+
+Receiving — **both shapes appear on this topic**, since a retained plaintext manifest
+from before the upgrade outlives it and older senders still publish plaintext:
+
+1. Try to decode `EncryptedFileManifest`. If it parses, decrypt with the key for its
+   `keyVersion`; if no such key is held, drop the message.
+2. Otherwise decode as a bare `FileManifest`.
+
+The two shapes have disjoint required fields, so the attempt order is unambiguous.
+
+A group with no `fileEncryptionKey` (created before 1.12.0) publishes plaintext. Do not
+"fix" that by encrypting with the version 1 key — it is derivable by anyone on the
+broker, so it would look like protection without providing any.
 
 ---
 

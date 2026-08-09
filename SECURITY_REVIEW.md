@@ -34,8 +34,9 @@ tester's.
 The per-recipient envelope is sound. Everything below is about what sits
 *outside* it.
 
-Status at time of writing: F1 and F6 are fixed; F2–F5 and F7 are open. F1's fix only
-takes effect for families created on 1.12.0 or later — see Phase 0.
+Status at time of writing: F1, F6 and F7 are fixed; F2–F5 are open. The F1 and F7 fixes
+only take effect for families created on 1.12.0 or later, because both depend on the
+group key that is generated at group creation — see Phase 0.
 
 ## F1 — Shared files are decryptable by anyone on the broker (high) — FIXED in 1.12.0
 
@@ -136,7 +137,7 @@ round up to a multiple instead of going out at their true length.
 deliberate deferral — its lengths span orders of magnitude, so padding is a bandwidth
 decision rather than a free fix.
 
-## F7 — Shared file names are published in cleartext (high)
+## F7 — Shared file names are published in cleartext (high) — FIXED in 1.12.2
 
 `SharedFileRepository.broadcastManifest` publishes the manifest with no encryption:
 
@@ -162,11 +163,22 @@ Chunk payloads are largely uniform already — `CHUNK_SIZE` is 32 KiB and every 
 the last is exactly that — so the incremental leak from chunk sizing is small next to the
 manifest. `chunkCount` in the manifest already gives file size anyway.
 
-Fix requires a decision, not just code: the manifest is currently a single retained
-broadcast to the whole group, which is what makes it cheap and what lets a new member
-catch up instantly. Encrypting it per recipient means N publishes and losing the retained
-catch-up, so it needs the same treatment as the group sync path rather than a one-line
-change.
+Fixed by encrypting the manifest **symmetrically with the group key** rather than per
+recipient. Per-recipient encryption would have cost N publishes and the retained
+catch-up that lets a joining member sync instantly; a symmetric group key keeps the
+manifest a single retained broadcast while making it unreadable off the broker.
+
+- `EncryptedFileManifest{keyVersion, data}` replaces the bare manifest on the topic, with
+  `data` = AES-256-GCM over the serialized `FileManifest`.
+- The plaintext is padded to a 1 KiB grid first, so ciphertext length no longer reveals
+  how many files the family has or how long their names are.
+- Receivers try the encrypted shape first and fall back to plaintext, because a retained
+  plaintext manifest from before the upgrade can outlive it.
+
+**Legacy groups still publish plaintext.** Their only available key is the version 1
+derivation, which anyone on the broker can compute, so encrypting with it would be
+theatre rather than protection. Recreating the family on 1.12.0+ remains the fix, exactly
+as for F1.
 
 ## Remediation
 

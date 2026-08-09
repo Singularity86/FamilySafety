@@ -55,6 +55,8 @@ class SharedFileRepository @Inject constructor(
         private const val GCM_TAG_BITS = 128
         private const val NONCE_BYTES = 12
         private const val FILE_KEY_SALT = "familysafety-files-v1"
+        /** Grid the encrypted manifest is padded to, so its size hides the file count. */
+        private const val MANIFEST_PAD_BYTES = 1024
     }
 
     // =========================================================================
@@ -182,8 +184,8 @@ class SharedFileRepository @Inject constructor(
     fun handleIncomingManifest(payload: ByteArray) {
         scope.launch {
             try {
-                val manifest = json.decodeFromString<FileManifest>(String(payload))
                 val groupId = groupStateManager.groupDefinition.value?.groupId ?: return@launch
+                val manifest = decodeManifest(String(payload), groupId) ?: return@launch
                 if (manifest.groupId != groupId) return@launch
 
                 Timber.d("$TAG: Received manifest with ${manifest.files.size} files")
@@ -394,12 +396,73 @@ class SharedFileRepository @Inject constructor(
         val files = sharedFileDao.getAllFiles().map { it.toSharedFile() }
         val manifest = FileManifest(groupId, files, System.currentTimeMillis())
         val topic = MqttConfig.getFileManifestTopic(groupId)
+
+        val (fileKey, fileKeyVersion) = resolveEncryptionKey(groupId)
+        val payload = if (fileKeyVersion == FILE_KEY_VERSION_GROUP_SECRET) {
+            val wrapped = EncryptedFileManifest(
+                keyVersion = fileKeyVersion,
+                data = Base64.getEncoder().encodeToString(
+                    encrypt(json.encodeToString(padManifest(manifest)).toByteArray(), fileKey)
+                )
+            )
+            json.encodeToString(wrapped).toByteArray()
+        } else {
+            // Legacy group with no shared secret. The only key available is derivable by
+            // anyone on the broker, so encrypting with it would be theatre — send the
+            // plaintext older peers already expect and leave the exposure recorded
+            // (SECURITY_REVIEW.md F7). Recreating the family on 1.12.0+ is the fix.
+            json.encodeToString(manifest).toByteArray()
+        }
+
         transportProvider.broadcastMessage(
             topic,
-            json.encodeToString(manifest).toByteArray(),
+            payload,
             MqttConfig.QOS_AT_LEAST_ONCE,
             true  // retained — new subscribers get it immediately
         )
+    }
+
+    /**
+     * Decode a manifest that may be encrypted or legacy plaintext.
+     *
+     * Both shapes appear on the same topic during rollout, and a retained plaintext
+     * manifest from before the upgrade can outlive it, so the encrypted form is tried
+     * first and plaintext is the fallback. Returns null when neither parses, or when the
+     * manifest is encrypted under a key this device does not hold.
+     */
+    private fun decodeManifest(raw: String, groupId: String): FileManifest? {
+        runCatching { json.decodeFromString<EncryptedFileManifest>(raw) }
+            .getOrNull()
+            ?.let { wrapped ->
+                val key = keyForVersion(groupId, wrapped.keyVersion)
+                if (key == null) {
+                    Timber.w(
+                        "$TAG: manifest is encrypted under key version ${wrapped.keyVersion}, " +
+                            "which this device does not have"
+                    )
+                    return null
+                }
+                return runCatching {
+                    json.decodeFromString<FileManifest>(
+                        String(decrypt(Base64.getDecoder().decode(wrapped.data), key))
+                    )
+                }.onFailure { Timber.e(it, "$TAG: failed to decrypt manifest") }.getOrNull()
+            }
+
+        return runCatching { json.decodeFromString<FileManifest>(raw) }
+            .onFailure { Timber.e(it, "$TAG: failed to parse manifest") }
+            .getOrNull()
+    }
+
+    /**
+     * Pad the manifest so its encrypted size lands on a 1 KiB grid, hiding how many files
+     * the family has and how long their names are.
+     */
+    private fun padManifest(manifest: FileManifest): FileManifest {
+        val bare = json.encodeToString(manifest.copy(pad = "")).toByteArray(Charsets.UTF_8).size
+        val target = ((bare + MANIFEST_PAD_BYTES - 1) / MANIFEST_PAD_BYTES) * MANIFEST_PAD_BYTES
+        // '.' needs no JSON escaping, so N characters add exactly N bytes.
+        return manifest.copy(pad = ".".repeat(target - bare))
     }
 
     private suspend fun tryAssembleFile(fileId: String) {

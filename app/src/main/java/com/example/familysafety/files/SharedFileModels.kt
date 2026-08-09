@@ -21,7 +21,35 @@ data class SharedFile(
 data class FileManifest(
     val groupId: String,
     val files: List<SharedFile>,
-    val version: Long              // epoch ms of last change; higher = newer
+    val version: Long,             // epoch ms of last change; higher = newer
+    /**
+     * Filler so the encrypted manifest lands on a fixed size grid. Without it the
+     * ciphertext length tracks how many files the family has and how long their names
+     * are, which survives the encryption added alongside it.
+     */
+    val pad: String = ""
+)
+
+/**
+ * Encrypted wrapper for [FileManifest], published in its place on the retained manifest
+ * topic.
+ *
+ * The manifest used to go out as plaintext JSON — file names, MIME types, exact sizes,
+ * uploader and timestamps — retained, so it was served to any broker client on subscribe
+ * whether or not they were listening when it was published. That leaked independently of
+ * the file *contents* fix in 1.12.0, and a file name is often more revealing than the
+ * file.
+ *
+ * Encrypting symmetrically with the group key keeps this a single retained broadcast, so
+ * a joining member still catches up instantly. Per-recipient encryption would have cost
+ * both.
+ */
+@Serializable
+data class EncryptedFileManifest(
+    /** Which key encrypted [data]; same scheme as [FileChunkMessage.keyVersion]. */
+    val keyVersion: Int,
+    /** Base64 of `nonce ‖ ciphertext ‖ tag` over the serialized [FileManifest]. */
+    val data: String
 )
 
 @Serializable
