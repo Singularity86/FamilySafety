@@ -8,6 +8,9 @@ import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.crypto.RecipientKeys
 import com.example.familysafety.group.FamilyMember
 import com.example.familysafety.group.GroupStateManager
+// Aliased: this class has its own nested ConnectionState for the MQTT client itself,
+// which would otherwise shadow the per-member one.
+import com.example.familysafety.group.ConnectionState as MemberConnectionState
 import com.example.familysafety.group.LazysodiumCryptoProvider
 import com.example.familysafety.group.PresenceStatus
 import com.example.familysafety.location.LocationRepository
@@ -494,6 +497,25 @@ class MqttTransport @Inject constructor(
             memberId = senderId,
             newStatus = if (presenceUpdate.isOnline) PresenceStatus.ACTIVE else PresenceStatus.OFFLINE
         )
+
+        // Presence also tells us the route. Without this the connection state stayed
+        // Unknown forever — only LAN discovery ever set it — so members the broker had
+        // already reported as offline showed up as "no contact yet" instead of "Offline".
+        if (presenceUpdate.isOnline) {
+            // Reaching them over the broker does not mean the LAN route is gone, and
+            // Local is the better route, so never downgrade an existing Local peer.
+            val current = groupStateManager.memberStates.value[senderId]?.connectionState
+            if (current !is MemberConnectionState.Local) {
+                groupStateManager.updateConnectionState(
+                    senderId,
+                    MemberConnectionState.Cloud(topic)
+                )
+            }
+        } else {
+            // A retained "offline" or a fired last-will means their app is gone, which
+            // invalidates any LAN route we thought we had as well.
+            groupStateManager.updateConnectionState(senderId, MemberConnectionState.Offline)
+        }
     }
 
     /**
