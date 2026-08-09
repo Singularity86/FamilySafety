@@ -13,9 +13,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.familysafety.BuildConfig
 import com.example.familysafety.core.SecurityEventRepository
 import com.example.familysafety.group.GroupDefinition
 import com.example.familysafety.sync.GroupSyncManager
@@ -67,6 +70,28 @@ fun SecurityScreen(
                 routeHealth = routeHealth,
                 decryptFailures = decryptFailures,
                 keySyncRequestState = keySyncRequestState
+            )
+            ThisDeviceCard(
+                memberId = myMemberId,
+                displayName = members.find { it.memberId == myMemberId }?.displayName,
+                ed25519PublicKey = members.find { it.memberId == myMemberId }?.ed25519PublicKey,
+                // Built on demand rather than per recomposition — it stamps relative
+                // timestamps, so it must reflect the moment the button is pressed.
+                buildDiagnostics = {
+                    buildDiagnosticsReport(
+                        memberId = myMemberId,
+                        displayName = members.find { it.memberId == myMemberId }?.displayName,
+                        ed25519PublicKey = members.find { it.memberId == myMemberId }?.ed25519PublicKey,
+                        groupDef = groupDef,
+                        members = members,
+                        mqttState = mqttState,
+                        syncState = syncState,
+                        deviceNetworkAvailable = deviceNetworkAvailable,
+                        routeHealth = routeHealth,
+                        memberRouteStatuses = memberRouteStatuses,
+                        decryptFailures = decryptFailures
+                    )
+                }
             )
             NetworkStatusCard(
                 mqttState = mqttState,
@@ -221,6 +246,207 @@ private fun NetworkStatusCard(
                 else                                   -> MaterialTheme.colorScheme.onSurfaceVariant to "Idle"
             }
             StatusRow(syncColor, "Family list: $syncLabel")
+        }
+    }
+}
+
+/**
+ * Identity of this device. Every other card describes *other* members, so without this
+ * there was no way to learn your own member ID from inside the app — which made it
+ * impossible to tell which member you are when reading broker traffic or comparing
+ * notes with someone else's device.
+ */
+@Composable
+private fun ThisDeviceCard(
+    memberId: String,
+    displayName: String?,
+    ed25519PublicKey: String?,
+    buildDiagnostics: () -> String
+) {
+    val clipboard = LocalClipboardManager.current
+    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("This Device", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(12.dp))
+
+            if (!displayName.isNullOrBlank()) {
+                IntegrityRow("Name", displayName)
+                Spacer(Modifier.height(8.dp))
+            }
+
+            // Full ID, not a prefix: it is matched against topic names and other
+            // devices' records, where a truncated value is worse than useless.
+            CopyableValue(
+                label = "Member ID",
+                value = memberId.ifBlank { "not available until onboarding completes" },
+                onCopy = if (memberId.isNotBlank()) {
+                    { clipboard.setText(AnnotatedString(memberId)) }
+                } else null
+            )
+
+            if (!ed25519PublicKey.isNullOrBlank()) {
+                Spacer(Modifier.height(8.dp))
+                // Same 16-char grouped form the Member Keys card uses for everyone
+                // else, so it can be read straight across from another device.
+                CopyableValue(
+                    label = "Signing key",
+                    value = ed25519PublicKey.take(16).chunked(4).joinToString(" "),
+                    onCopy = { clipboard.setText(AnnotatedString(ed25519PublicKey)) }
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+            IntegrityRow("App version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+
+            Spacer(Modifier.height(14.dp))
+            var copied by remember { mutableStateOf(false) }
+            LaunchedEffect(copied) {
+                if (copied) {
+                    kotlinx.coroutines.delay(2_000)
+                    copied = false
+                }
+            }
+            OutlinedButton(
+                onClick = {
+                    clipboard.setText(AnnotatedString(buildDiagnostics()))
+                    copied = true
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    Icons.Default.ContentCopy,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(if (copied) "Copied to clipboard" else "Copy diagnostics")
+            }
+            Text(
+                "Includes member IDs, names, routes and sync state for everyone in the " +
+                    "family. No locations or message contents.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+        }
+    }
+}
+
+/**
+ * One pasteable snapshot of everything this screen knows. Deliberately excludes
+ * coordinates and message contents — it is meant to be shareable when asking for help,
+ * and location data is the one thing this app exists to keep private.
+ */
+private fun buildDiagnosticsReport(
+    memberId: String,
+    displayName: String?,
+    ed25519PublicKey: String?,
+    groupDef: GroupDefinition?,
+    members: List<com.example.familysafety.group.FamilyMember>,
+    mqttState: MqttTransport.ConnectionState,
+    syncState: GroupSyncManager.SyncState,
+    deviceNetworkAvailable: Boolean,
+    routeHealth: MainViewModel.RouteHealth,
+    memberRouteStatuses: Map<String, MainViewModel.MemberRouteStatus>,
+    decryptFailures: Map<String, SecurityEventRepository.DecryptStats>
+): String = buildString {
+    appendLine("=== Jibaro Family Safety diagnostics ===")
+    appendLine("App: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+    appendLine()
+
+    appendLine("[This device]")
+    appendLine("  Name: ${displayName ?: "(unknown)"}")
+    appendLine("  Member ID: ${memberId.ifBlank { "(not set)" }}")
+    appendLine("  Signing key: ${ed25519PublicKey ?: "(not set)"}")
+    appendLine()
+
+    appendLine("[Network]")
+    appendLine("  Device internet: ${if (deviceNetworkAvailable) "available" else "unavailable"}")
+    appendLine("  Relay: " + when (mqttState) {
+        is MqttTransport.ConnectionState.Connected  -> "connected"
+        is MqttTransport.ConnectionState.Connecting -> "connecting"
+        is MqttTransport.ConnectionState.Error      -> "error"
+        else                                        -> "disconnected"
+    })
+    appendLine("  Local peers: ${routeHealth.localPeerCount}/${routeHealth.totalPeerCount}")
+    appendLine("  Has relay: ${routeHealth.hasRelay}")
+    appendLine("  Sync: " + when (val s = syncState) {
+        is GroupSyncManager.SyncState.Synced   -> "synced v${s.version}"
+        is GroupSyncManager.SyncState.Syncing  -> "syncing"
+        is GroupSyncManager.SyncState.Conflict -> "conflict"
+        is GroupSyncManager.SyncState.Error    -> "error: ${s.message}"
+        else                                    -> "idle"
+    })
+    appendLine()
+
+    appendLine("[Family list]")
+    if (groupDef == null) {
+        appendLine("  (no group)")
+    } else {
+        appendLine("  Group ID: ${groupDef.groupId}")
+        appendLine("  Version: ${groupDef.version}")
+        appendLine("  State hash: ${groupDef.computeStateHash()}")
+        appendLine("  Members: ${groupDef.members.size}")
+    }
+    appendLine()
+
+    appendLine("[Members]")
+    if (members.isEmpty()) {
+        appendLine("  (none)")
+    }
+    members.forEach { member ->
+        val isMe = member.memberId == memberId
+        val status = memberRouteStatuses[member.memberId]
+        val stats = decryptFailures[member.memberId]
+        appendLine("  ${member.displayName}${if (isMe) " (this device)" else ""}")
+        appendLine("    id: ${member.memberId}")
+        appendLine("    route: ${status?.routeLabel ?: "unknown"}")
+        appendLine("    last seen: ${status?.lastSeenMs?.let { formatTimeAgo(it) } ?: "never"}")
+        appendLine("    last location: ${status?.lastLocationUpdateMs?.let { formatTimeAgo(it) } ?: "never"}")
+        appendLine("    decrypt: " + when {
+            stats == null -> "no data"
+            stats.hasActiveFailure ->
+                "FAILING (${stats.failureCount} failures, last ${formatTimeAgo(stats.lastFailureMs)})"
+            stats.failureCount > 0 ->
+                "recovered after ${stats.failureCount}, last ok ${formatTimeAgo(stats.lastSuccessMs)}"
+            stats.lastSuccessMs > 0L -> "healthy, last ok ${formatTimeAgo(stats.lastSuccessMs)}"
+            else -> "nothing received yet"
+        })
+    }
+}
+
+/**
+ * Label above a monospace value, with an optional copy action. Long hex values get their
+ * own line because [IntegrityRow]'s single-line layout squeezes them unreadably.
+ */
+@Composable
+private fun CopyableValue(label: String, value: String, onCopy: (() -> Unit)?) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                value,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.weight(1f)
+            )
+            if (onCopy != null) {
+                IconButton(onClick = onCopy, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        Icons.Default.ContentCopy,
+                        contentDescription = "Copy $label",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
         }
     }
 }
