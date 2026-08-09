@@ -1,6 +1,12 @@
 # FamilySafety — iOS Port Specification & Interop Contract
 
-**Version 1.0 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`).**
+**Version 1.1 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
+revised 2026-08-08 against Android 1.12.0 (versionCode 18).**
+
+Changes in 1.1, both in the shared-file path (§6.5, §6.7, §7.1):
+`GroupDefinition.fileEncryptionKey` and `FileChunkMessage.keyVersion`. Both are optional
+on the wire and older senders omit them, so this revision is backward compatible — but an
+implementation that ignores `keyVersion` will fail to decrypt files from Android 1.12.0+.
 
 This document is the single source of truth for building the iOS version of FamilySafety.
 It captures everything the iOS app must implement **byte-for-byte identically** to
@@ -139,7 +145,7 @@ against the QR invite's `inviterMemberId` (§8.4).
 | `familysafe/{id}/replication/data` | Envelope of `ReplicationResponse` | ✅ | no |
 | `familysafe/{id}/replication/announce` | Envelope of `DataAvailabilityAnnouncement` | ✅ per-recipient | no |
 | `familysafe/group/{groupId}/files/manifest` | plaintext `FileManifest` (metadata only) | ❌ | **yes** |
-| `familysafe/group/{groupId}/files/chunk/{fileId}/{chunkIndex}` | plaintext `FileChunkMessage` (data field AES-GCM encrypted) | contents ✅ (group key) | no |
+| `familysafe/group/{groupId}/files/chunk/{fileId}/{chunkIndex}` | plaintext `FileChunkMessage` (data field AES-GCM encrypted) | contents ✅ (group key — **version 1 is not confidential**, see §6.7) | no |
 | `familysafe/{id}/files/request` | plaintext `FileRequestMessage` | ❌ | no |
 
 Own subscriptions on connect: `chat`, `location_inbox`, `chat/receipt`, `chat/read`,
@@ -208,8 +214,21 @@ receipt's sender (anti-forgery, see ChatRepository).
                  "ed25519PublicKey": "<hex64chars>", "x25519PublicKey": "<hex64chars>",
                  "addedAtEpochMs": 0, "addedByMemberId": null,
                  "avatarHash": null, "colorHue": null } ],
-  "version": 1, "previousStateHash": null }
+  "version": 1, "previousStateHash": null,
+  "fileEncryptionKey": "<hex64chars>" }
 ```
+
+`fileEncryptionKey` was added in Android 1.12.0 (18): a random 32-byte AES key, hex
+encoded, generated once when the group is created. It is **absent or null** for groups
+created before that, and decoders must treat it as optional.
+
+It lives on the definition because the definition only ever travels inside the
+per-recipient encrypted envelope (join approval, group sync) and is persisted encrypted,
+so it needs no separate distribution path. Two consequences for an implementation:
+
+- It is secret material. Never log it, never show it in a UI, and never put it in a
+  diagnostics export.
+- It is **not** covered by `computeStateHash` (§7.1) — see the note there.
 
 ### 6.6 Replication (all inside per-peer envelopes)
 ```json
@@ -238,15 +257,43 @@ receipt's sender (anti-forgery, see ChatRepository).
   "contentHash": "<sha256 hex of plaintext>", "uploaderMemberId": "...", "uploadedAt": 0,
   "chunkCount": 0, "isDeleted": false, "deletedByMemberId": null, "deletedAt": null }
 // FileChunkMessage — plaintext wrapper, encrypted data
-{ "fileId": "...", "chunkIndex": 0, "totalChunks": 0, "data": "<base64 of AES-GCM blob>" }
+// keyVersion added in Android 1.12.0 (18). ABSENT on the wire from older senders and
+// MUST default to 1 when decoding.
+{ "fileId": "...", "chunkIndex": 0, "totalChunks": 0, "data": "<base64 of AES-GCM blob>",
+  "keyVersion": 2 }
 // FileRequestMessage
 { "requesterId": "..." }
 ```
-File crypto: `fileKey = SHA-256(groupId + "familysafety-files-v1")` (32 bytes, AES-256).
 Chunks are the plaintext split into **32 KiB** pieces; each encrypted independently with
 AES-256-GCM, random **12-byte** nonce, **128-bit** tag; blob layout `nonce ‖ ciphertext ‖ tag`
 (identical to CryptoKit `AES.GCM.SealedBox.combined`). Group storage cap 500 MB.
-*Known accepted limitation:* the file key derives from groupId alone; keep for compatibility.
+
+#### File key versions
+
+`keyVersion` selects the key. **Decrypt with the version the chunk declares, not with
+whatever key the group currently holds** — during rollout a group contains files under
+both.
+
+| `keyVersion` | Key | Notes |
+|---|---|---|
+| 1 (default when field absent) | `SHA-256(groupId + "familysafety-files-v1")` | Legacy. Both inputs are public — the salt is a constant in the binary and the groupId appears in the topic name — so this provides **no confidentiality against anyone who can reach the broker**. Implement for read compatibility only. |
+| 2 | `GroupDefinition.fileEncryptionKey`, hex-decoded to 32 bytes | Random per group, distributed only inside the encrypted group definition. |
+
+Rules for an implementation:
+
+- **Never encrypt with version 1.** New uploads use version 2 when
+  `fileEncryptionKey` is non-null. A group whose definition still has a null key
+  (created before 1.12.0 and never recreated) falls back to version 1 and stays exposed;
+  this is a known gap, not a target state.
+- A version 2 chunk received while `fileEncryptionKey` is null cannot be decrypted.
+  Drop the chunk and surface it; do not attempt the version 1 key, which fails GCM
+  authentication anyway.
+- Re-broadcast (`files/request`) re-encrypts from local plaintext, so it uses the
+  *current* key and tags accordingly. This migrates legacy files opportunistically.
+- Decoders must tolerate the absent field. Android decodes with
+  `ignoreUnknownKeys = true`; the Swift side should use an optional with a default of 1.
+
+See `SECURITY_REVIEW.md` finding F1 for why version 1 exists and why it is not safe.
 
 ---
 
@@ -260,7 +307,11 @@ SHA-256 (lowercase hex) of the UTF-8 canonical string:
 {memberId},{ed25519PublicKey},{x25519PublicKey};
 ```
 (no newlines; every member entry ends with `;` including the last; `previousStateHash`,
-displayName, avatar, etc. are **not** hashed).
+`fileEncryptionKey`, displayName, avatar, etc. are **not** hashed).
+
+`fileEncryptionKey` is excluded deliberately and must stay excluded. Hashing it would
+change the hash of every group that predates it, breaking the chain across the upgrade,
+and would fold a secret into a value that is compared and logged freely.
 
 ### 7.2 Sync signature
 `GroupSyncMessage.signature` = Ed25519-detached over the UTF-8 string
