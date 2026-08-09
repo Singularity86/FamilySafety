@@ -88,6 +88,18 @@ android {
             signingConfig = if (keystoreProperties.isNotEmpty()) {
                 signingConfigs.getByName("release")
             } else null
+
+            // Play warns that the bundle carries native code without debug symbols.
+            // This setting is the documented fix, but it currently collects nothing and
+            // the warning will persist: every .so we ship (libsodium, libsqlcipher,
+            // libjnidispatch, ML Kit, CameraX) is a prebuilt binary from a dependency,
+            // already stripped by its vendor, and this module compiles no native code of
+            // its own for AGP to extract symbols from. Kept anyway — it costs one
+            // no-op task and starts producing symbols automatically the day we add
+            // native sources or a dependency ships unstripped libraries.
+            ndk {
+                debugSymbolLevel = "SYMBOL_TABLE"
+            }
         }
     }
     compileOptions {
