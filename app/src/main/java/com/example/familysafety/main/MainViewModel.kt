@@ -91,7 +91,13 @@ class MainViewModel @Inject constructor(
 
     data class MemberRouteStatus(
         val memberId: String,
-        val routeLabel: String,
+        /**
+         * How this device is reaching the member ("Local"/"Relay"), or null when the
+         * route has not been established yet. Null means "we don't know", NOT "broken" —
+         * updates can be arriving fine while the connection state is still Unknown, so
+         * callers must omit the route rather than inventing a placeholder for it.
+         */
+        val routeLabel: String? = null,
         val lastSeenMs: Long? = null,
         val lastLocationUpdateMs: Long? = null,
         val isRecentlyActive: Boolean = false
@@ -276,11 +282,15 @@ class MainViewModel @Inject constructor(
         groupStateManager.memberStates
             .map { states ->
                 states.mapValues { (memberId, state) ->
+                    // Unknown maps to null, not to a label. It only means no presence has
+                    // pinned the route down yet; location updates routinely decrypt fine in
+                    // that state, and labelling it "Waiting" made working members read as
+                    // stuck.
                     val route = when (state.connectionState) {
                         is ConnectionState.Local -> "Local"
                         is ConnectionState.Cloud -> "Relay"
                         ConnectionState.Offline -> "Offline"
-                        ConnectionState.Unknown -> "Waiting"
+                        ConnectionState.Unknown -> null
                     }
                     MemberRouteStatus(
                         memberId = memberId,

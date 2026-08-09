@@ -441,21 +441,35 @@ private fun getTimeAgo(timestamp: Long): String {
     }
 }
 
+/**
+ * Status for a member whose location we have. The route is appended only when known —
+ * a recent fix already proves the member is reachable, so a placeholder route would add
+ * doubt rather than information.
+ */
 private fun buildMemberStatusText(
     locationTimeAgo: String,
     routeStatus: MainViewModel.MemberRouteStatus?
 ): String {
-    val route = routeStatus?.routeLabel ?: "Waiting"
-    return "Seen $locationTimeAgo · $route"
+    val route = routeStatus?.routeLabel
+    return if (route != null) "Seen $locationTimeAgo · $route" else "Seen $locationTimeAgo"
 }
 
+/**
+ * Status for a member with no location yet. Distinguishes "we know they are offline"
+ * from "they have not shared anything yet" — the old copy said "Waiting for location..."
+ * for both, which implied this device was stuck when the member was simply not running
+ * the app.
+ */
 private fun buildWaitingStatusText(
     isMe: Boolean,
     routeStatus: MainViewModel.MemberRouteStatus?
 ): String {
     val lastSeen = routeStatus?.lastSeenMs
+    val route = routeStatus?.routeLabel
     if (lastSeen != null) {
-        return "Seen ${getTimeAgo(lastSeen)} · ${routeStatus.routeLabel}"
+        val seen = "Seen ${getTimeAgo(lastSeen)}"
+        return if (route != null) "$seen · $route" else seen
     }
-    return if (isMe) "Starting location..." else "Waiting for location..."
+    if (isMe) return "Starting location..."
+    return if (route == "Offline") "Offline · no location yet" else "No location shared yet"
 }

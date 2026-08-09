@@ -474,13 +474,20 @@ private fun formatTimeAgo(ms: Long): String {
     }
 }
 
+/**
+ * One-line member status. The route is only appended when it is actually known: an
+ * Unknown connection state means the route has not been pinned down, not that anything
+ * is wrong, and pairing "Seen just now" with a "Waiting" route made healthy members
+ * look broken.
+ */
 private fun buildMemberStatusLine(status: MainViewModel.MemberRouteStatus?): String {
-    if (status == null) return "Waiting for contact"
+    if (status == null) return "No contact yet"
     val seenAt = status.lastLocationUpdateMs ?: status.lastSeenMs
-    val seenText = if (seenAt != null) {
-        "Seen ${formatTimeAgo(seenAt)}"
-    } else {
-        "Not seen yet"
+    val route = status.routeLabel
+    return when {
+        seenAt != null && route != null -> "Seen ${formatTimeAgo(seenAt)} · $route"
+        seenAt != null -> "Seen ${formatTimeAgo(seenAt)}"
+        route != null -> route
+        else -> "No contact yet"
     }
-    return "$seenText · ${status.routeLabel}"
 }
