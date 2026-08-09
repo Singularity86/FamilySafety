@@ -1,4 +1,4 @@
-# Release notes — 1.11.3 (versionCode 16)
+# Release notes — 1.11.4 (versionCode 17)
 
 Covers everything since 1.11.1 (versionCode 13, commit `cea5fbf`).
 
@@ -7,27 +7,29 @@ Version history for this release line:
 | Code | Name | Fate |
 |---|---|---|
 | 14 | 1.11.2 | Burned on an upload Play would not accept |
-| 15 | 1.11.2 | Uploaded to Play; superseded before wide rollout |
-| 16 | 1.11.3 | Current — adds the three fixes in "Late additions" below |
+| 15 | 1.11.2 | Uploaded to Play; superseded by 16 |
+| 16 | 1.11.3 | Uploaded to Play |
+| 17 | 1.11.4 | Current — adds the status and diagnostics work below |
 
 14 and 15 were byte-identical in app content, so they shared a versionName.
-16 carries real user-facing fixes on top, so it takes its own name rather than
-shipping a second, different build under 1.11.2.
+Every code that reached Play with different content gets its own name, so 17
+ships as 1.11.4 rather than reusing 1.11.3.
+
+Sections below are cumulative: users coming from 1.11.2 get everything here,
+users already on 1.11.3 get only the "Status reporting and diagnostics" items.
 
 ## Play Console "What's new"
 
-Paste as-is. 447 characters; the per-language limit is 500.
+Paste as-is. 389 characters; the per-language limit is 500. Scoped to what is
+new in 17, since 16 already shipped the map, invite and battery fixes.
 
 ```
-Map fixes, smoother invites, and better battery.
+Clearer family status.
 
-• The map no longer draws repeated copies of the world when zoomed out
-• Invite codes with extra spaces or line breaks now work
-• Tapping a join request notification takes you straight to the approval screen
-• Background tabs no longer stay active, saving battery
-• Tap the encryption, network, or sync chips to learn what each means
-• Settings now shows the real app version
-• Updated for Android 16
+• Members who are sharing normally no longer look stuck or "waiting"
+• Members who are offline now say so plainly
+• The Security screen shows this device's own ID, key and app version
+• New "Copy diagnostics" button gathers everything needed to report a problem, without including any location data
 ```
 
 ## Full changelog
@@ -76,12 +78,34 @@ Map fixes, smoother invites, and better battery.
   rebuilds ran continuously in the background while the user was on another tab.
   Only the adjacent tab is kept warm now. (`76de126`)
 
+## Status reporting and diagnostics (versionCode 17)
+
+- **Members who were fine looked broken.** `ConnectionState.Unknown` means "the route
+  is not pinned down yet", not "something is wrong", but it was rendered as the literal
+  word "Waiting" and appended to the status line. A member whose location updates were
+  arriving and decrypting correctly read "Seen just now · Waiting". This directly cost a
+  debugging session chasing a transport fault that did not exist. The route is now
+  omitted when unknown rather than filled with a placeholder. (`aa34bcb`)
+- **Offline members now say "Offline".** Incoming presence only ever updated presence
+  status, never connection state — that was left to LAN discovery alone. So a member the
+  broker had already reported as offline still showed as unknown. Presence now sets the
+  connection state too, without downgrading a peer that is reachable on the LAN.
+  (`79bb50f`)
+- **Security screen shows this device.** A new "This Device" card gives the member ID in
+  full with a copy button, the signing key in the same grouped form used for everyone
+  else, and the app version. There was previously no way to learn your own member ID
+  from inside the app, which made cross-device debugging guesswork.
+- **"Copy diagnostics" button** puts one pasteable snapshot on the clipboard: identity,
+  network and relay state, group version and state hash, and per-member route, last-seen
+  and decrypt health. Deliberately excludes coordinates and message contents so it is
+  safe to share when asking for help.
+
 ## Build details
 
 | | |
 |---|---|
 | Package | `jibaro.spacepirate.love` |
-| versionName / versionCode | 1.11.3 / 16 |
+| versionName / versionCode | 1.11.4 / 17 |
 | targetSdk / minSdk | 36 (Android 16) / 26 |
 | ABIs | arm64-v8a, armeabi-v7a, x86_64 |
 | Upload artifact | `app/build/outputs/bundle/release/app-release.aab` |
