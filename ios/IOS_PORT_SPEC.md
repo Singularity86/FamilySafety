@@ -1,7 +1,7 @@
 # FamilySafety — iOS Port Specification & Interop Contract
 
-**Version 1.4 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
-revised 2026-08-08 against Android 1.12.3 (versionCode 21).**
+**Version 1.5 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
+revised 2026-08-09 against Android 1.12.4 (versionCode 22).**
 
 All additions since 1.0 are optional fields that older senders omit, so the wire stays
 backward compatible. Two of them still change what a correct implementation must do:
@@ -20,6 +20,10 @@ backward compatible. Two of them still change what a correct implementation must
   signing string and the replay/downgrade rules receivers must apply. Also raises the
   presence padding target from 256 to **512** bytes (§6.1), since the signature no longer
   fits in 256 — a client still padding presence to 256 will be distinguishable by size.
+- **1.5**, retained-message hygiene (§4): the joiner must clear its retained
+  `join_approval` and `join_request` on **success** as well as rejection, after the group
+  is durably saved. No wire-format change; a client that skips it leaves a multi-kilobyte
+  approval on the broker after every join.
 
 This document is the single source of truth for building the iOS version of FamilySafety.
 It captures everything the iOS app must implement **byte-for-byte identically** to
@@ -132,7 +136,15 @@ against the QR invite's `inviterMemberId` (§8.4).
 - Outbound messages that fail/queue while offline: in-memory queue, max **200** entries,
   **1 h** expiry.
 - **Clearing a retained message** = publish a zero-length payload with `retained = true`
-  to the same topic (used for join requests after approval/rejection).
+  to the same topic.
+
+  The joiner **must** clear both `join_approval` and its own `join_request` on **success**
+  as well as on rejection, and must do so **after** the group definition is durably saved,
+  never before — clearing first leaves a device that dies mid-join with neither a saved
+  group nor a retained approval to recover from. Android only did this on rejection until
+  1.12.4, so every successful join left a multi-kilobyte approval retained on the broker
+  permanently, replayed to anything that subscribed. An implementation that skips this
+  produces the same litter.
 - Joiner onboarding uses a separate **ephemeral** client `familysafe_join_{memberId[0..7]}_{epochMs}` (§8.3).
 
 ---
@@ -153,7 +165,7 @@ against the QR invite's `inviterMemberId` (§8.4).
 | `familysafe/group/{groupId}/ack` | plaintext `GroupUpdateAck` | ❌ | no |
 | `familysafe/{id}/sync_request` | plaintext `GroupStateRefreshRequest` | ❌ | no |
 | `familysafe/{inviterId}/join_request` | plaintext `JoinRequest` | ❌ (contains only public data) | **yes** (cleared after decision) |
-| `familysafe/{joinerId}/join_approval` | plaintext `JoinApprovalMessage` **or** `JoinRejectionMessage` (each carries an inner Envelope) | inner ✅ | **yes** |
+| `familysafe/{joinerId}/join_approval` | plaintext `JoinApprovalMessage` **or** `JoinRejectionMessage` (each carries an inner Envelope) | inner ✅ | **yes** (joiner clears once consumed — §8.3) |
 | `familysafe/{id}/replication/request` | Envelope of `ReplicationRequest` | ✅ | no |
 | `familysafe/{id}/replication/data` | Envelope of `ReplicationResponse` | ✅ | no |
 | `familysafe/{id}/replication/announce` | Envelope of `DataAvailabilityAnnouncement` | ✅ per-recipient | no |

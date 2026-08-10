@@ -34,9 +34,14 @@ tester's.
 The per-recipient envelope is sound. Everything below is about what sits
 *outside* it.
 
-Status at time of writing: F1, F4, F6 and F7 are fixed; F2, F3 and F5 are open. The F1
-and F7 fixes only take effect for families created on 1.12.0 or later, because both
-depend on the group key generated at group creation — see Phase 0.
+Status at time of writing: F1, F4, F5, F6 and F7 are fixed; **F2 and F3 remain open**.
+The F1 and F7 fixes only take effect for families created on 1.12.0 or later, because
+both depend on the group key generated at group creation — see Phase 0.
+
+What is left is the part that cannot be finished in the app alone. F2 and F3 both come
+down to one shared broker credential with no ACLs, and closing them needs a decision
+about credential issuance — see Phase 1, and the note there about why a serverless
+design has no natural issuer.
 
 F4's fix changes the conclusion of Phase 1/2 below. Broker ACLs were the proposed answer
 to presence forgery, but signatures address it more completely — no credential scheme
@@ -136,13 +141,34 @@ Presence padding moved from 256 to 512 bytes as a consequence — the 128-charac
 signature pushes the envelope past 256, and leaving it would have split presence
 into two buckets, making signed and unsigned senders distinguishable by size.
 
-## F5 — Retained-message pollution (low)
+## F5 — Retained-message pollution (low) — FIXED in 1.12.4
 
 `join_approval` and file manifests are published with `retained = true`.
 Retained messages persist until overwritten or explicitly cleared, and an
 attacker can write them. At review time **7 stale `join_approval` messages**
-were retained on the broker, the oldest several weeks old. These replay to any
-client that subscribes.
+were retained on the broker, the oldest several weeks old (8 by the time this
+was fixed). These replay to any client that subscribes.
+
+Root cause was an asymmetry in `MembershipViewModel`, not the retention itself.
+The rejection path cleared both the retained approval and the joiner's own
+retained join request; the **approval path cleared neither**. So every
+*successful* join left a 2.4–3.9 KB approval on the broker permanently — one
+per member ever added, each replayed to anything that subscribes, and each a
+standing record that the member joined and when.
+
+Fixed by mirroring the rejection cleanup on success. Ordering matters and is
+deliberate: the clear happens **after** the group definition is durably saved,
+because clearing first would leave a device that died mid-join with neither a
+saved group nor a retained approval to recover from.
+
+**Existing litter is not removed by the fix** — those 8 messages sit on topics
+belonging to members, and deleting one that has not yet been consumed would
+break an in-progress join. Clearing them is a manual, deliberate action.
+
+Not addressed: an approval for a joiner who never returns still sits forever.
+A real expiry would have to live inside the signed envelope to be meaningful —
+a timestamp outside it is attacker-editable and therefore worthless as a
+control — which is a larger wire change than this finding justifies.
 
 ## F6 — Message length leaked behaviour through encryption (medium) — FIXED
 

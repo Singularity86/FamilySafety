@@ -358,11 +358,41 @@ class MembershipViewModel @Inject constructor(
                 val groupDefinition = approvalDeferred.await()
                 republishJob.cancel()
 
+                // Publishing an empty retained payload deletes the retained message.
+                val clearRetained = { t: String ->
+                    mqttClient.publish(
+                        t,
+                        MqttMessage(ByteArray(0)).apply {
+                            qos = MqttConfig.DEFAULT_QOS
+                            isRetained = true
+                        }
+                    ).waitForCompletion(3_000)
+                }
+
                 if (groupDefinition != null) {
                     val persistence = EncryptedGroupStatePersistence.getInstance(context)
                     persistence.saveGroupDefinition(groupDefinition)
                     prefs.edit().putBoolean(KEY_ONBOARDING_COMPLETE, true).commit()
                     clearPendingPrefs()
+
+                    // Only now, once the group is durably ours. Clearing first would leave
+                    // a device that died mid-join with neither a saved group nor a retained
+                    // approval to recover from.
+                    //
+                    // The rejection path below already did this; the approval path did not,
+                    // so every successful join left its approval retained on the broker
+                    // forever — the observed cause of a pile of stale join_approval
+                    // messages, each replayed to anything that subscribes and each a
+                    // standing record that this member joined. The join request needs
+                    // clearing too, since the republish loop above may have re-retained it
+                    // after the inviter cleared it on approving.
+                    try {
+                        clearRetained(approvalTopic)
+                        clearRetained(requestTopic)
+                    } catch (e: Exception) {
+                        Timber.w(e, "Failed to clear retained messages after approval")
+                    }
+
                     // Show the approval confirmation screen first; restart fires when the
                     // user taps "Open Now" or after a 3-second auto-delay (confirmRestart()).
                     _membershipState.value = MembershipState.ApprovalReceived(groupDefinition.groupName)
@@ -372,17 +402,8 @@ class MembershipViewModel @Inject constructor(
                     // have re-retained it after the inviter cleared it) and the retained
                     // rejection itself, so neither lingers on the broker.
                     try {
-                        val clear = { t: String ->
-                            mqttClient.publish(
-                                t,
-                                MqttMessage(ByteArray(0)).apply {
-                                    qos = MqttConfig.DEFAULT_QOS
-                                    isRetained = true
-                                }
-                            ).waitForCompletion(3_000)
-                        }
-                        clear(requestTopic)
-                        clear(approvalTopic)
+                        clearRetained(requestTopic)
+                        clearRetained(approvalTopic)
                     } catch (e: Exception) {
                         Timber.w(e, "Failed to clear retained messages after rejection")
                     }
