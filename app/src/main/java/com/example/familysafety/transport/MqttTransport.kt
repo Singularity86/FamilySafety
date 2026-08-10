@@ -5,6 +5,7 @@ import com.example.familysafety.core.*
 import com.example.familysafety.core.NetworkMonitor
 import com.example.familysafety.core.SecurityEventRepository
 import com.example.familysafety.crypto.E2EEManager
+import com.example.familysafety.crypto.GroupCipher
 import com.example.familysafety.crypto.RecipientKeys
 import com.example.familysafety.group.FamilyMember
 import com.example.familysafety.group.GroupStateManager
@@ -129,15 +130,22 @@ class MqttTransport @Inject constructor(
                     broker.username?.let { userName = it }
                     broker.password?.let { password = it.toCharArray() }
 
-                    // Set offline will so peers know if we drop off abruptly. Signed here,
-                    // at connect time, because the broker publishes it for us later when
-                    // we are already gone and cannot sign anything.
+                    // Set offline will so peers know if we drop off abruptly. Both signed
+                    // and sealed here, at connect time: the broker publishes this for us
+                    // later, when we are gone and can neither sign nor encrypt. That is
+                    // exactly why presence is sealed under the group key rather than to
+                    // each recipient — there is no send-time to encrypt at.
                     val willJson = MessageProtocol.encodePresenceUpdate(
                         memberIdParam,
                         false,
                         sign = { cryptoProvider.signMessage(it) }
                     )
-                    setWill(MqttConfig.getPresenceTopic(memberIdParam), willJson.toByteArray(), MqttConfig.DEFAULT_QOS, true)
+                    setWill(
+                        MqttConfig.getPresenceTopic(memberIdParam),
+                        sealPresence(willJson),
+                        MqttConfig.DEFAULT_QOS,
+                        true
+                    )
                 }
 
                 val connectResult = ErrorHandler.withRetry(
@@ -362,7 +370,55 @@ class MqttTransport @Inject constructor(
             isOnline,
             sign = { cryptoProvider.signMessage(it) }
         )
-        publishRaw(topic, presenceJson.toByteArray(), MqttConfig.DEFAULT_QOS, true)
+        publishRaw(topic, sealPresence(presenceJson), MqttConfig.DEFAULT_QOS, true)
+    }
+
+    /** The group's presence subkey, or null for a group predating the shared key. */
+    private fun presenceKey(): ByteArray? =
+        groupStateManager.groupDefinition.value?.fileEncryptionKey
+            ?.takeIf { it.isNotBlank() }
+            ?.let { GroupCipher.deriveSubkey(it, GroupCipher.PURPOSE_PRESENCE) }
+
+    /**
+     * Seal a presence envelope under the group key, or pass it through unchanged when the
+     * group has no shared key.
+     *
+     * The fallback is plaintext rather than the legacy derived key on purpose: that key is
+     * computable by anyone who can reach the broker, so sealing with it would look like
+     * protection while providing none, and would break older peers for nothing.
+     */
+    private fun sealPresence(presenceJson: String): ByteArray {
+        val key = presenceKey() ?: return presenceJson.toByteArray()
+        return try {
+            val sealed = MessageProtocol.SealedPresence(
+                v = 2,
+                data = java.util.Base64.getEncoder()
+                    .encodeToString(GroupCipher.seal(presenceJson.toByteArray(), key))
+            )
+            MessageProtocol.encodeSealedPresence(sealed).toByteArray()
+        } catch (e: Exception) {
+            Timber.e(e, "$TAG: failed to seal presence — publishing unsealed")
+            presenceJson.toByteArray()
+        }
+    }
+
+    /**
+     * Reverse of [sealPresence]. Accepts both shapes: peers on older builds still publish
+     * plaintext, and a retained plaintext presence from before the upgrade outlives it.
+     * Returns null when sealed under a key this device does not hold.
+     */
+    private fun openPresence(payload: String): String? {
+        val sealed = MessageProtocol.decodeSealedPresenceOrNull(payload) ?: return payload
+        val key = presenceKey() ?: run {
+            Timber.w("$TAG: sealed presence received but this group has no shared key")
+            return null
+        }
+        return try {
+            String(GroupCipher.open(java.util.Base64.getDecoder().decode(sealed.data), key))
+        } catch (e: Exception) {
+            Timber.w(e, "$TAG: could not open sealed presence")
+            null
+        }
     }
 
     private fun queueMessage(topic: String, payload: ByteArray, qos: Int, retained: Boolean) {
@@ -567,8 +623,9 @@ class MqttTransport @Inject constructor(
         if (senderId == memberId) return
         if (!familyMemberKeys.containsKey(senderId)) return
 
+        val opened = openPresence(payload) ?: return
         val presenceUpdate = try {
-            val envelope = MessageProtocol.decodeEnvelope(payload)
+            val envelope = MessageProtocol.decodeEnvelope(opened)
             if (envelope.type != "presence_update") return
             MessageProtocol.decodePresenceUpdate(envelope.payload)
         } catch (e: Exception) {

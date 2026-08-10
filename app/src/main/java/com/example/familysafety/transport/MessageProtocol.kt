@@ -95,6 +95,25 @@ object MessageProtocol {
     )
 
     /**
+     * Presence sealed under the group key, as published on the presence topic since
+     * 1.12.5.
+     *
+     * Padding the envelope hid online/offline from message *length*, but the payload was
+     * still plaintext JSON, so the relay could simply read `isOnline`. That is the
+     * clearest behavioural signal the broker had: who is awake, and when they leave. It
+     * cannot be encrypted per recipient, because the last-will is published by the broker
+     * once the device is already gone — but it can be sealed under a key the whole group
+     * already holds.
+     */
+    @Serializable
+    data class SealedPresence(
+        /** Schema marker; 2 = sealed under the group key. Absent shape = legacy plaintext. */
+        val v: Int,
+        /** Base64 of `nonce ‖ ciphertext ‖ tag` over the plaintext presence envelope. */
+        val data: String
+    )
+
+    /**
      * Canonical bytes covered by [PresenceUpdate.signature].
      *
      * Built from the fields rather than the serialized JSON so that key order, whitespace
@@ -154,6 +173,15 @@ object MessageProtocol {
         return encodePadded(envelope, PRESENCE_PADDED_BYTES)
     }
     
+    fun encodeSealedPresence(sealed: SealedPresence): String = json.encodeToString(sealed)
+
+    /**
+     * @return the sealed wrapper, or null when [payload] is a legacy plaintext envelope.
+     *   The two shapes have disjoint required fields, so this is unambiguous.
+     */
+    fun decodeSealedPresenceOrNull(payload: String): SealedPresence? =
+        runCatching { json.decodeFromString<SealedPresence>(payload) }.getOrNull()
+
     fun decodeEnvelope(envelopeJson: String): MessageEnvelope {
         return json.decodeFromString(envelopeJson)
     }

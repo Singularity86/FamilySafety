@@ -34,14 +34,16 @@ tester's.
 The per-recipient envelope is sound. Everything below is about what sits
 *outside* it.
 
-Status at time of writing: F1, F4, F5, F6 and F7 are fixed; **F2 and F3 remain open**.
-The F1 and F7 fixes only take effect for families created on 1.12.0 or later, because
-both depend on the group key generated at group creation — see Phase 0.
+Status at time of writing: F1, F4, F5, F6 and F7 are fixed. **F3 is partially fixed** —
+online/offline is no longer readable, but member IDs and movement timing still are.
+**F2 remains open** and is the only finding that cannot be advanced in the app at all.
 
-What is left is the part that cannot be finished in the app alone. F2 and F3 both come
-down to one shared broker credential with no ACLs, and closing them needs a decision
-about credential issuance — see Phase 1, and the note there about why a serverless
-design has no natural issuer.
+The F1, F3 and F7 fixes only take effect for families created on 1.12.0 or later, because
+all three depend on the group key generated at group creation — see Phase 0. For a legacy
+family, recreating it is the single action that switches on the most protection.
+
+F2 needs a decision rather than code: who issues credentials, given a deliberately
+serverless design has no natural issuer. See Phase 1.
 
 F4's fix changes the conclusion of Phase 1/2 below. Broker ACLs were the proposed answer
 to presence forgery, but signatures address it more completely — no credential scheme
@@ -85,16 +87,46 @@ identical for all users. Consequences:
 - Rotation means shipping a new build and breaking every older install
   simultaneously.
 
-## F3 — Metadata is fully exposed (medium)
+## F3 — Metadata is fully exposed (medium) — PARTIALLY FIXED in 1.12.5
 
 Even with F1 fixed, an observer still learns, without decrypting anything:
 
-- every member ID and which group each belongs to
-- who is online and the exact moment they go offline
-- when each member's location changes, since a publish implies movement
-- message sizes and cadence per feature
+| Leak | Status |
+|---|---|
+| Who is online, and the moment they go offline | **Fixed in 1.12.5** |
+| Every member ID, and which group each belongs to | Open — structural |
+| When each member's location changes (a publish implies movement) | Open |
+| Message sizes and cadence per feature | Partly addressed by F6 padding |
 
 For a location product, movement timing alone reconstructs a household routine.
+
+### Online/offline — fixed
+
+Presence was published as **plaintext JSON**, so `isOnline` was simply readable. Note the
+F6 padding did *not* address this: it closed the message-*length* channel, which for
+presence was redundant with just reading the payload. The claim that padding hid
+online/offline was overstated for presence; it mattered for location, where length was the
+only leak.
+
+Presence is now sealed with AES-256-GCM under a presence-specific subkey derived from the
+group key — `SHA-256(groupKey ‖ "presence")`, so recovering it does not hand over the file
+key. Sealed under a *group* key rather than per recipient because the last-will is
+published by the broker after the device is gone, leaving no send-time at which to encrypt
+to anyone. The will is sealed at connect time, alongside its signature.
+
+Legacy groups with no shared key keep publishing plaintext, for the same reason as F1 and
+F7: their only alternative key is broker-derivable, so sealing with it would be theatre.
+
+### What remains, and why
+
+**Member IDs in topic names** is structural — every topic is `familysafe/{memberId}/…`.
+Hiding it needs pseudonymous topic identifiers (e.g. `HMAC(groupKey, memberId)`), which
+unlinks topics from identities and families from each other, but leaves a stable
+per-entity handle and is a wholesale change to every topic. Not attempted.
+
+**Movement timing** is only fixable with cover traffic — publishing on a fixed schedule
+whether or not anything moved. That costs battery and bandwidth continuously to hide a
+signal, which is a product decision rather than a bug fix.
 
 ## F4 — Presence is forgeable (medium) — FIXED in 1.12.3
 

@@ -1,7 +1,7 @@
 # FamilySafety — iOS Port Specification & Interop Contract
 
-**Version 1.5 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
-revised 2026-08-09 against Android 1.12.4 (versionCode 22).**
+**Version 1.6 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
+revised 2026-08-09 against Android 1.12.5 (versionCode 23).**
 
 All additions since 1.0 are optional fields that older senders omit, so the wire stays
 backward compatible. Two of them still change what a correct implementation must do:
@@ -24,6 +24,10 @@ backward compatible. Two of them still change what a correct implementation must
   `join_approval` and `join_request` on **success** as well as rejection, after the group
   is durably saved. No wire-format change; a client that skips it leaves a multi-kilobyte
   approval on the broker after every join.
+- **1.6**, sealed presence (§6.2): the presence topic now carries `SealedPresence`
+  wrapping the envelope, encrypted under a group subkey. Like the manifest change this is
+  **not** additive — a client expecting a bare envelope sees no presence at all from
+  Android 1.12.5+.
 
 This document is the single source of truth for building the iOS version of FamilySafety.
 It captures everything the iOS app must implement **byte-for-byte identically** to
@@ -228,6 +232,39 @@ padding is a bandwidth trade rather than a free win).
 { "memberId": "...", "isOnline": true, "timestamp": 0,
   "signature": "<hex128chars>" }                             // PresenceUpdate
 ```
+
+#### Sealed presence (since 1.12.5)
+
+The presence topic no longer carries the bare envelope. It carries:
+
+```json
+{ "v": 2, "data": "<base64 of nonce ‖ ciphertext ‖ tag over the presence envelope>" }
+```
+
+Presence was plaintext, so the relay could simply read `isOnline` — who is awake and when
+they leave, the sharpest behavioural signal on the broker. (Envelope padding did not
+address this; it closed the length channel, which for presence was redundant with reading
+the payload.)
+
+Encrypted under a **group** subkey, not per recipient, because the last-will is published
+by the broker once the device is gone — there is no send-time at which to encrypt to each
+peer. Key:
+
+```
+presenceKey = SHA-256( groupFileKeyBytes ‖ "presence" )
+```
+
+`groupFileKeyBytes` is `GroupDefinition.fileEncryptionKey` hex-decoded. The purpose label
+gives domain separation, so recovering the presence key does not yield the file key.
+AES-256-GCM, 12-byte nonce, 128-bit tag, `nonce ‖ ciphertext ‖ tag` — the same layout as
+file chunks.
+
+Seal the will at **connect** time, together with its signature.
+
+Receivers accept both shapes: a payload that parses as `SealedPresence` is opened,
+anything else is treated as a legacy plaintext envelope. A group with no
+`fileEncryptionKey` publishes plaintext; do not seal with the version 1 file key, which is
+broker-derivable.
 
 #### Presence signatures (since 1.12.3)
 
