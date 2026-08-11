@@ -19,6 +19,7 @@ import com.example.familysafety.group.GroupDefinition
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.group.LocalMemberId
 import com.example.familysafety.group.PresenceStatus
+import com.example.familysafety.transport.MessageProtocol
 import com.example.familysafety.transport.MqttTransport
 import com.example.familysafety.invite.InviteManager
 import com.example.familysafety.invite.JoinRequest
@@ -173,6 +174,20 @@ class MainViewModel @Inject constructor(
     val decryptFailures: StateFlow<Map<String, SecurityEventRepository.DecryptStats>> =
         securityEventRepository.decryptFailures
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    /**
+     * Members running a wire format older than this build. They cannot exchange files or
+     * presence with us until they update, and without saying so the UI would just show
+     * them as permanently absent.
+     *
+     * A member absent from the map has not been heard from yet — unknown, not outdated —
+     * so they are excluded rather than assumed stale.
+     */
+    val outdatedMembers: StateFlow<Set<String>> = mqttTransport.peerProtocolVersions
+        .map { versions ->
+            versions.filterValues { it < MessageProtocol.PROTOCOL_VERSION }.keys
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
     private val _keySyncRequestState = MutableStateFlow<KeySyncRequestState>(KeySyncRequestState.Idle)
     val keySyncRequestState: StateFlow<KeySyncRequestState> = _keySyncRequestState.asStateFlow()

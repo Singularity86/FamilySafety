@@ -11,6 +11,25 @@ object MessageProtocol {
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
+
+    /**
+     * Wire-format generation this build speaks.
+     *
+     * 1 — everything before the 1.12.x security series. Reported implicitly by senders
+     *     that omit the field, since it did not exist then.
+     * 2 — padded envelopes, signed and sealed presence, encrypted file manifests,
+     *     versioned file keys.
+     *
+     * Three of those changes replaced a message shape rather than adding a field, so a
+     * 1 and a 2 cannot see each other's files or presence at all. Previously that failure
+     * was silent — the other person simply never appeared. Advertising the version lets
+     * the UI say "they need to update" instead of showing nothing and letting the user
+     * conclude the app is broken.
+     *
+     * Bump this only when a change breaks interoperability. Additive fields do not
+     * warrant it; older peers ignore what they do not understand.
+     */
+    const val PROTOCOL_VERSION = 2
     
     /**
      * Sizes every envelope is padded up to, in bytes. Chosen to sit above the natural
@@ -91,7 +110,19 @@ object MessageProtocol {
          * presence topic. A signature moves the check from "who claims to have sent this"
          * to "who could have produced it", which no broker ACL can do for us.
          */
-        val signature: String? = null
+        val signature: String? = null,
+        /**
+         * The sender's [PROTOCOL_VERSION]. Absent from builds predating it, which is
+         * exactly the case worth detecting, so the default of 1 is the right reading
+         * rather than a fallback.
+         *
+         * Deliberately outside the signed payload: including it would change the
+         * canonical signing string and break verification against already-shipped
+         * builds, and the worst a tampered value can do is produce a spurious "needs
+         * update" prompt. Presence is sealed under the group key, so an outsider cannot
+         * write one at all.
+         */
+        val protocolVersion: Int = 1
     )
 
     /**
@@ -160,7 +191,8 @@ object MessageProtocol {
             isOnline = isOnline,
             timestamp = timestamp,
             signature = sign?.invoke(presenceSigningPayload(memberId, isOnline, timestamp))
-                ?.joinToString("") { "%02x".format(it) }
+                ?.joinToString("") { "%02x".format(it) },
+            protocolVersion = PROTOCOL_VERSION
         )
         
         val envelope = MessageEnvelope(

@@ -66,6 +66,17 @@ class MqttTransport @Inject constructor(
     /** Newest accepted presence timestamp per member, used to reject replays. */
     private val lastPresenceTimestamp = ConcurrentHashMap<String, Long>()
 
+    /**
+     * Wire-format version each peer last advertised, learned passively from presence.
+     *
+     * Peers below [MessageProtocol.PROTOCOL_VERSION] cannot exchange files or presence
+     * with this build. Surfacing that is the difference between the UI saying "they need
+     * to update" and the member simply never appearing, which reads as the app being
+     * broken.
+     */
+    private val _peerProtocolVersions = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val peerProtocolVersions: StateFlow<Map<String, Int>> = _peerProtocolVersions.asStateFlow()
+
     // Setter-injected to avoid circular dependency: MqttTransport ← TransportProvider ← GroupSyncManager
     var groupSyncManager: GroupSyncManager? = null
     var securityEventRepository: SecurityEventRepository? = null
@@ -640,6 +651,20 @@ class MqttTransport @Inject constructor(
         }
 
         if (!isPresenceAuthentic(senderId, presenceUpdate)) return
+
+        // Recorded after authentication so a rejected message cannot mark a peer stale.
+        if (_peerProtocolVersions.value[senderId] != presenceUpdate.protocolVersion) {
+            _peerProtocolVersions.value = _peerProtocolVersions.value +
+                (senderId to presenceUpdate.protocolVersion)
+            if (presenceUpdate.protocolVersion < MessageProtocol.PROTOCOL_VERSION) {
+                Timber.w(
+                    "$TAG: ${senderId.take(8)} speaks protocol " +
+                        "${presenceUpdate.protocolVersion}, this build speaks " +
+                        "${MessageProtocol.PROTOCOL_VERSION} — files and presence will not " +
+                        "interoperate until they update"
+                )
+            }
+        }
 
         Timber.d("$TAG: $senderId is ${if (presenceUpdate.isOnline) "online" else "offline"}")
         groupStateManager.updatePresenceStatus(

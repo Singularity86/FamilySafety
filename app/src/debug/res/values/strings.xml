@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only overrides. Android merges this over main/res, so only the names
+  redefined here change.
+
+  The debug build installs alongside the Play release (applicationIdSuffix
+  ".debug"), which means two identical-looking icons on the launcher. Renaming
+  the debug one is the only thing that tells them apart at a glance.
+-->
+<resources>
+    <string name="app_name">FS DEBUG</string>
+</resources>

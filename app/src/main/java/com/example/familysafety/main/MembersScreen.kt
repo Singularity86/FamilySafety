@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.familysafety.invite.JoinRequest
 import com.example.familysafety.ui.components.ShimmerBox
+import com.example.familysafety.ui.theme.AmberWarning
 
 
 @Composable
@@ -46,6 +47,7 @@ fun MembersScreen(
     val memberLocations by viewModel.memberLocations.collectAsState()
     val memberAvatars by viewModel.memberAvatars.collectAsState()
     val memberRouteStatuses by viewModel.memberRouteStatuses.collectAsState()
+    val outdatedMembers by viewModel.outdatedMembers.collectAsState()
     val groupName by viewModel.groupName.collectAsState()
     val groupDefinition by viewModel.groupDefinition.collectAsState()
     val myMemberId = viewModel.myMemberId
@@ -96,6 +98,7 @@ fun MembersScreen(
                         routeStatus = memberRouteStatuses[member.memberId],
                         avatar = memberAvatars[member.memberId],
                         isMe = member.memberId == myMemberId,
+                        needsUpdate = member.memberId in outdatedMembers,
                         onShowOnMap = {
                             viewModel.focusOnMember(member.memberId)
                             onNavigateToMap()
@@ -246,6 +249,8 @@ private fun MemberCard(
     routeStatus: MainViewModel.MemberRouteStatus?,
     avatar: Bitmap? = null,
     isMe: Boolean,
+    /** Their app speaks an older wire format; files and presence will not reach them. */
+    needsUpdate: Boolean = false,
     colorHue: Float? = null,
     onShowOnMap: () -> Unit = {},
     onShowDriveEstimate: () -> Unit = {},
@@ -384,6 +389,16 @@ private fun MemberCard(
                             text = buildWaitingStatusText(isMe, routeStatus),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    // Shown regardless of whether a location arrived: it explains why one
+                    // has not, which is otherwise indistinguishable from the app failing.
+                    if (needsUpdate) {
+                        Text(
+                            text = "Needs to update the app — their location and files can't reach you",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AmberWarning
                         )
                     }
                 }

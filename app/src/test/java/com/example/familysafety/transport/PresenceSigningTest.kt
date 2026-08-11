@@ -122,6 +122,36 @@ class PresenceSigningTest {
     }
 
     @Test
+    fun presenceAdvertisesThisBuildsProtocolVersion() {
+        val decoded = MessageProtocol.decodePresenceUpdate(
+            MessageProtocol.decodeEnvelope(
+                MessageProtocol.encodePresenceUpdate(memberId, true)
+            ).payload
+        )
+
+        assertEquals(MessageProtocol.PROTOCOL_VERSION, decoded.protocolVersion)
+    }
+
+    @Test
+    fun presenceWithoutAVersionReadsAsGenerationOne() {
+        // Builds predating the field omit it entirely. Defaulting to 1 is the correct
+        // reading of "old client", not a fallback — it is exactly the case being detected.
+        val legacy = """{"memberId":"$memberId","isOnline":true,"timestamp":1}"""
+
+        assertEquals(1, MessageProtocol.decodePresenceUpdate(legacy).protocolVersion)
+    }
+
+    @Test
+    fun addingTheVersionDidNotChangeWhatIsSigned() {
+        // The canonical signing string must stay byte-identical, or every signature from
+        // an already-shipped build stops verifying.
+        assertEquals(
+            "presence:$memberId:true:1786000000000",
+            String(MessageProtocol.presenceSigningPayload(memberId, true, 1_786_000_000_000L))
+        )
+    }
+
+    @Test
     fun signatureIsLowercaseHexOfExpectedWidth() {
         val encoded = MessageProtocol.encodePresenceUpdate(
             memberId, true, sign = { ByteArray(64) { (-1).toByte() } }
