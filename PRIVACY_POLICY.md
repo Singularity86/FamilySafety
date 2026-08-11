@@ -15,7 +15,7 @@ your data.
 | Chat messages and shared files | Family messaging | Only members of your family group |
 | Display name, avatar photo, color choice | Identifying you inside your group | Only members of your family group |
 | Motion/activity state (moving vs. still) | Adjusting GPS frequency to save battery | Processed on your device only |
-| Online/offline status | Showing whether a family member's device is connected | Your family group; see "Message relay" below |
+| Online/offline status | Showing whether a family member's device is connected | Only members of your family group |
 
 The app does **not** collect contacts, advertising identifiers, or usage
 analytics, and contains no third-party advertising or tracking SDKs.
@@ -34,9 +34,14 @@ phrase and your devices, your data is unrecoverable — by design.
 
 Encrypted messages travel through an MQTT relay server, which functions like a
 post office for sealed envelopes: it forwards ciphertext but cannot read it.
-The relay necessarily sees network metadata — connection times, message sizes,
-pseudonymous member identifiers, and unencrypted online/offline status
-signals. It never sees locations, messages, names, or photos in readable form.
+The relay necessarily sees some network metadata: connection times, pseudonymous
+member identifiers, and how often each device sends something. Because location
+updates are sent when a device moves, the relay can infer *that* someone is
+moving, though never where. It never sees locations, messages, names, photos,
+file names, or online/offline status in readable form.
+
+Messages are padded to fixed sizes, so their length reveals nothing about their
+contents.
 
 ## Where your data lives
 

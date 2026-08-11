@@ -42,8 +42,34 @@ The F1, F3 and F7 fixes only take effect for families created on 1.12.0 or later
 all three depend on the group key generated at group creation — see Phase 0. For a legacy
 family, recreating it is the single action that switches on the most protection.
 
-F2 needs a decision rather than code: who issues credentials, given a deliberately
-serverless design has no natural issuer. See Phase 1.
+## Threat model decision (2026-08-10)
+
+**The broker operator is not in the threat model.** F2 and the remainder of F3 are
+therefore accepted risk, not backlog, and Phases 1 and 2 below are deliberately not
+being done. To be revisited if the app gets real adoption beyond friends and family.
+
+The reasoning, recorded so it need not be rederived:
+
+- Every message is now signed and encrypted at the application layer, so the broker
+  credential is no longer a security boundary. Its remaining job is abuse control —
+  keeping strangers off the EMQX quota — and a shared credential is a defensible answer
+  to that, since abuse is handled by rotation and quota alerts rather than by identity.
+- Member IDs are already self-authenticating: `memberId = SHA-256(ed25519PublicKey)[0..15]`.
+  Identity does not depend on the broker vouching for anyone, which is what made the
+  missing issuer survivable in the first place.
+- What per-device credentials would actually buy is ACLs, and what ACLs would buy is
+  metadata reduction — F3, not integrity. With the broker operator out of scope, that
+  spend has no threat to answer.
+- The remaining exposure is disclosed rather than hidden: `PRIVACY_POLICY.md` states that
+  the relay sees connection times, pseudonymous identifiers and send frequency, and can
+  infer that someone is moving but never where.
+
+What would reopen this: running the broker for people who are not friends and family;
+a threat model that includes the broker operator or anyone who compromises it; or a user
+population where "the relay learns your household's daily rhythm" is not an acceptable
+answer.
+
+Prior analysis of the issuer problem is kept below for that day.
 
 F4's fix changes the conclusion of Phase 1/2 below. Broker ACLs were the proposed answer
 to presence forgery, but signatures address it more completely — no credential scheme
