@@ -70,6 +70,21 @@ android {
 
     buildTypes {
         debug {
+            // Separate applicationId so a debug build installs ALONGSIDE the Play
+            // release instead of being refused for having a different signing key.
+            //
+            // This is what makes the app testable at all. Without it, trying a local
+            // build on a device that has the Play version means uninstalling first,
+            // which wipes the group and the identity keys — so the only way to exercise
+            // a change was to ship it to the family and watch. The debug app has its own
+            // storage and its own identity, so it joins as an ordinary extra member: a
+            // phone plus an emulator, both on debug, form a throwaway test family while
+            // the real one carries on untouched on the release build.
+            //
+            // Release builds do not plant Timber, so this is also the only build that
+            // produces app logs.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
             buildConfigField("String", "MQTT_ENVIRONMENT", "\"DEVELOPMENT\"")
             buildConfigField("String", "MQTT_USERNAME", "\"${mqttProperties.getProperty("username", "")}\"")
             buildConfigField("String", "MQTT_PASSWORD", "\"${mqttProperties.getProperty("password", "")}\"")
