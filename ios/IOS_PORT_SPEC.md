@@ -1,7 +1,7 @@
 # FamilySafety — iOS Port Specification & Interop Contract
 
-**Version 1.6 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
-revised 2026-08-09 against Android 1.12.5 (versionCode 23).**
+**Version 1.7 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
+revised 2026-08-12 against Android 1.12.6 (versionCode 24).**
 
 All additions since 1.0 are optional fields that older senders omit, so the wire stays
 backward compatible. Two of them still change what a correct implementation must do:
@@ -28,6 +28,11 @@ backward compatible. Two of them still change what a correct implementation must
   wrapping the envelope, encrypted under a group subkey. Like the manifest change this is
   **not** additive — a client expecting a bare envelope sees no presence at all from
   Android 1.12.5+.
+- **1.7**, protocol version advertisement (§6.2): `PresenceUpdate.protocolVersion`.
+  Additive on the wire, but an iOS client that omits it is read as generation 1 and every
+  Android peer will permanently label the user "needs to update" — so emit it. Set it to
+  the generation whose *rules you actually implement*, not to whatever is newest: claiming
+  2 without 1.1, 1.3, 1.4 and 1.6 turns a legible warning back into silent invisibility.
 
 This document is the single source of truth for building the iOS version of FamilySafety.
 It captures everything the iOS app must implement **byte-for-byte identically** to
@@ -230,8 +235,47 @@ padding is a bandwidth trade rather than a free win).
 { "memberId": "...", "latitude": 0.0, "longitude": 0.0, "accuracy": 0.0,
   "timestamp": 0, "speed": null, "bearing": null }          // LocationUpdate
 { "memberId": "...", "isOnline": true, "timestamp": 0,
-  "signature": "<hex128chars>" }                             // PresenceUpdate
+  "signature": "<hex128chars>", "protocolVersion": 2 }       // PresenceUpdate
 ```
+
+#### Protocol version advertisement (since 1.12.6)
+
+```
+PROTOCOL_VERSION = 2      // 1 = pre-1.12.x; 2 = padded + signed + sealed + encrypted manifests
+```
+
+Three of the changes above (manifest encryption, sealed presence, and the group file key)
+**replace** a message shape rather than extending it, so a peer on an older build and a
+peer on a current one simply do not see each other. Until this field existed that failed
+*silently* — the other person never appeared, which is indistinguishable from the app
+being broken, and the whole of §6 offers no way to tell the two apart. There is no
+connect-time handshake to carry a version in: this is pub/sub, peers never negotiate. So
+the version rides on presence, which every peer publishes anyway and which is already
+authenticated.
+
+Senders set `protocolVersion` to `PROTOCOL_VERSION` on every presence update, live and
+last-will alike.
+
+Receivers:
+
+1. **Default a missing field to 1.** Builds predating it omit the field entirely, so 1 is
+   the correct reading of "old client" — not a fallback, but exactly the case being
+   detected. Deserialization must tolerate unknown fields for the same reason (Android
+   uses kotlinx `ignoreUnknownKeys = true`); a future generation 3 must not make a
+   generation 2 client fail to parse presence at all.
+2. **Record it only after the presence passes authentication** — signature, replay and
+   downgrade checks all first. Otherwise a forged presence claiming version 1 lets anyone
+   who can publish to the topic paint a current peer as outdated, and an unauthenticated
+   version claim is a free denial-of-trust.
+3. **Surface any peer below your own `PROTOCOL_VERSION` in the UI**, naming the member.
+   The point of the field is that the failure becomes legible; recording it and staying
+   quiet reproduces the original bug with extra steps.
+
+The field is covered by kotlinx's default-value handling, **not** by the presence
+signature — see §6.2's canonical signing string, which was deliberately left byte-identical
+so signatures from already-shipped builds keep verifying. A relay that can already read
+which members exist and when they connect gains nothing from an unauthenticated version
+number, and rule 2 keeps a forged one from having any effect.
 
 #### Sealed presence (since 1.12.5)
 
@@ -574,7 +618,10 @@ own pending `requestId` + memberId (anti-replay).
 7. Rejections bound to requestId + joinerMemberId (no replay canceling future joins).
 8. Receipts validated against known message IDs addressed to the receipt sender.
 9. Private keys in Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`); DB encrypted.
-10. Presence is the *only* plaintext personal signal (memberId + online flag) — keep it that way.
+10. The only personal signals left in the clear are the topic's `memberId` and the timing of
+    publishes — the presence body itself is sealed as of 1.6, and the version it advertises
+    is only acted on after authentication (§6.2). Keep it that way; adding a plaintext field
+    to the presence topic is a wire change, not a convenience.
 
 ---
 
@@ -747,7 +794,10 @@ null-vs-absent tolerance, Base64 JoinRequest keys, double-encoded MessageEnvelop
 **Phase 2 — Transport.** CocoaMQTT wrapper: connect (cleanSession=false, LWT), subscriptions
 (§5), pending queue (200/1 h), retained-clear helper, reconnect backoff, presence publish.
 *Done when:* against `broker.hivemq.com:8883`, two iOS simulator instances see each other's
-presence flip online/offline (kill one → LWT observed).
+presence flip online/offline (kill one → LWT observed), each reading the other's
+`protocolVersion` as the current generation rather than 1 (§6.2) — a simulator that shows
+its twin as outdated is emitting presence wrong, and against a real Android peer that
+mistake is invisible from the iOS side.
 
 **Phase 3 — Group sync + join.** GroupSyncManager (version ladder, acks, refresh) + invite
 QR + joiner/inviter flows. *Done when:* **interop test** — iOS device joins a group created
