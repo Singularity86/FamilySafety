@@ -76,17 +76,24 @@ class OnboardingViewModel @Inject constructor(
         return try {
             _isLoading.value = true
 
-            val mnemonicString = _mnemonic.value.joinToString(" ")
-            val seed = Bip39.mnemonicToSeed(mnemonicString)
+            // Callers launch this from rememberCoroutineScope(), which is the main
+            // dispatcher. Seed stretching, key derivation and the encrypted, now
+            // synchronous writes below all belong off it — an ANR kill here would destroy
+            // the identity mid-write, which is the same failure this is meant to prevent.
+            withContext(Dispatchers.IO) {
+                val mnemonicString = _mnemonic.value.joinToString(" ")
+                val seed = Bip39.mnemonicToSeed(mnemonicString)
 
-            val keyStore = AndroidKeyStoreLocalKeyStore(context)
-            // Use the keyStore's initializeFromSeed method which handles key derivation
-            keyStore.initializeFromSeed(seed, accountIndex = 0)
-            // Persist the recovery phrase so it can be shown from Settings.
-            keyStore.storeMnemonic(_mnemonic.value)
+                val keyStore = AndroidKeyStoreLocalKeyStore(context)
+                // Use the keyStore's initializeFromSeed method which handles key derivation
+                keyStore.initializeFromSeed(seed, accountIndex = 0)
+                // Persist the recovery phrase so it can be shown from Settings.
+                keyStore.storeMnemonic(_mnemonic.value)
+            }
 
             true
         } catch (e: Exception) {
+            Timber.e(e, "Key initialization failed")
             false
         } finally {
             _isLoading.value = false
@@ -97,46 +104,50 @@ class OnboardingViewModel @Inject constructor(
         return try {
             _isLoading.value = true
 
-            val keyStore = AndroidKeyStoreLocalKeyStore(context)
-            val cryptoProvider = LazysodiumCryptoProvider(keyStore)
+            withContext(Dispatchers.IO) {
+                val keyStore = AndroidKeyStoreLocalKeyStore(context)
+                val cryptoProvider = LazysodiumCryptoProvider(keyStore)
 
-            val memberId = cryptoProvider.getMemberId()
+                val memberId = cryptoProvider.getMemberId()
 
-            // Create the local member first
-            // Use getLocal*PublicKey() methods which return hex-encoded Strings
-            val localMember = FamilyMember(
-                memberId = memberId,
-                displayName = _displayName.value,
-                ed25519PublicKey = cryptoProvider.getLocalEd25519PublicKey(),
-                x25519PublicKey = cryptoProvider.getLocalX25519PublicKey(),
-                addedAtEpochMs = System.currentTimeMillis()
-            )
+                // Create the local member first
+                // Use getLocal*PublicKey() methods which return hex-encoded Strings
+                val localMember = FamilyMember(
+                    memberId = memberId,
+                    displayName = _displayName.value,
+                    ed25519PublicKey = cryptoProvider.getLocalEd25519PublicKey(),
+                    x25519PublicKey = cryptoProvider.getLocalX25519PublicKey(),
+                    addedAtEpochMs = System.currentTimeMillis()
+                )
 
-            // Get persistence singleton
-            val persistence = EncryptedGroupStatePersistence.getInstance(context)
+                // Get persistence singleton
+                val persistence = EncryptedGroupStatePersistence.getInstance(context)
 
-            val groupStateManager = GroupStateManager(
-                localMemberId = memberId,
-                persistence = persistence,
-                cryptoProvider = cryptoProvider
-            )
+                val groupStateManager = GroupStateManager(
+                    localMemberId = memberId,
+                    persistence = persistence,
+                    cryptoProvider = cryptoProvider
+                )
 
-            // Use the correct createGroup method signature
-            val result = groupStateManager.createGroup(
-                groupName = _familyName.value,
-                localMember = localMember
-            )
+                // Use the correct createGroup method signature
+                val result = groupStateManager.createGroup(
+                    groupName = _familyName.value,
+                    localMember = localMember
+                )
 
-            when (result) {
-                is GroupOperationResult.Success -> {
-                    saveOnboardingComplete()
-                    true
-                }
-                is GroupOperationResult.Failure -> {
-                    false
+                when (result) {
+                    is GroupOperationResult.Success -> {
+                        saveOnboardingComplete()
+                        true
+                    }
+                    is GroupOperationResult.Failure -> {
+                        Timber.e("Family creation rejected: ${result.error}")
+                        false
+                    }
                 }
             }
         } catch (e: Exception) {
+            Timber.e(e, "Family creation failed")
             false
         } finally {
             _isLoading.value = false

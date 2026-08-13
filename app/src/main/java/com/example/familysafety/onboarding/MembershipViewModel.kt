@@ -127,6 +127,10 @@ class MembershipViewModel @Inject constructor(
     }
 
     private fun clearPendingPrefs() {
+        // commit(): a successful join clears these and then restarts the process with a
+        // hard kill, which never flushes apply(). Left behind, they resurface the next time
+        // onboarding runs — a device that later leaves the family would be dropped straight
+        // back into "waiting for approval" for a join that finished long ago.
         prefs.edit()
             .remove(KEY_PENDING_FAMILY_NAME)
             .remove(KEY_PENDING_INVITER_NAME)
@@ -134,7 +138,7 @@ class MembershipViewModel @Inject constructor(
             .remove(KEY_PENDING_INVITER_MEMBER_ID)
             .remove(KEY_PENDING_GROUP_ID)
             .remove(KEY_PENDING_JOIN_REQUEST_JSON)
-            .apply()
+            .commit()
     }
 
     private fun resumeApprovalListener() {

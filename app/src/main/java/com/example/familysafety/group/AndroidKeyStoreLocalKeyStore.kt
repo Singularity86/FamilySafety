@@ -97,11 +97,12 @@ class AndroidKeyStoreLocalKeyStore(
             // any unrecoverable platform failure.
         }
 
-        // If keys are gone, onboarding must be recalculated on next launch.
+        // If keys are gone, onboarding must be recalculated on next launch. commit(),
+        // because "next launch" may well be a restart that kills this process first.
         context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)
             .edit()
             .remove("onboarding_complete")
-            .apply()
+            .commit()
     }
 
     // Cached keys (loaded once from encrypted storage)
@@ -130,10 +131,13 @@ class AndroidKeyStoreLocalKeyStore(
         storeKey(KEY_X25519_PRIVATE, keys.encryptionKeyPair.privateKey)
         storeKey(KEY_X25519_PUBLIC, keys.encryptionKeyPair.publicKey)
 
+        // Written last and committed synchronously, so this flag can never be on disk
+        // while the keys it vouches for are missing. isInitialized() is what onboarding
+        // trusts to decide the user has an identity.
         encryptedPrefs.edit()
             .putBoolean(KEY_INITIALIZED, true)
             .putInt(KEY_ACCOUNT_INDEX, accountIndex)
-            .apply()
+            .commit()
 
         // Update cache
         cachedEd25519Seed = keys.signingKeyPair.privateKey.copyOf()
@@ -188,9 +192,15 @@ class AndroidKeyStoreLocalKeyStore(
     private fun storeKey(name: String, key: ByteArray) {
         // Keys are stored as hex in EncryptedSharedPreferences
         // EncryptedSharedPreferences handles the encryption automatically
+        //
+        // commit(), not apply(): onboarding finishes by restarting the process with
+        // Process.killProcess, which is a hard kill that never runs the hooks that flush
+        // apply()'s background write. A lost write here costs the user their identity —
+        // and, next door in storeMnemonic, the only copy of their recovery phrase. These
+        // run once during onboarding, so blocking on the disk write is free.
         encryptedPrefs.edit()
             .putString(name, key.toHexString())
-            .apply()
+            .commit()
     }
 
     private fun loadKey(name: String): ByteArray {
@@ -210,9 +220,12 @@ class AndroidKeyStoreLocalKeyStore(
      * file that holds the signing and encryption keys.
      */
     fun storeMnemonic(words: List<String>) {
+        // commit(): the user has just been shown these words and asked to confirm them.
+        // Losing this write to the restart that follows would leave them believing they
+        // hold a working recovery phrase for an identity that no longer has one.
         encryptedPrefs.edit()
             .putString(KEY_MNEMONIC, words.joinToString(" "))
-            .apply()
+            .commit()
     }
 
     /**
@@ -244,8 +257,10 @@ class AndroidKeyStoreLocalKeyStore(
         cachedX25519Private = null
         cachedX25519Public = null
 
-        // Clear stored keys
-        encryptedPrefs.edit().clear().apply()
+        // Clear stored keys. commit() for the same reason the writes use it — leaving the
+        // group also restarts the process, and a wipe that does not reach disk leaves the
+        // old identity behind for the next launch to pick up.
+        encryptedPrefs.edit().clear().commit()
     }
 
     /**
