@@ -281,10 +281,18 @@ fun MapScreen(
         }
     }
 
+    // Whose pin should sit above the others. Kept separately from focusedMemberId because
+    // that flag is consumed the moment the pan starts (so a second "Show on map" tap
+    // re-pans instead of being swallowed as an unchanged key), whereas the pin has to stay
+    // on top after the pan finishes — otherwise the member you just asked to see is still
+    // hidden underneath whoever happens to be standing next to them.
+    var raisedMemberId by remember { mutableStateOf<String?>(null) }
+
     // Pan to a specific member when selected from the Members tab.
     LaunchedEffect(focusedMemberId) {
         val id = focusedMemberId ?: return@LaunchedEffect
         val loc = memberLocations[id] ?: return@LaunchedEffect
+        raisedMemberId = id
         mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
         mapView.controller.setZoom(16.0)
         rememberCurrentMapViewport()
@@ -312,10 +320,15 @@ fun MapScreen(
         mapView.invalidate()
     }
 
-    // Rebuild member markers whenever locations, members, or avatars change.
-    LaunchedEffect(memberLocations, familyMembers, memberAvatars) {
+    // Rebuild member markers whenever locations, members, or avatars change — or when a
+    // different member is raised, since draw order is decided here.
+    LaunchedEffect(memberLocations, familyMembers, memberAvatars, raisedMemberId) {
         mapView.overlays.removeAll { it is Marker }
-        memberLocations.forEach { (memberId, location) ->
+        // osmdroid draws overlays in list order, so whatever is added last ends up on top.
+        // Sorting the raised member to the end is what puts their pin above pins that
+        // overlap it; everyone else keeps their existing relative order.
+        val drawOrder = memberLocations.entries.sortedBy { it.key == raisedMemberId }
+        drawOrder.forEach { (memberId, location) ->
             val member = familyMembers.find { it.memberId == memberId }
             val avatar = memberAvatars[memberId]
             val bmp = memberMarkerBitmap(
