@@ -20,6 +20,8 @@ import com.example.familysafety.sync.GroupSyncManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.eclipse.paho.client.mqttv3.*
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import timber.log.Timber
@@ -95,8 +97,28 @@ class MqttTransport @Inject constructor(
         data class Error(val message: String, val canRetry: Boolean) : ConnectionState()
     }
 
+    /**
+     * Serialises connection setup. [initialize] is called from four places — MainActivity
+     * and three paths in LocationService — which race on startup, and the client ID is
+     * `familysafe_{memberId}`, deterministic by design so a reconnect resumes the same
+     * session. Two live connections under one client ID is precisely the case MQTT
+     * requires the broker to resolve by disconnecting the older one, so overlapping
+     * initialize() calls made the app evict itself in a loop: connect, get kicked,
+     * reconnect, kick the one that just replaced it. Observed as presence and location
+     * simply never arriving, with "Connection lost (32109) - EOFException" every few
+     * seconds in the log.
+     */
+    private val connectMutex = Mutex()
 
     suspend fun initialize(
+        memberIdParam: String,
+        familyMembers: List<FamilyMember>,
+        groupIdParam: String
+    ) = connectMutex.withLock {
+        initializeLocked(memberIdParam, familyMembers, groupIdParam)
+    }
+
+    private suspend fun initializeLocked(
         memberIdParam: String,
         familyMembers: List<FamilyMember>,
         groupIdParam: String
@@ -112,10 +134,27 @@ class MqttTransport @Inject constructor(
 
         startNetworkMonitoring()
 
-        if (_connectionState.value == ConnectionState.Connected) {
+        // Ask the client, not our own state field: a connection can be live while
+        // _connectionState still reads Connecting, and reconnecting on top of it is what
+        // triggers the eviction loop described above.
+        if (_connectionState.value == ConnectionState.Connected || mqttClient?.isConnected == true) {
             Timber.d("$TAG: already connected, skipping re-init")
+            _connectionState.value = ConnectionState.Connected
             return
         }
+
+        // A client that exists but is not connected is a leftover from an attempt that
+        // failed or was superseded. Close it before building another, or its callbacks and
+        // its socket outlive it and keep competing for the same client ID.
+        mqttClient?.let { stale ->
+            try {
+                stale.setCallback(null)
+                stale.close(true)
+            } catch (e: Exception) {
+                Timber.d("$TAG: could not close stale client: ${e.message}")
+            }
+        }
+        mqttClient = null
 
         withContext(Dispatchers.IO) {
             try {
@@ -172,6 +211,18 @@ class MqttTransport @Inject constructor(
                                 continuation.resume(Unit)
                             }
                             override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                                // Paho reports "already connected" and "connect in progress"
+                                // as failures. Retrying those, then giving up and scheduling
+                                // a reconnect, tore down the connection that had just
+                                // succeeded. Both mean the connection is in hand.
+                                val code = (exception as? MqttException)?.reasonCode
+                                if (code == MqttException.REASON_CODE_CLIENT_CONNECTED.toInt() ||
+                                    code == MqttException.REASON_CODE_CONNECT_IN_PROGRESS.toInt()
+                                ) {
+                                    Timber.d("$TAG: connect already satisfied (reason $code)")
+                                    continuation.resume(Unit)
+                                    return
+                                }
                                 continuation.resumeWith(Result.failure(exception ?: Exception("MQTT connection failed")))
                             }
                         })
