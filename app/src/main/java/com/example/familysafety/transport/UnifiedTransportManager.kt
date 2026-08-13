@@ -143,6 +143,16 @@ class UnifiedTransportManager @Inject constructor(
     private fun handleIncomingMessage(topic: String, payload: String) {
         scope.launch {
             try {
+                // Clearing a retained message is published as an empty payload, so every
+                // retained topic delivers one to every subscriber as part of normal
+                // cleanup. None of the handlers below have anything to do with it, and
+                // several throw on it — dropping it here keeps that from being every
+                // handler's problem.
+                if (payload.isEmpty()) {
+                    Timber.d("Empty payload on $topic (retained clear) — ignoring")
+                    return@launch
+                }
+
                 // Route based on topic structure (Extracted from legacy MqttTransport)
                 when {
                     topic.endsWith("/chat") -> {

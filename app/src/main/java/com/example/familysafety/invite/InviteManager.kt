@@ -94,6 +94,15 @@ class InviteManager @Inject constructor(
      */
     suspend fun handleIncomingJoinRequest(payload: String) {
         try {
+            // Clearing a retained message means publishing an empty payload to the topic,
+            // so every peer sees the deletion as an inbound message. It is a normal part of
+            // the join cleanup, not a malformed request — parsing it threw and logged a
+            // full stack trace on every device each time a join completed.
+            if (payload.isBlank()) {
+                Timber.d("Empty join request payload (retained clear) — ignoring")
+                return
+            }
+
             Timber.d("Received join request payload")
 
             val joinRequest = json.decodeFromString<JoinRequest>(payload)

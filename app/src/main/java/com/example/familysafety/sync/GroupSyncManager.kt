@@ -317,8 +317,21 @@ class GroupSyncManager @Inject constructor(
             }
 
             syncMessage.version == currentGroup.version -> {
-                Timber.d("Received same version")
-                sendAcknowledgment(syncMessage.groupId, syncMessage.version)
+                if (syncMessage.groupDefinition.computeStateHash() ==
+                    currentGroup.computeStateHash()
+                ) {
+                    Timber.d("Received same version, identical state")
+                    sendAcknowledgment(syncMessage.groupId, syncMessage.version)
+                } else {
+                    // Two members edited from the same parent. Acknowledging and dropping
+                    // this — the old behaviour — is what forked groups permanently: both
+                    // sides believed they were in sync while holding different rosters.
+                    Timber.w(
+                        "Concurrent edit detected at v${currentGroup.version} from " +
+                            "${syncMessage.updaterMemberId.take(8)} — reconciling"
+                    )
+                    applyGroupUpdate(syncMessage)
+                }
             }
 
             syncMessage.version == currentGroup.version + 1 -> {
@@ -350,6 +363,22 @@ class GroupSyncManager @Inject constructor(
                 }
 
                 sendAcknowledgment(syncMessage.groupId, syncMessage.version)
+
+                // Reconciling a concurrent edit leaves us holding a state the sender does
+                // not have — either ours won, or we merged their branch into a successor.
+                // Sending it back is what closes the loop; without it each side keeps its
+                // own answer and the group stays split. Ordered after the acknowledgment
+                // because broadcasting waits on an ack window of its own.
+                val resolved = (result as GroupOperationResult.Success).value
+                if (resolved.computeStateHash() !=
+                    syncMessage.groupDefinition.computeStateHash()
+                ) {
+                    Timber.i(
+                        "Reconciled to v${resolved.version} with ${resolved.members.size} " +
+                            "members — publishing back to the family"
+                    )
+                    broadcastGroupUpdate(resolved, ChangeType.FULL_SYNC)
+                }
 
                 _syncState.value = SyncState.Synced(syncMessage.version)
                 Timber.i("Applied group update: ${syncMessage.changeType}")

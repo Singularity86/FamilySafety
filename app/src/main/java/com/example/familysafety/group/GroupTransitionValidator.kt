@@ -16,6 +16,9 @@ import java.security.MessageDigest
  * - a member's keys can never change under the same member ID (no key rotation)
  * - added members must have memberId == SHA-256(ed25519 key).take(16)
  * - only the creator may remove other members; anyone may remove themselves
+ * - removal tombstones are append-only, and a tombstoned member may never reappear in
+ *   the roster (see GroupStateMerge — merging two rosters would otherwise readmit anyone
+ *   the other side had just removed)
  * - only the creator may rename the group
  * - for a direct successor (version + 1), previousStateHash must match the
  *   current state's hash; across version jumps the chain cannot be verified
@@ -50,6 +53,31 @@ object GroupTransitionValidator {
         current: GroupDefinition,
         remote: GroupDefinition,
         updaterMemberId: String
+    ): String? = check(current, remote, updaterMemberId, concurrent = false)
+
+    /**
+     * Same rules, for a state that is a concurrent sibling of ours rather than a successor
+     * (see [GroupStateMerge]). Two differences, both forced by what an equal version means:
+     *
+     * - a member we hold and they lack has not been removed, only not yet learned about, so
+     *   the untombstoned-removal rule cannot apply. Genuine removals still have to be
+     *   carried by a tombstone, and tombstones are validated exactly as strictly here.
+     * - there is no chain to check: siblings share our parent, they do not descend from us.
+     *
+     * Everything protecting identity — immutable group fields, no key rotation, added
+     * members hashing to their own ID, append-only tombstones — is enforced unchanged.
+     */
+    fun validateConcurrent(
+        current: GroupDefinition,
+        remote: GroupDefinition,
+        updaterMemberId: String
+    ): String? = check(current, remote, updaterMemberId, concurrent = true)
+
+    private fun check(
+        current: GroupDefinition,
+        remote: GroupDefinition,
+        updaterMemberId: String,
+        concurrent: Boolean
     ): String? {
         if (remote.groupId != current.groupId) {
             return "group ID changed"
@@ -65,7 +93,8 @@ object GroupTransitionValidator {
             return "updater ${updaterMemberId.take(8)} is not a member of our current group state"
         }
 
-        if (remote.version == current.version + 1 &&
+        if (!concurrent &&
+            remote.version == current.version + 1 &&
             remote.previousStateHash != current.computeStateHash()
         ) {
             return "previousStateHash does not chain from our current state"
@@ -94,8 +123,38 @@ object GroupTransitionValidator {
             }
         }
 
-        val removedIds = currentById.keys - remoteById.keys
-        if (removedIds.isNotEmpty() &&
+        // Tombstones are append-only. Dropping one is how a removed member would be
+        // readmitted without anyone authorizing an addition, so losing any is a rejection
+        // rather than something to merge back in.
+        val droppedTombstones = current.removedMemberIds - remote.removedMemberIds
+        if (droppedTombstones.isNotEmpty()) {
+            return "removal tombstones cannot be withdrawn " +
+                "(updater ${updaterMemberId.take(8)} dropped ${droppedTombstones.size})"
+        }
+
+        // A tombstoned member must not appear in the roster, or the tombstone is decorative.
+        val resurrected = remoteById.keys.intersect(remote.removedMemberIds)
+        if (resurrected.isNotEmpty()) {
+            return "removed member ${resurrected.first().take(8)} is present in the roster"
+        }
+
+        // Authorizing a *new* tombstone follows the same rule as the removal it records:
+        // the creator may remove anyone, anyone may remove themselves.
+        val newTombstones = remote.removedMemberIds - current.removedMemberIds
+        if (newTombstones.isNotEmpty() &&
+            updaterMemberId != current.creatorMemberId &&
+            newTombstones != setOf(updaterMemberId)
+        ) {
+            return "only the group creator may remove other members " +
+                "(updater ${updaterMemberId.take(8)} tombstoned ${newTombstones.size})"
+        }
+
+        // A member may also disappear from the roster without a tombstone — that is what
+        // every build before tombstones existed produced, and what a relayed FULL_SYNC from
+        // such a peer still looks like.
+        val removedIds = currentById.keys - remoteById.keys - remote.removedMemberIds
+        if (!concurrent &&
+            removedIds.isNotEmpty() &&
             updaterMemberId != current.creatorMemberId &&
             removedIds != setOf(updaterMemberId)
         ) {

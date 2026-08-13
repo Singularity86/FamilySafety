@@ -93,6 +93,13 @@ data class MemberRuntimeState(
  *   encrypted DataStore, so it is distributed and stored safely with no new plumbing.
  *   Null for groups created before this field existed; those fall back to the legacy
  *   groupId-derived key. Never log or display this value.
+ * @property removedMemberIds Tombstones for members who have been removed. **Append-only.**
+ *   Without these, merging two concurrently-edited states by unioning their rosters would
+ *   resurrect anyone who had just been removed — the merge cannot otherwise tell "this peer
+ *   has not heard about them yet" apart from "this peer removed them". A removal is
+ *   permanent for that member ID, which costs nothing: identities are self-authenticating
+ *   (memberId = SHA-256(ed25519 key)), so someone rejoining generates a new mnemonic and
+ *   therefore a new ID anyway.
  */
 @Serializable
 data class GroupDefinition(
@@ -103,7 +110,8 @@ data class GroupDefinition(
     val members: Set<FamilyMember>,
     val version: Long,
     val previousStateHash: String? = null,
-    val fileEncryptionKey: String? = null
+    val fileEncryptionKey: String? = null,
+    val removedMemberIds: Set<String> = emptySet()
 ) {
     /**
      * Computes deterministic hash of this group state for hash chain integrity.
@@ -112,6 +120,12 @@ data class GroupDefinition(
      * Deliberately excludes fileEncryptionKey: the hash covers who is in the group, and
      * folding a secret into it would both change every existing group's hash (breaking
      * the chain across the upgrade) and leak nothing useful in return.
+     *
+     * Tombstones ARE covered — they are a security decision, and anything outside this hash
+     * is outside the signature, so a stripped tombstone would silently readmit a removed
+     * member. They are appended only when non-empty, so a group that has never removed
+     * anyone keeps the hash it had before tombstones existed and stays chain-compatible
+     * with peers across the upgrade.
      */
     fun computeStateHash(): String {
         val canonical = buildString {
@@ -132,6 +146,13 @@ data class GroupDefinition(
                 append(",")
                 append(member.x25519PublicKey)
                 append(";")
+            }
+            if (removedMemberIds.isNotEmpty()) {
+                append("|removed:")
+                removedMemberIds.sorted().forEach { id ->
+                    append(id)
+                    append(";")
+                }
             }
         }
         val digest = MessageDigest.getInstance("SHA-256")

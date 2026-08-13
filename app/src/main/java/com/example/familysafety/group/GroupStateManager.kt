@@ -253,9 +253,11 @@ class GroupStateManager(
                 return@withLock GroupOperationResult.Failure(GroupError.InvalidSignature)
             }
 
-            // Create updated group
+            // Create updated group. The tombstone is what stops a concurrent merge from
+            // quietly putting this member back — see GroupStateMerge.
             val updatedGroup = currentGroup.copy(
                 members = currentGroup.members.filter { it.memberId != targetMemberId }.toSet(),
+                removedMemberIds = currentGroup.removedMemberIds + targetMemberId,
                 version = currentGroup.version + 1,
                 previousStateHash = currentGroup.computeStateHash()
             )
@@ -552,14 +554,12 @@ class GroupStateManager(
                 }
                 remoteDefinition.version == currentGroup.version &&
                         remoteDefinition.computeStateHash() != currentGroup.computeStateHash() -> {
-                    // Same version, different content = conflict
-                    _events.emit(
-                        GroupStateEvent.ConflictDetected(
-                            localVersion = currentGroup.version,
-                            remoteVersion = remoteDefinition.version
-                        )
+                    // Same version, different content: two members edited concurrently.
+                    // Reconcile instead of failing — a rejection here is what left devices
+                    // permanently forked.
+                    return reconcileConcurrentEditLocked(
+                        currentGroup, remoteDefinition, updaterMemberId
                     )
-                    return GroupOperationResult.Failure(GroupError.VersionConflict)
                 }
             }
 
@@ -575,27 +575,80 @@ class GroupStateManager(
             }
         }
 
-        // Apply the remote state
+        return commitStateLocked(remoteDefinition)
+    }
+
+    /**
+     * Resolve two states that share a version number but not their contents — the signature
+     * of two members having approved something at the same moment.
+     *
+     * Both devices independently pick the same winner and the loser re-parents its own
+     * changes onto it, so the pair converges in one round with no user involvement. See
+     * [GroupStateMerge] for why this is safe and why the old behaviour (reject, or worse,
+     * acknowledge and ignore) stranded devices.
+     *
+     * @return the state now in effect, which the caller should rebroadcast whenever it
+     *   differs from what arrived — that is what carries the resolution back to the peer.
+     */
+    private suspend fun reconcileConcurrentEditLocked(
+        currentGroup: GroupDefinition,
+        remoteDefinition: GroupDefinition,
+        updaterMemberId: String
+    ): GroupOperationResult<GroupDefinition> {
+        _events.emit(
+            GroupStateEvent.ConflictDetected(
+                localVersion = currentGroup.version,
+                remoteVersion = remoteDefinition.version
+            )
+        )
+
+        if (GroupStateMerge.pickWinner(currentGroup, remoteDefinition) !== remoteDefinition) {
+            // Ours is the state both sides will build on. Nothing to persist; returning it
+            // unchanged makes the caller rebroadcast so the peer can merge onto it.
+            return GroupOperationResult.Success(currentGroup)
+        }
+
+        // Adopting their branch means inheriting the changes on it, so it faces the same
+        // authorization rules as any other update — minus the removal rule, because at an
+        // equal version a member we hold and they lack has not been removed, only not yet
+        // heard about. Real removals are carried by tombstones, which are checked.
+        val rejection = GroupTransitionValidator.validateConcurrent(
+            current = currentGroup,
+            remote = remoteDefinition,
+            updaterMemberId = updaterMemberId
+        )
+        if (rejection != null) {
+            return GroupOperationResult.Failure(GroupError.UnauthorizedChange(rejection))
+        }
+
+        val merged = GroupStateMerge.merge(winner = remoteDefinition, ours = currentGroup)
+        return commitStateLocked(merged ?: remoteDefinition)
+    }
+
+    /** Persist [newState], publish it, and emit the resulting events. */
+    private suspend fun commitStateLocked(
+        newState: GroupDefinition
+    ): GroupOperationResult<GroupDefinition> {
         try {
-            persistence.saveGroupDefinition(remoteDefinition)
+            persistence.saveGroupDefinition(newState)
         } catch (e: Exception) {
             return GroupOperationResult.Failure(GroupError.StorageError)
         }
 
         val oldDefinition = _groupDefinition.value
-        _groupDefinition.value = remoteDefinition
-        reinitializeMemberRuntimeStates(remoteDefinition)
+        _groupDefinition.value = newState
+        reinitializeMemberRuntimeStates(newState)
 
         if (oldDefinition != null) {
-            _events.emit(GroupStateEvent.GroupUpdated(oldDefinition, remoteDefinition))
+            _events.emit(GroupStateEvent.GroupUpdated(oldDefinition, newState))
         }
 
         // Check if we've been removed
-        if (!remoteDefinition.containsMember(localMemberId)) {
+        if (!newState.containsMember(localMemberId)) {
             _events.emit(GroupStateEvent.RemovedFromGroup)
         }
 
-        return GroupOperationResult.Success(remoteDefinition)
+        return GroupOperationResult.Success(newState)
     }
 
     // =========================================================================

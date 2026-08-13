@@ -1,7 +1,7 @@
 # FamilySafety — iOS Port Specification & Interop Contract
 
-**Version 1.7 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
-revised 2026-08-12 against Android 1.12.6 (versionCode 24).**
+**Version 1.8 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
+revised 2026-08-12 against Android 1.12.7 (versionCode 25).**
 
 All additions since 1.0 are optional fields that older senders omit, so the wire stays
 backward compatible. Two of them still change what a correct implementation must do:
@@ -28,6 +28,14 @@ backward compatible. Two of them still change what a correct implementation must
   wrapping the envelope, encrypted under a group subkey. Like the manifest change this is
   **not** additive — a client expecting a bare envelope sees no presence at all from
   Android 1.12.5+.
+- **1.8**, removal tombstones and concurrent-edit reconciliation (§6.4, §7.3):
+  `GroupDefinition.removedMemberIds`, and the rule that two states sharing a version must be
+  merged rather than arbitrated. **A client that skips this forks the group.** It is not a
+  theoretical risk — it happened on 2026-08-12 with two members approving joins at the same
+  moment, and the affected device sat on a stale roster indefinitely, receiving the missing
+  member's traffic and discarding it. Tombstones also change `computeStateHash` for any
+  group that has ever removed someone, so an implementation that drops the field will
+  disagree about the state hash and fail every chain check. `PROTOCOL_VERSION` is now **3**.
 - **1.7**, protocol version advertisement (§6.2): `PresenceUpdate.protocolVersion`.
   Additive on the wire, but an iOS client that omits it is read as generation 1 and every
   Android peer will permanently label the user "needs to update" — so emit it. Set it to
@@ -388,12 +396,21 @@ receipt's sender (anti-forgery, see ChatRepository).
                  "addedAtEpochMs": 0, "addedByMemberId": null,
                  "avatarHash": null, "colorHue": null } ],
   "version": 1, "previousStateHash": null,
-  "fileEncryptionKey": "<hex64chars>" }
+  "fileEncryptionKey": "<hex64chars>",
+  "removedMemberIds": ["<memberId>", "..."] }
 ```
 
 `fileEncryptionKey` was added in Android 1.12.0 (18): a random 32-byte AES key, hex
 encoded, generated once when the group is created. It is **absent or null** for groups
 created before that, and decoders must treat it as optional.
+
+`removedMemberIds` was added in Android 1.12.7 (25) and defaults to the empty set. It is
+**append-only**: every removal adds the member's ID and nothing ever takes one out. It must
+be preserved on re-serialize — a client that drops it will readmit removed members through
+the merge in §7.4 and will disagree about the state hash (§7.1) for any group that has ever
+removed anyone. A removal is permanent for that member ID, which costs nothing in practice:
+identities are self-authenticating, so anyone rejoining generates a new mnemonic and a new
+ID regardless.
 
 It lives on the definition because the definition only ever travels inside the
 per-recipient encrypted envelope (join approval, group sync) and is persisted encrypted,
@@ -511,12 +528,21 @@ SHA-256 (lowercase hex) of the UTF-8 canonical string:
   then for each member sorted ASCENDING by memberId:
 {memberId},{ed25519PublicKey},{x25519PublicKey};
 ```
+then, **only when `removedMemberIds` is non-empty**, append:
+```
+|removed:{memberId};   for each tombstone sorted ASCENDING, each ending with ';'
+```
 (no newlines; every member entry ends with `;` including the last; `previousStateHash`,
 `fileEncryptionKey`, displayName, avatar, etc. are **not** hashed).
 
 `fileEncryptionKey` is excluded deliberately and must stay excluded. Hashing it would
 change the hash of every group that predates it, breaking the chain across the upgrade,
 and would fold a secret into a value that is compared and logged freely.
+
+Tombstones, by contrast, **are** hashed: anything outside this hash is outside the
+signature (§7.2), so an unhashed tombstone could be stripped in transit to readmit a
+removed member. The non-empty guard is what keeps that from breaking existing groups — a
+group that has never removed anyone hashes exactly as it did before the field existed.
 
 ### 7.2 Sync signature
 `GroupSyncMessage.signature` = Ed25519-detached over the UTF-8 string
@@ -534,11 +560,32 @@ Reject the update if any of:
 - any surviving member's keys changed (key rotation unsupported);
 - any **added** member's `memberId != SHA-256(their ed25519 key)[0..15]` hex;
 - members were removed and the updater is neither the creator nor removing only itself;
+- any tombstone present locally is **missing** from the remote (append-only);
+- any member appears in the roster **and** in `removedMemberIds`;
+- a **new** tombstone appears and the updater is neither the creator nor tombstoning only
+  itself (same authority as the removal it records);
 - `groupName` changed and updater is not the creator.
+
+**Concurrent siblings are validated differently.** When `remote.version == local.version`
+the two states are siblings, not successors, and two of the rules above must be relaxed or
+reconciliation is impossible:
+
+- skip the `previousStateHash` chain rule — siblings share your parent, they do not descend
+  from you;
+- skip the untombstoned-removal rule — at an equal version, a member you hold and they lack
+  has not been removed, only not yet learned about. Real removals travel as tombstones, and
+  the tombstone rules above still apply in full.
+
+Everything protecting identity — immutable group fields, updater membership, no key
+rotation, added members hashing to their own ID, append-only tombstones — is enforced
+unchanged for siblings.
 
 ### 7.4 Version ladder (incoming `GroupSyncMessage`)
 - `version < local` → sender is stale: rebroadcast own state (`VERSION_SYNC`).
-- `version == local` → send plaintext ack on the group ack topic.
+- `version == local` **and the state hashes match** → send plaintext ack on the group ack
+  topic. Nothing to do.
+- `version == local` **and the hashes differ** → two members edited concurrently.
+  **Reconcile — never acknowledge and drop.** See below.
 - `version == local + 1` → validate (§7.3), apply, ack; if `MEMBER_ADDED`, also fire a
   `GroupStateRefreshRequest` so laggards catch up.
 - `version > local + 1` → flag conflict state, still validate & apply.
@@ -546,6 +593,43 @@ Reject the update if any of:
   (wipe group state, return to onboarding).
 - After broadcasting an update, wait up to **30 s** (poll 500 ms) for acks from
   `memberCount − 1` peers before reporting synced.
+
+#### Reconciling a concurrent edit (required, since 1.12.7)
+
+Any member may approve a join, so two members approving at the same moment both produce a
+state at version N+1 from the same parent. Acknowledging a same-version message and moving
+on — which is what Android did until 1.12.7 — leaves both sides believing they are in sync
+while holding different rosters, and every later update then fails the chain check because
+it descends from the other branch. **This is not a rare edge case:** it happened in a
+four-member family the first day two devices were tested together.
+
+Both sides run the same procedure and converge in one round:
+
+1. **Pick the winner**: the state whose `computeStateHash()` is lexicographically smaller.
+   The hash is already deterministic across platforms, so both devices choose identically
+   with no coordination, clock, or tie-break authority. Equal hashes mean equal states —
+   not a conflict.
+2. **If your state is the winner**, change nothing and rebroadcast it. The peer will merge
+   onto it.
+3. **If theirs is the winner**, validate it as a sibling (§7.3), then build:
+   - `members` = union of both rosters, minus the union of both tombstone sets, preferring
+     the winner's record where both hold the same member ID (keys are immutable, so the
+     records can only differ cosmetically, and preferring one side consistently keeps the
+     result order-independent);
+   - `removedMemberIds` = union of both tombstone sets;
+   - `version` = `winner.version + 1`; `previousStateHash` = `winner.computeStateHash()`;
+   - `fileEncryptionKey` = the winner's, or yours if the winner has none.
+
+   If that yields exactly the winner's roster and tombstones, **adopt the winner unchanged
+   instead of emitting a version bump** — otherwise two devices holding equivalent states
+   will each "merge" the other forever.
+4. Persist, then broadcast the result whenever it differs from what arrived.
+
+The merged state is an ordinary version+1 successor of the winner, so the winner accepts it
+through §7.3 with no special case: from its point of view the peer simply added the members
+it was missing. Removals beat additions — a tombstoned member is dropped even if the other
+side still lists them — which is the safe direction, since the alternative silently
+readmits someone who was just removed.
 - Incoming refresh request: respond (full `FULL_SYNC` broadcast) only if
   `local.version >= request.minimumVersion` and groupId matches.
 

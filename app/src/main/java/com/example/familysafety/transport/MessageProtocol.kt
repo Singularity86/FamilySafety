@@ -19,17 +19,24 @@ object MessageProtocol {
      *     that omit the field, since it did not exist then.
      * 2 — padded envelopes, signed and sealed presence, encrypted file manifests,
      *     versioned file keys.
+     * 3 — removal tombstones in the group state, and concurrent-edit reconciliation.
      *
-     * Three of those changes replaced a message shape rather than adding a field, so a
-     * 1 and a 2 cannot see each other's files or presence at all. Previously that failure
-     * was silent — the other person simply never appeared. Advertising the version lets
-     * the UI say "they need to update" instead of showing nothing and letting the user
+     * Three of the version-2 changes replaced a message shape rather than adding a field,
+     * so a 1 and a 2 cannot see each other's files or presence at all. Previously that
+     * failure was silent — the other person simply never appeared. Advertising the version
+     * lets the UI say "they need to update" instead of showing nothing and letting the user
      * conclude the app is broken.
+     *
+     * Version 3 is subtler and worth the bump for exactly that reason: a 2 parses a
+     * tombstoned state fine but drops the tombstones on re-serialize, so it would readmit a
+     * removed member and disagree with every 3 about the group's state hash. It also lacks
+     * the reconciliation, so it stays forkable. Naming those peers is better than watching
+     * them diverge quietly.
      *
      * Bump this only when a change breaks interoperability. Additive fields do not
      * warrant it; older peers ignore what they do not understand.
      */
-    const val PROTOCOL_VERSION = 2
+    const val PROTOCOL_VERSION = 3
     
     /**
      * Sizes every envelope is padded up to, in bytes. Chosen to sit above the natural

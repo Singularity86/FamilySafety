@@ -247,4 +247,113 @@ class GroupTransitionValidatorTest {
         val remote = successorOf(current, members = setOf(creator, renamedAlice, bob))
         assertNull(GroupTransitionValidator.validate(current, remote, bobId))
     }
+
+    // ── removal tombstones ────────────────────────────────────────────────────
+    //
+    // Tombstones are what make merging two rosters safe (see GroupStateMerge). If any of
+    // these rules can be evaded, a merge readmits someone who was removed.
+
+    @Test
+    fun `creator may tombstone another member`() {
+        val current = group()
+        val remote = successorOf(current, members = setOf(creator, bob))
+            .copy(removedMemberIds = setOf(aliceId))
+
+        assertNull(GroupTransitionValidator.validate(current, remote, creatorId))
+    }
+
+    @Test
+    fun `a member may tombstone themselves`() {
+        val current = group()
+        val remote = successorOf(current, members = setOf(creator, bob))
+            .copy(removedMemberIds = setOf(aliceId))
+
+        assertNull(GroupTransitionValidator.validate(current, remote, aliceId))
+    }
+
+    @Test
+    fun `a non-creator may not tombstone someone else`() {
+        val current = group()
+        val remote = successorOf(current, members = setOf(creator, bob))
+            .copy(removedMemberIds = setOf(aliceId))
+
+        assertNotNull(GroupTransitionValidator.validate(current, remote, bobId))
+    }
+
+    @Test
+    fun `a tombstone can never be withdrawn`() {
+        // Dropping a tombstone is how a removed member gets back in without anyone
+        // authorizing an addition.
+        val current = group().copy(removedMemberIds = setOf(aliceId))
+        val remote = successorOf(current).copy(removedMemberIds = emptySet())
+
+        val reason = GroupTransitionValidator.validate(current, remote, creatorId)
+        assertNotNull(reason)
+        assertTrue(reason!!.contains("withdrawn"))
+    }
+
+    @Test
+    fun `a tombstoned member may not appear in the roster`() {
+        val current = group(members = setOf(creator, bob))
+            .copy(removedMemberIds = setOf(aliceId))
+        val remote = successorOf(current, members = setOf(creator, alice, bob))
+
+        val reason = GroupTransitionValidator.validate(current, remote, creatorId)
+        assertNotNull(reason)
+        assertTrue(reason!!.contains("present in the roster"))
+    }
+
+    // ── concurrent siblings ───────────────────────────────────────────────────
+
+    @Test
+    fun `a concurrent sibling missing a member we hold is not treated as a removal`() {
+        // Equal versions mean they never heard about the member, not that they removed one.
+        // Applying the successor rule here is what made concurrent edits unresolvable.
+        val current = group(members = setOf(creator, alice, bob))
+        val sibling = group(members = setOf(creator, alice))
+
+        assertNotNull(
+            "a successor dropping a member without a tombstone is still refused",
+            GroupTransitionValidator.validate(current, successorOf(current, setOf(creator, alice)), aliceId)
+        )
+        assertNull(
+            "the same shape as a concurrent sibling is legitimate",
+            GroupTransitionValidator.validateConcurrent(current, sibling, aliceId)
+        )
+    }
+
+    @Test
+    fun `a concurrent sibling still cannot resurrect a tombstoned member`() {
+        val current = group(members = setOf(creator, bob))
+            .copy(removedMemberIds = setOf(aliceId))
+        val sibling = group(members = setOf(creator, alice, bob))
+
+        assertNotNull(GroupTransitionValidator.validateConcurrent(current, sibling, bobId))
+    }
+
+    @Test
+    fun `a concurrent sibling still cannot rotate keys`() {
+        val current = group()
+        val impostor = alice.copy(ed25519PublicKey = "dd".repeat(32))
+        val sibling = group(members = setOf(creator, impostor, bob))
+
+        assertNotNull(GroupTransitionValidator.validateConcurrent(current, sibling, bobId))
+    }
+
+    @Test
+    fun `a concurrent sibling still cannot add a member whose id does not match its key`() {
+        val current = group()
+        val forged = member("0".repeat(32), "dd".repeat(32))
+        val sibling = group(members = setOf(creator, alice, bob, forged))
+
+        assertNotNull(GroupTransitionValidator.validateConcurrent(current, sibling, bobId))
+    }
+
+    @Test
+    fun `a concurrent sibling from a non-member is still refused`() {
+        val current = group(members = setOf(creator, alice))
+        val sibling = group(members = setOf(creator, alice, bob))
+
+        assertNotNull(GroupTransitionValidator.validateConcurrent(current, sibling, bobId))
+    }
 }
