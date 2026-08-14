@@ -2,6 +2,7 @@ package com.example.familysafety.files
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.storage.SharedFileDao
 import com.example.familysafety.storage.SharedFileEntity
@@ -98,7 +99,7 @@ class SharedFileRepository @Inject constructor(
                 return Result.success(Unit)
             }
 
-            val fileName = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
+            val fileName = queryDisplayName(uri)
             val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
             val fileId = UUID.randomUUID().toString()
 
@@ -549,6 +550,33 @@ class SharedFileRepository @Inject constructor(
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_BITS, nonce))
         return cipher.doFinal(ciphertext)
+    }
+
+    /**
+     * The user-facing name of a picked document.
+     *
+     * This used to be `uri.lastPathSegment?.substringAfterLast('/')`, which is only correct
+     * for `file://` URIs. The picker returns Storage Access Framework URIs whose last segment
+     * is a provider-internal document ID, so a family sharing "insurance-card.pdf" saw it
+     * arrive as something like "1000000042" — no extension, which also breaks the mime icon
+     * and the open intent. The display name has to be queried from the provider.
+     */
+    private fun queryDisplayName(uri: Uri): String {
+        val fromProvider = runCatching {
+            context.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null, null, null
+            )?.use { cursor ->
+                val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
+            }
+        }.getOrNull()
+
+        // file:// URIs have no provider to query, so fall back to the path.
+        return fromProvider?.takeIf { it.isNotBlank() }
+            ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+            ?: "file"
     }
 
     private fun sha256Hex(bytes: ByteArray): String =

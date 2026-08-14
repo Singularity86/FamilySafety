@@ -1,8 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ replacement for backup_rules.xml. Two independent channels:
+
+    cloud-backup    — already disabled by android:allowBackup="false".
+    device-transfer — direct device-to-device copy when someone sets up a new phone.
+                      This is NOT governed by allowBackup, and there was no
+                      <device-transfer> section at all, so identity keys, the recovery
+                      phrase, the SQLCipher passphrase and every shared document were
+                      eligible to be copied to a new device.
+
+  That transfer is user-initiated to their own phone, so it is not an exposure in the way a
+  cloud upload would be. It is still the wrong default for this app: the identity is meant to
+  be reconstructed from the recovery phrase, not silently cloned, and a cloned identity means
+  two devices sharing one MQTT client ID — which the broker resolves by evicting one of them
+  in a loop.
+
+  Store names verified against the code; see backup_rules.xml for what each one holds.
+-->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- Exclude cryptographic keys from backup -->
-        <exclude domain="sharedpref" path="familysafety_encrypted_prefs"/>
-        <exclude domain="database" path="familysafety.db"/>
+        <exclude domain="sharedpref" path="familysafe_keys.xml"/>
+        <exclude domain="sharedpref" path="familysafety_db_prefs.xml"/>
+        <exclude domain="sharedpref" path="familysafety_prefs.xml"/>
+        <exclude domain="sharedpref" path="crash_detection_prefs.xml"/>
+        <exclude domain="sharedpref" path="geofence_prefs.xml"/>
+        <exclude domain="sharedpref" path="location_service.xml"/>
+        <exclude domain="database" path="familysafety_encrypted.db"/>
+        <exclude domain="file" path="datastore/"/>
+        <exclude domain="external" path="familysafety_files/"/>
     </cloud-backup>
+
+    <device-transfer>
+        <exclude domain="sharedpref" path="familysafe_keys.xml"/>
+        <exclude domain="sharedpref" path="familysafety_db_prefs.xml"/>
+        <exclude domain="sharedpref" path="familysafety_prefs.xml"/>
+        <exclude domain="sharedpref" path="crash_detection_prefs.xml"/>
+        <exclude domain="sharedpref" path="geofence_prefs.xml"/>
+        <exclude domain="sharedpref" path="location_service.xml"/>
+        <exclude domain="database" path="familysafety_encrypted.db"/>
+        <exclude domain="file" path="datastore/"/>
+        <exclude domain="external" path="familysafety_files/"/>
+    </device-transfer>
 </data-extraction-rules>

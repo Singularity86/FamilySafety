@@ -1,6 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Belt and braces. android:allowBackup="false" in the manifest already disables cloud
+  backup, so nothing here is load-bearing today — but these rules named stores that do not
+  exist ("familysafety.db", "familysafety_encrypted_prefs"), so they excluded nothing. That
+  is fine while backup is off and a silent data leak the day anyone turns it on.
+
+  Names below are the real ones, verified against the code:
+    familysafe_keys       — EncryptedSharedPreferences: Ed25519/X25519 identity AND the
+                            BIP-39 recovery phrase (AndroidKeyStoreLocalKeyStore.PREFS_NAME)
+    familysafety_db_prefs — the SQLCipher passphrase (FamilySafetyDatabase.PREFS_NAME);
+                            backing this up would hand over the database key
+    familysafety_encrypted.db — the SQLCipher database itself
+    familysafety_prefs    — onboarding state and pending-join details
+-->
 <full-backup-content>
-    <!-- Exclude cryptographic keys and sensitive data from backup -->
-    <exclude domain="sharedpref" path="familysafety_encrypted_prefs"/>
-    <exclude domain="database" path="familysafety.db"/>
+    <exclude domain="sharedpref" path="familysafe_keys.xml"/>
+    <exclude domain="sharedpref" path="familysafety_db_prefs.xml"/>
+    <exclude domain="sharedpref" path="familysafety_prefs.xml"/>
+    <exclude domain="sharedpref" path="crash_detection_prefs.xml"/>
+    <exclude domain="sharedpref" path="geofence_prefs.xml"/>
+    <exclude domain="sharedpref" path="location_service.xml"/>
+
+    <exclude domain="database" path="familysafety_encrypted.db"/>
+
+    <!-- Encrypted group definition, which carries the group file key. -->
+    <exclude domain="file" path="datastore/"/>
+
+    <!-- Shared documents. Stored under getExternalFilesDir until the blob store lands. -->
+    <exclude domain="external" path="familysafety_files/"/>
 </full-backup-content>

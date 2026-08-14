@@ -135,6 +135,14 @@ android {
     }
 }
 
+// Room needs somewhere to write the exported schema JSON. Committing app/schemas/ is what
+// makes migrations testable: MigrationTestHelper reconstructs the old schema from the file,
+// runs the migration and asserts the result, instead of the migration only being exercised
+// on a user's device after release.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 dependencies {
     // Core Android
     implementation("androidx.core:core-ktx:1.12.0")
@@ -236,6 +244,8 @@ dependencies {
     testImplementation("app.cash.turbine:turbine:1.0.0")
     
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    // MigrationTestHelper — reads the exported schemas above to verify migrations.
+    androidTestImplementation("androidx.room:room-testing:$roomVersion")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
     androidTestImplementation("io.mockk:mockk-android:1.13.8")
     androidTestImplementation(composeBom)

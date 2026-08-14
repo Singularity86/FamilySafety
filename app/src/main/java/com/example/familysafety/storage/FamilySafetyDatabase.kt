@@ -10,6 +10,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
+import timber.log.Timber
 import java.security.SecureRandom
 
 /**
@@ -26,7 +27,11 @@ import java.security.SecureRandom
         PendingLocationPublishEntity::class
     ],
     version = 3,
-    exportSchema = false
+    // Exported so each version's schema is committed as JSON under app/schemas/. That is what
+    // makes a migration testable — MigrationTestHelper builds the old schema from the exported
+    // file, applies the migration and asserts the result. Without it a migration can only be
+    // verified by shipping it.
+    exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class FamilySafetyDatabase : RoomDatabase() {
@@ -118,10 +123,19 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
             )
                 .openHelperFactory(SupportOpenHelperFactory(passphrase))
                 .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
-                .fallbackToDestructiveMigration()
+                // Deliberately NOT fallbackToDestructiveMigration(). It used to be here, and
+                // it turns any mistake in a migration into a silent wipe of every user's chat
+                // history and location history — data that exists on no server and cannot be
+                // recovered. Failing loudly on a bad migration is strictly better than
+                // deleting the thing the app exists to protect.
+                //
+                // A downgrade (older build opening a newer schema) still cannot be migrated
+                // and would otherwise crash on every launch, so that one case is allowed to
+                // reset — it only happens when someone side-grades backwards.
+                .fallbackToDestructiveMigrationOnDowngrade()
                 .addCallback(object : Callback() {
                     override fun onDestructiveMigration(db: SupportSQLiteDatabase) {
-                        // Called by Room when it wipes the DB — nothing extra needed.
+                        Timber.w("Database was reset by a destructive downgrade migration")
                     }
                 })
                 .build()

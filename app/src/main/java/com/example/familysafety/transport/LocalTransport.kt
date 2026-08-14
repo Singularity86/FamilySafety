@@ -146,9 +146,35 @@ class LocalTransport @Inject constructor(
             val input = DataInputStream(socket.getInputStream())
             while (!socket.isClosed) {
                 val len = try { input.readInt() } catch (e: Exception) { break }
-                if (len <= 0 || len > MAX_MESSAGE_BYTES) {
-                    Timber.w("Invalid frame size $len from peer — closing connection")
+
+                // A non-positive length, or one wildly beyond the cap, means the stream is
+                // desynchronised — there is no reliable resynchronisation point, so close.
+                if (len <= 0 || len > MAX_MESSAGE_BYTES * 16) {
+                    Timber.w("Desynchronised frame size $len from peer — closing connection")
                     break
+                }
+
+                // An oversized but plausible frame is a real message we cannot accept — most
+                // likely a manifest that has outgrown the cap. The length prefix says exactly
+                // how many bytes it occupies, so skip it and keep the connection. Closing
+                // here, which is what this used to do, discarded every *subsequent* message
+                // on the socket too: one oversized manifest silently killed LAN delivery for
+                // chat, location and file chunks until the peer reconnected.
+                if (len > MAX_MESSAGE_BYTES) {
+                    Timber.w("Oversized frame ($len bytes) from peer — skipping, keeping connection")
+                    var remaining = len
+                    val skipped = try {
+                        while (remaining > 0) {
+                            val n = input.skipBytes(remaining)
+                            if (n <= 0) break
+                            remaining -= n
+                        }
+                        remaining == 0
+                    } catch (e: Exception) {
+                        false
+                    }
+                    if (!skipped) break
+                    continue
                 }
                 val bytes = ByteArray(len)
                 try { input.readFully(bytes) } catch (e: Exception) { break }
@@ -208,6 +234,19 @@ class LocalTransport @Inject constructor(
                         .encodeToString(payloadString.toByteArray())
                 )
                 val bytes = json.encodeToString(msg).toByteArray()
+
+                // The receiver enforces this cap; the sender never did. Writing a frame the
+                // peer will discard wastes the round trip and, worse, reports success — the
+                // caller then skips the MQTT fallback and the message is simply lost.
+                // Returning false here routes it over the relay instead.
+                if (bytes.size > MAX_MESSAGE_BYTES) {
+                    Timber.w(
+                        "LocalTransport frame for $topic is ${bytes.size} bytes, over the " +
+                            "${MAX_MESSAGE_BYTES} cap — falling back to MQTT"
+                    )
+                    return@withContext false
+                }
+
                 val out = DataOutputStream(socket.getOutputStream())
                 out.writeInt(bytes.size)
                 out.write(bytes)
