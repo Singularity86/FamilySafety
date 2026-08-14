@@ -57,6 +57,14 @@ object StorageModule {
 
     @Provides
     @Singleton
+    fun provideFileTransferLogDao(
+        database: FamilySafetyDatabase
+    ): FileTransferLogDao {
+        return database.fileTransferLogDao()
+    }
+
+    @Provides
+    @Singleton
     fun provideFileAvailabilityDao(
         database: FamilySafetyDatabase
     ): FileAvailabilityDao {

@@ -5,6 +5,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -12,6 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -40,6 +42,7 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun FilesScreen(
+    onOpenStatusBoard: () -> Unit = {},
     viewModel: FilesViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
@@ -47,6 +50,10 @@ fun FilesScreen(
     val totalUsedBytes by viewModel.totalUsedBytes.collectAsState()
     val uploadProgress by viewModel.uploadProgress.collectAsState()
     val memberNames by viewModel.memberNames.collectAsState()
+    // Status comes from the shared board model so this grid and the status board can never
+    // disagree about what state a file is in.
+    val board by viewModel.board.collectAsState()
+    val statusByFile = board.associateBy { it.entity.fileId }
     val errorMessage by viewModel.errorMessage.collectAsState()
 
     var fileToDelete by remember { mutableStateOf<SharedFileEntity?>(null) }
@@ -85,6 +92,51 @@ fun FilesScreen(
         ) {
             // Storage usage bar
             StorageBar(usedBytes = totalUsedBytes, maxBytes = SharedFileRepository.MAX_TOTAL_BYTES)
+
+            // Summary line into the status board. Surfaces the one number worth acting on —
+            // files that exist on this phone and nowhere else — rather than making someone
+            // open a screen to find out whether anything is wrong.
+            val needsAttention = board.count {
+                it.status == com.example.familysafety.files.FileStatus.STALLED ||
+                    it.status == com.example.familysafety.files.FileStatus.WAITING_FOR_PEER
+            }
+            val onlyHere = board.count {
+                it.status == com.example.familysafety.files.FileStatus.AVAILABLE && !it.isRedundant
+            }
+            if (board.isNotEmpty()) {
+                Surface(
+                    onClick = onOpenStatusBoard,
+                    color = if (needsAttention > 0 || onlyHere > 0) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = when {
+                                needsAttention > 0 -> "$needsAttention file${if (needsAttention == 1) "" else "s"} still arriving"
+                                onlyHere > 0 -> "$onlyHere file${if (onlyHere == 1) " is" else "s are"} only on this phone"
+                                else -> "All files are on every device"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            "Details",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
 
             // Upload progress banner
             uploadProgress?.let { progress ->
@@ -149,6 +201,7 @@ fun FilesScreen(
                         FileCard(
                             file = file,
                             uploaderName = memberNames[file.uploaderMemberId] ?: "Unknown",
+                            status = statusByFile[file.fileId],
                             onClick = { viewModel.openFile(file, context) },
                             onLongClick = { fileToDelete = file }
                         )
@@ -229,6 +282,7 @@ private fun StorageBar(usedBytes: Long, maxBytes: Long) {
 private fun FileCard(
     file: SharedFileEntity,
     uploaderName: String,
+    status: com.example.familysafety.files.FileStatusRow?,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -298,6 +352,64 @@ private fun FileCard(
                         modifier = Modifier.size(32.dp),
                         tint = Color.White.copy(alpha = 0.85f)
                     )
+                }
+            }
+
+            // Status chip and copy count, top-left. Two things a glance should answer:
+            // is this file here, and does anyone else have it. The second is the one that
+            // matters for an emergency document and nothing used to show it.
+            status?.let { row ->
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    StatusPill(
+                        containerColor = when (row.status) {
+                            com.example.familysafety.files.FileStatus.STALLED ->
+                                MaterialTheme.colorScheme.errorContainer
+                            com.example.familysafety.files.FileStatus.AVAILABLE ->
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f)
+                            else -> MaterialTheme.colorScheme.tertiaryContainer
+                        }
+                    ) {
+                        Text(
+                            row.shortLabel,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                    if (row.entity.isEssential) {
+                        Icon(
+                            imageVector = Icons.Default.PushPin,
+                            contentDescription = "Pinned to every device",
+                            modifier = Modifier.size(12.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+
+                // Copy dots, top-right — filled per device that holds it.
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    val total = row.totalMembers.coerceAtLeast(1)
+                    val held = row.totalCopies.coerceIn(0, total)
+                    repeat(total) { index ->
+                        Box(
+                            Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (index < held) MaterialTheme.colorScheme.primary
+                                    else Color.White.copy(alpha = 0.45f)
+                                )
+                        )
+                    }
                 }
             }
 

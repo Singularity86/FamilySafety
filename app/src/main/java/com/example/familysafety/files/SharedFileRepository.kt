@@ -6,6 +6,8 @@ import android.provider.OpenableColumns
 import com.example.familysafety.core.RateLimiters
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.storage.FileAvailabilityEntity
+import com.example.familysafety.storage.FileTransferEvent
+import com.example.familysafety.storage.FileTransferLogEntity
 import com.example.familysafety.storage.FileCopyCount
 import com.example.familysafety.storage.SharedFileDao
 import com.example.familysafety.storage.SharedFileEntity
@@ -45,6 +47,7 @@ class SharedFileRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val sharedFileDao: SharedFileDao,
     private val fileAvailabilityDao: com.example.familysafety.storage.FileAvailabilityDao,
+    private val fileTransferLogDao: com.example.familysafety.storage.FileTransferLogDao,
     private val groupStateManager: GroupStateManager,
     private val transportProvider: com.example.familysafety.transport.TransportProvider
 ) {
@@ -108,6 +111,9 @@ class SharedFileRepository @Inject constructor(
 
         /** Minimum gap between holdings announcements. */
         private const val ANNOUNCE_DEBOUNCE_MS = 30_000L
+
+        /** How long transfer-log entries are kept. Diagnostic, not an audit trail. */
+        private const val LOG_RETENTION_MS = 14L * 24 * 60 * 60 * 1000
 
         /**
          * Schedule marker for a file this device is not fetching. Non-essential files sit
@@ -217,6 +223,7 @@ class SharedFileRepository @Inject constructor(
             sharedFileDao.upsert(entity)
             broadcastManifest(groupId)
 
+            log(fileId, FileTransferEvent.UPLOAD_STARTED, "$totalChunks pieces, ${sizeBytes / 1024} KB")
             _uploadProgress.value = UploadProgress(fileId, fileName, 0, totalChunks)
 
             // Pass 2: read our copy back a chunk at a time, encrypt and publish. Nothing
@@ -236,6 +243,7 @@ class SharedFileRepository @Inject constructor(
 
             _uploadProgress.value = null
             stagedFileId = null
+            log(fileId, FileTransferEvent.UPLOAD_FINISHED, "sent $totalChunks pieces")
             Timber.i("$TAG: Uploaded $fileName ($totalChunks chunks, $sizeBytes bytes)")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -427,6 +435,40 @@ class SharedFileRepository @Inject constructor(
     }
 
     // =========================================================================
+    // TRANSFER LOG
+    // =========================================================================
+
+    fun observeTransferLog(limit: Int = 200) = fileTransferLogDao.observeRecent(limit)
+
+    fun observeTransferLogFor(fileId: String) = fileTransferLogDao.observeForFile(fileId)
+
+    /**
+     * Record what just happened to a transfer.
+     *
+     * Never throws into the caller: a diagnostic that can break the thing it is diagnosing is
+     * worse than no diagnostic.
+     */
+    private suspend fun log(fileId: String, event: String, detail: String? = null) {
+        runCatching {
+            fileTransferLogDao.insert(
+                FileTransferLogEntity(
+                    fileId = fileId,
+                    at = System.currentTimeMillis(),
+                    event = event,
+                    detail = detail
+                )
+            )
+        }
+    }
+
+    /** Age-based trim, run from the background pass. */
+    private suspend fun trimTransferLog() {
+        runCatching {
+            fileTransferLogDao.deleteOlderThan(System.currentTimeMillis() - LOG_RETENTION_MS)
+        }
+    }
+
+    // =========================================================================
     // AVAILABILITY
     // =========================================================================
 
@@ -604,6 +646,11 @@ class SharedFileRepository @Inject constructor(
             peerId = peer
         )
 
+        log(
+            fileId,
+            FileTransferEvent.CHUNKS_REQUESTED,
+            "asked ${peer.take(8)} for ${missing.size} of ${entity.chunkCount} pieces"
+        )
         if (sent) {
             Timber.i(
                 "$TAG: asked ${peer.take(8)} for ${missing.size} missing chunks of " +
@@ -655,6 +702,11 @@ class SharedFileRepository @Inject constructor(
                 if (wanted.isEmpty()) return@launch
 
                 serveChunks(source, groupId, entity.fileId, entity.chunkCount, wanted, fileKey, fileKeyVersion)
+                log(
+                    entity.fileId,
+                    FileTransferEvent.CHUNKS_SERVED,
+                    "sent ${wanted.size} pieces to ${request.requesterId.take(8)}"
+                )
                 Timber.i(
                     "$TAG: served ${wanted.size} chunks of ${entity.name} to " +
                         request.requesterId.take(8)
@@ -725,6 +777,7 @@ class SharedFileRepository @Inject constructor(
             // summary, not an event, so a lost one costs nothing — the next tick corrects it.
             // That is why this uses the announce pattern rather than per-file receipts.
             announceHoldings()
+            trimTransferLog()
 
             // Only essential files keep the worker alive. A non-essential file nobody has
             // opened is not "incomplete work", it is simply not wanted here yet, and
@@ -828,6 +881,7 @@ class SharedFileRepository @Inject constructor(
 
             val now = System.currentTimeMillis()
             sharedFileDao.markDeleted(fileId, localMemberId, now)
+            log(fileId, FileTransferEvent.DELETED, "deleted on this phone")
             fileStore.deleteAll(fileId)
             broadcastManifest(groupId)
             Timber.i("$TAG: Deleted file $fileId")
@@ -1010,6 +1064,7 @@ class SharedFileRepository @Inject constructor(
             // group key. Clear the accounting and let the file be fetched again rather than
             // parking it in a terminal state with its partial data left behind, which is what
             // the old FAILED path did.
+            log(fileId, FileTransferEvent.HASH_MISMATCH, "contents did not match, fetching again")
             Timber.e("$TAG: Hash mismatch for $fileId — discarding and re-fetching")
             runCatching { scratch.delete() }
             fileStore.discardBlob(fileId)
@@ -1028,6 +1083,7 @@ class SharedFileRepository @Inject constructor(
         fileStore.discardBlob(fileId)
         sharedFileDao.updateDownloadProgress(fileId, "COMPLETE", target.absolutePath, entity.chunkCount)
         sharedFileDao.clearRepairSchedule(fileId)
+        log(fileId, FileTransferEvent.DOWNLOAD_COMPLETE, "verified ${entity.chunkCount} pieces")
         Timber.i("$TAG: Assembled file ${entity.name}")
 
         // Tell the family this device now holds it, so their status boards can say so and
@@ -1257,6 +1313,11 @@ class SharedFileRepository @Inject constructor(
         val groupId = groupStateManager.groupDefinition.value?.groupId
             ?: throw IllegalStateException("No group")
         sharedFileDao.setEssential(fileId, essential)
+        log(
+            fileId,
+            FileTransferEvent.ESSENTIAL_CHANGED,
+            if (essential) "pinned to every device" else "no longer pinned"
+        )
         sharedFileDao.getFileById(fileId)?.let { applyFetchPolicy(it) }
         broadcastManifest(groupId)
         if (essential) requestMissingChunks(fileId)

@@ -25,9 +25,10 @@ import java.security.SecureRandom
         ChatMessageEntity::class,
         SharedFileEntity::class,
         FileAvailabilityEntity::class,
+        FileTransferLogEntity::class,
         PendingLocationPublishEntity::class
     ],
-    version = 6,
+    version = 7,
     // Exported so each version's schema is committed as JSON under app/schemas/. That is what
     // makes a migration testable — MigrationTestHelper builds the old schema from the exported
     // file, applies the migration and asserts the result. Without it a migration can only be
@@ -41,6 +42,7 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
     abstract fun chatMessageDao(): ChatMessageDao
     abstract fun sharedFileDao(): SharedFileDao
     abstract fun fileAvailabilityDao(): FileAvailabilityDao
+    abstract fun fileTransferLogDao(): FileTransferLogDao
     abstract fun pendingLocationPublishDao(): PendingLocationPublishDao
 
     companion object {
@@ -189,6 +191,29 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Append-only transfer log.
+         *
+         * A file once took half a day to arrive and nothing recorded whether it had been
+         * retrying, blocked, or simply stopped. This is the table that makes that question
+         * answerable — events only, trimmed by age, never payloads.
+         */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `file_transfer_log` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `fileId` TEXT NOT NULL,
+                        `at` INTEGER NOT NULL,
+                        `event` TEXT NOT NULL,
+                        `detail` TEXT
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_file_transfer_log_fileId ON file_transfer_log(fileId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_file_transfer_log_at ON file_transfer_log(at)")
+            }
+        }
+
         private fun buildRoomDatabase(context: Context, passphrase: ByteArray): FamilySafetyDatabase {
             // The retired android-database-sqlcipher artifact loaded its native library
             // implicitly; net.zetetic:sqlcipher-android requires the caller to do it. Without
@@ -202,7 +227,7 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
                 DATABASE_NAME
             )
                 .openHelperFactory(SupportOpenHelperFactory(passphrase))
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 // Deliberately NOT fallbackToDestructiveMigration(). It used to be here, and
                 // it turns any mistake in a migration into a silent wipe of every user's chat
                 // history and location history — data that exists on no server and cannot be

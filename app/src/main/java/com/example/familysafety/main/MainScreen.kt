@@ -367,7 +367,10 @@ fun MainScreen(
                                 navigatePagerTo(2)
                             }
                         )
-                        2 -> FilesScreen(viewModel = filesViewModel)
+                        2 -> FilesScreen(
+                            onOpenStatusBoard = { navController.navigate("file_status_board") },
+                            viewModel = filesViewModel
+                        )
                         3 -> ChatScreen(
                             memberId = "",
                             onBack = {},
@@ -410,7 +413,20 @@ fun MainScreen(
         // Files + Zones remain as NavHost destinations even though they are
         // not in the bottom nav, so programmatic navigation still resolves them.
         composable(MainRoute.Files.route) {
-            FilesScreen(viewModel = filesViewModel)
+            FilesScreen(
+                onOpenStatusBoard = { navController.navigate("file_status_board") },
+                viewModel = filesViewModel
+            )
+        }
+
+        // Per-file state, how many devices hold each file, and the transfer log. Reached
+        // from the Files screen rather than the bottom nav — it is a diagnostic, not a
+        // destination.
+        composable("file_status_board") {
+            FileStatusBoardScreen(
+                onBack = { navController.popBackStack() },
+                viewModel = filesViewModel
+            )
         }
         composable(MainRoute.Zones.route) {
             GeofenceListScreen(

@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -36,6 +37,75 @@ class FilesViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
 
     val uploadProgress: StateFlow<UploadProgress?> = fileRepository.uploadProgress
+
+    /**
+     * Every file with its state, how many devices hold it, and what happened last.
+     *
+     * Combined here rather than in the UI so the grid tile and the status board can never
+     * disagree about what a file's state is, and so the status rules live in one testable
+     * place ([FileStatusRow]) instead of being re-derived per screen.
+     */
+    val board: StateFlow<List<FileStatusRow>> = combine(
+        fileRepository.observeAllFiles(),
+        fileRepository.observeCopyCounts(),
+        groupStateManager.groupDefinition
+    ) { files, copyCounts, group ->
+        val copies = copyCounts.associate { it.fileId to it.copies }
+        val names = group?.members?.associate { it.memberId to it.displayName } ?: emptyMap()
+        val memberCount = group?.members?.size ?: 1
+        files.filterNot { it.isDeleted }.map { entity ->
+            FileStatusRow(
+                entity = entity,
+                uploaderName = names[entity.uploaderMemberId] ?: "Someone",
+                copiesElsewhere = copies[entity.fileId] ?: 0,
+                totalMembers = memberCount,
+                lastActivityAt = entity.lastAttemptAt,
+                lastActivityDetail = entity.lastError
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /**
+     * Problems first, then work in progress, then everything that is fine.
+     *
+     * A status board sorted by upload date buries the one file that needs attention, which is
+     * the only reason to open it.
+     */
+    val boardSorted: StateFlow<List<FileStatusRow>> = board
+        .map { rows ->
+            rows.sortedWith(
+                compareBy(
+                    { statusRank(it.status) },
+                    { -(it.entity.uploadedAt) }
+                )
+            )
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private fun statusRank(status: FileStatus): Int = when (status) {
+        FileStatus.STALLED -> 0
+        FileStatus.WAITING_FOR_PEER -> 1
+        FileStatus.DOWNLOADING -> 2
+        FileStatus.QUEUED -> 3
+        FileStatus.UPLOADING -> 4
+        FileStatus.ON_DEMAND -> 5
+        FileStatus.AVAILABLE -> 6
+    }
+
+    val transferLog = fileRepository.observeTransferLog()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun setEssential(fileId: String, essential: Boolean) {
+        viewModelScope.launch {
+            fileRepository.setEssential(fileId, essential).onFailure { error ->
+                _errorMessage.value = error.message ?: "Could not change pinning"
+            }
+        }
+    }
+
+    fun retryNow(fileId: String) {
+        viewModelScope.launch { fileRepository.retryNow(fileId) }
+    }
 
     /** Map of memberId → displayName for showing who uploaded each file. */
     val memberNames: StateFlow<Map<String, String>> = groupStateManager.groupDefinition
@@ -65,9 +135,13 @@ class FilesViewModel @Inject constructor(
     fun openFile(file: SharedFileEntity, context: Context) {
         val localPath = file.localPath
         if (localPath == null || !File(localPath).exists()) {
-            _errorMessage.value = "File not downloaded yet — requesting from other members…"
+            // Opening a file that is not here is now a normal, expected action rather than a
+            // repair: non-essential files are deliberately left undownloaded until wanted.
+            // This asks one peer for exactly the missing pieces, where it used to ask everyone
+            // to re-broadcast their entire library.
+            _errorMessage.value = "Downloading \"${file.name}\"…"
             viewModelScope.launch {
-                fileRepository.requestFilesFromPeers()
+                fileRepository.requestDownload(file.fileId)
             }
             return
         }
