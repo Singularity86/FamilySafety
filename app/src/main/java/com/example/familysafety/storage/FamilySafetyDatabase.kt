@@ -9,7 +9,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
-import net.sqlcipher.database.SupportFactory
+import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import java.security.SecureRandom
 
 /**
@@ -105,12 +105,18 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
         }
 
         private fun buildRoomDatabase(context: Context, passphrase: ByteArray): FamilySafetyDatabase {
+            // The retired android-database-sqlcipher artifact loaded its native library
+            // implicitly; net.zetetic:sqlcipher-android requires the caller to do it. Without
+            // this the first query fails with UnsatisfiedLinkError rather than anything that
+            // names the cause.
+            System.loadLibrary("sqlcipher")
+
             return Room.databaseBuilder(
                 context.applicationContext,
                 FamilySafetyDatabase::class.java,
                 DATABASE_NAME
             )
-                .openHelperFactory(SupportFactory(passphrase))
+                .openHelperFactory(SupportOpenHelperFactory(passphrase))
                 .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .fallbackToDestructiveMigration()
                 .addCallback(object : Callback() {

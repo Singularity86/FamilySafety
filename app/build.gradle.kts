@@ -165,7 +165,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
     
     // Cryptography - Lazysodium
-    implementation("com.goterl:lazysodium-android:5.1.0@aar")
+    implementation("com.goterl:lazysodium-android:5.2.0@aar")
     implementation("net.java.dev.jna:jna:5.13.0@aar")
     
     // Location Services
@@ -188,19 +188,24 @@ dependencies {
     implementation("androidx.room:room-ktx:$roomVersion")
     ksp("androidx.room:room-compiler:$roomVersion")
 
-    // SQLCipher for encrypted database
-    implementation("net.zetetic:android-database-sqlcipher:4.5.4")
+    // SQLCipher for encrypted database.
+    // net.zetetic:sqlcipher-android supersedes the retired android-database-sqlcipher
+    // artifact; the old one's last release (4.5.4) ships a 4 KB-aligned libsqlcipher.so,
+    // which will not load at all on a 16 KB-page device. Package name changed with it:
+    // net.sqlcipher.database -> net.zetetic.database.sqlcipher.
+    implementation("net.zetetic:sqlcipher-android:4.9.0")
     implementation("androidx.sqlite:sqlite-ktx:2.4.0")
     
     // QR Codes
     implementation("com.google.zxing:core:3.5.2")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     
-    // ML Kit Barcode Scanning
-    implementation("com.google.mlkit:barcode-scanning:17.2.0")
-    
-    // CameraX
-    val cameraxVersion = "1.3.0"
+    // ML Kit Barcode Scanning — 17.3.0 is the first release whose libbarhopper_v3.so is
+    // 16 KB-page aligned.
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+
+    // CameraX — 1.4.x aligns libimage_processing_util_jni.so for 16 KB pages.
+    val cameraxVersion = "1.4.2"
     implementation("androidx.camera:camera-core:${cameraxVersion}")
     implementation("androidx.camera:camera-camera2:${cameraxVersion}")
     implementation("androidx.camera:camera-lifecycle:${cameraxVersion}")
