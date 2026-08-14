@@ -105,4 +105,16 @@ object RateLimiters {
         maxRequests = 5,
         windowMs = 60 * 60 * 1000
     )
+
+    /**
+     * Chunk repair requests, per requesting member: max 20 per minute.
+     *
+     * Serving a repair request means reading a file and publishing chunks, so without a limit
+     * one member could make every other device re-upload on demand. Keyed by requester rather
+     * than globally, so one noisy device cannot starve the rest of the family.
+     */
+    val fileRepair = RateLimiter(
+        maxRequests = 20,
+        windowMs = 60 * 1000
+    )
 }

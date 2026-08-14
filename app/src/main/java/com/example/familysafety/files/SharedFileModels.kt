@@ -77,3 +77,44 @@ const val FILE_KEY_VERSION_GROUP_SECRET = 2
 data class FileRequestMessage(
     val requesterId: String        // memberId asking for a full re-broadcast
 )
+
+/**
+ * A request for specific chunks of one file, addressed to one peer.
+ *
+ * Replaces the all-or-nothing [FileRequestMessage], whose only possible response was for the
+ * peer to re-publish every chunk of every complete file it holds to the entire group. That
+ * made the cost of one missing chunk proportional to the whole library, so it was only ever
+ * triggered by a user tapping a file that had not downloaded — which is why a stalled transfer
+ * could sit for half a day and then complete the instant someone touched it.
+ *
+ * [contentHash] binds the request to exact bytes. If the responder's copy hashes differently
+ * the two are looking at different versions of the file, and sending chunks would corrupt the
+ * requester's blob rather than repair it.
+ */
+@Serializable
+data class ChunkRepairRequest(
+    val requestId: String,
+    val requesterId: String,
+    val fileId: String,
+    val contentHash: String,
+    val totalChunks: Int,
+    /** Ascending, capped by the requester so this fits in one message. */
+    val missing: List<Int>,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+/**
+ * Encrypted wrapper for a file-subsystem control message, published in place of the plaintext.
+ *
+ * Same reasoning as [EncryptedFileManifest]: a bare [ChunkRepairRequest] names a file and how
+ * much of it a device is missing, which is exactly the sort of metadata the manifest was
+ * encrypted to stop leaking. Encrypted under the group key rather than per-recipient, because
+ * every member can already read the manifest and the chunks, so per-pair encryption here would
+ * add cost without narrowing who can read it.
+ */
+@Serializable
+data class EncryptedFileMessage(
+    val keyVersion: Int,
+    /** Base64 of `nonce ‖ ciphertext ‖ tag`. */
+    val data: String
+)

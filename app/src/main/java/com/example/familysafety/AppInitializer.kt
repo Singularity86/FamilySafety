@@ -12,6 +12,7 @@ import com.example.familysafety.avatar.AvatarRepository
 import com.example.familysafety.core.SecurityEventRepository
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.chat.ChatRepository
+import com.example.familysafety.files.FileTransferWorker
 import com.example.familysafety.files.SharedFileRepository
 import com.example.familysafety.group.EncryptedGroupStatePersistence
 import com.example.familysafety.group.GroupStateEvent
@@ -231,6 +232,10 @@ class AppInitializer @Inject constructor(
                 // interrupted by the process dying used to stay stuck until someone tapped
                 // the file; now it is picked up on the next launch.
                 sharedFileRepository.reconcileOnStartup()
+
+                // Background repair for files still missing chunks. Until now the only thing
+                // that ever repaired a stalled transfer was a user tapping the file.
+                FileTransferWorker.scheduleIfNeeded(context)
 
                 // Watch for membership changes (new members added/removed) and
                 // update MQTT subscriptions + encryption keys automatically.

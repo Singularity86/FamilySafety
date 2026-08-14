@@ -78,6 +78,58 @@ interface SharedFileDao {
     """)
     suspend fun getIncompleteFiles(): List<SharedFileEntity>
 
+    /**
+     * Files due to be chased now. This is the outbox drain, and the reason a stalled transfer
+     * no longer waits for a user to tap it.
+     */
+    @Query("""
+        SELECT * FROM shared_files
+        WHERE isDeleted = 0
+          AND downloadState IN ('PENDING', 'DOWNLOADING', 'FAILED')
+          AND nextAttemptAt <= :now
+        ORDER BY nextAttemptAt ASC, uploadedAt DESC
+        LIMIT :limit
+    """)
+    suspend fun getDueForRepair(now: Long, limit: Int): List<SharedFileEntity>
+
+    @Query("""
+        SELECT COUNT(*) FROM shared_files
+        WHERE isDeleted = 0 AND downloadState IN ('PENDING', 'DOWNLOADING', 'FAILED')
+    """)
+    suspend fun countIncomplete(): Int
+
+    /**
+     * Record a repair attempt as a single atomic increment.
+     *
+     * Copied from `PendingLocationPublishDao.recordAttempt` — reading, incrementing and
+     * writing back from Kotlin would lose counts whenever two attempts overlap, which is
+     * exactly the situation a retry loop creates.
+     */
+    @Query("""
+        UPDATE shared_files
+        SET attemptCount = attemptCount + 1,
+            lastAttemptAt = :attemptAt,
+            nextAttemptAt = :nextAttemptAt,
+            lastError = :lastError,
+            lastRepairPeerId = :peerId
+        WHERE fileId = :fileId
+    """)
+    suspend fun recordRepairAttempt(
+        fileId: String,
+        attemptAt: Long,
+        nextAttemptAt: Long,
+        lastError: String?,
+        peerId: String?
+    )
+
+    /** Clear the retry schedule, e.g. when the user asks for an immediate retry. */
+    @Query("""
+        UPDATE shared_files
+        SET attemptCount = 0, nextAttemptAt = 0, lastError = NULL
+        WHERE fileId = :fileId
+    """)
+    suspend fun clearRepairSchedule(fileId: String)
+
     /** Total bytes of non-deleted files that are fully downloaded. */
     @Query("SELECT COALESCE(SUM(sizeBytes), 0) FROM shared_files WHERE isDeleted = 0")
     suspend fun getTotalSizeBytes(): Long

@@ -3,6 +3,7 @@ package com.example.familysafety.files
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.example.familysafety.core.RateLimiters
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.storage.SharedFileDao
 import com.example.familysafety.storage.SharedFileEntity
@@ -80,6 +81,15 @@ class SharedFileRepository @Inject constructor(
 
         /** Cap on indices in one repair request, so it fits in a single message. */
         const val MAX_MISSING_PER_REQUEST = 256
+
+        /** Cap on chunks served for one request; the requester re-asks for the rest. */
+        private const val MAX_CHUNKS_PER_REPAIR_RESPONSE = 64
+
+        /** Files chased in one background pass. */
+        private const val MAX_FILES_PER_REPAIR_PASS = 10
+
+        private const val REPAIR_BASE_BACKOFF_MS = 30_000L
+        private const val REPAIR_MAX_BACKOFF_MS = 30 * 60_000L
     }
 
     /** Bytes one chunk occupies in the blob: nonce + ciphertext + GCM tag. */
@@ -383,6 +393,236 @@ class SharedFileRepository @Inject constructor(
                 Timber.e(e, "$TAG: Failed to handle chunk $chunkIndex for $fileId")
             }
         }
+    }
+
+    // =========================================================================
+    // TARGETED REPAIR
+    // =========================================================================
+
+    /**
+     * Ask one peer for the chunks this device is missing of [fileId].
+     *
+     * One peer per round, not all of them. Asking everyone means every peer answers, so a
+     * single gap costs the family N copies of the same chunks — and with the old
+     * whole-library re-broadcast it cost N copies of *everything*. Peers are rotated on each
+     * attempt so a peer that cannot help does not get asked forever.
+     *
+     * @return true if a request went out.
+     */
+    suspend fun requestMissingChunks(fileId: String): Boolean {
+        val entity = sharedFileDao.getFileById(fileId) ?: return false
+        if (entity.isDeleted || entity.downloadState == "COMPLETE") return false
+
+        val groupDef = groupStateManager.groupDefinition.value ?: return false
+        val myMemberId = groupStateManager.localMember.value?.memberId ?: return false
+        val missing = ChunkBitmap.missingIndices(
+            entity.chunkBitmap, entity.chunkCount, MAX_MISSING_PER_REQUEST
+        )
+        if (missing.isEmpty()) {
+            // Nothing missing but not COMPLETE — the blob is all there and assembly simply has
+            // not run yet, most likely because the process died between the two.
+            completeFile(fileId)
+            return false
+        }
+
+        val peers = groupDef.members.map { it.memberId }.filter { it != myMemberId }
+        if (peers.isEmpty()) return false
+        // Rotate: start after whoever we asked last.
+        val startIndex = entity.lastRepairPeerId
+            ?.let { peers.indexOf(it) }
+            ?.takeIf { it >= 0 }
+            ?.let { (it + 1) % peers.size }
+            ?: 0
+        val peer = peers[startIndex]
+
+        val request = ChunkRepairRequest(
+            requestId = UUID.randomUUID().toString(),
+            requesterId = myMemberId,
+            fileId = fileId,
+            contentHash = entity.contentHash,
+            totalChunks = entity.chunkCount,
+            missing = missing
+        )
+
+        val groupId = groupDef.groupId
+        val payload = sealFileMessage(groupId, json.encodeToString(request)) ?: return false
+        val sent = transportProvider.sendMessage(
+            peer,
+            MqttConfig.getFileRepairTopic(peer),
+            payload,
+            MqttConfig.QOS_AT_LEAST_ONCE,
+            false
+        )
+
+        val now = System.currentTimeMillis()
+        sharedFileDao.recordRepairAttempt(
+            fileId = fileId,
+            attemptAt = now,
+            nextAttemptAt = now + backoffFor(entity.attemptCount + 1),
+            lastError = if (sent) null else "could not reach ${peer.take(8)}",
+            peerId = peer
+        )
+
+        if (sent) {
+            Timber.i(
+                "$TAG: asked ${peer.take(8)} for ${missing.size} missing chunks of " +
+                    "${entity.name} (${entity.chunksReceived}/${entity.chunkCount} held)"
+            )
+        }
+        return sent
+    }
+
+    /**
+     * Send a peer exactly the chunks it asked for.
+     *
+     * Replies go to the ordinary group chunk topic rather than back to the requester alone.
+     * That makes a repair reply indistinguishable from an original upload, so it needs no new
+     * receive path, and any other device with the same gap picks it up for free.
+     */
+    fun handleChunkRepairRequest(payload: ByteArray) {
+        scope.launch {
+            try {
+                val groupId = groupStateManager.groupDefinition.value?.groupId ?: return@launch
+                val plain = openFileMessage(groupId, String(payload)) ?: return@launch
+                val request = json.decodeFromString<ChunkRepairRequest>(plain)
+
+                // One member must not be able to make every device re-upload on demand.
+                if (!RateLimiters.fileRepair.allowRequest(request.requesterId)) {
+                    Timber.w("$TAG: repair request from ${request.requesterId.take(8)} rate limited")
+                    return@launch
+                }
+
+                val entity = sharedFileDao.getFileById(request.fileId) ?: return@launch
+                if (entity.isDeleted) return@launch
+                if (entity.contentHash != request.contentHash) {
+                    // Different bytes under the same id. Sending would corrupt their blob
+                    // rather than repair it; the manifest will reconcile the disagreement.
+                    Timber.w("$TAG: repair request for ${request.fileId} has a different contentHash")
+                    return@launch
+                }
+                if (entity.downloadState != "COMPLETE") {
+                    Timber.d("$TAG: asked for chunks of ${request.fileId} we do not hold in full")
+                    return@launch
+                }
+                val source = entity.localPath?.let { File(it) }?.takeIf { it.exists() } ?: return@launch
+
+                val (fileKey, fileKeyVersion) = resolveEncryptionKey(groupId)
+                val wanted = request.missing.filter { it in 0 until entity.chunkCount }
+                    .distinct()
+                    .sorted()
+                    .take(MAX_CHUNKS_PER_REPAIR_RESPONSE)
+                if (wanted.isEmpty()) return@launch
+
+                serveChunks(source, groupId, entity.fileId, entity.chunkCount, wanted, fileKey, fileKeyVersion)
+                Timber.i(
+                    "$TAG: served ${wanted.size} chunks of ${entity.name} to " +
+                        request.requesterId.take(8)
+                )
+            } catch (e: Exception) {
+                Timber.e(e, "$TAG: Failed to handle chunk repair request")
+            }
+        }
+    }
+
+    /** Read just the requested chunk indices from [source] and publish them. */
+    private suspend fun serveChunks(
+        source: File,
+        groupId: String,
+        fileId: String,
+        totalChunks: Int,
+        indices: List<Int>,
+        fileKey: ByteArray,
+        fileKeyVersion: Int
+    ) {
+        val buffer = ByteArray(CHUNK_SIZE)
+        java.io.RandomAccessFile(source, "r").use { raf ->
+            for (index in indices) {
+                val offset = index.toLong() * CHUNK_SIZE
+                if (offset >= raf.length()) continue
+                raf.seek(offset)
+                var filled = 0
+                while (filled < CHUNK_SIZE) {
+                    val read = raf.read(buffer, filled, CHUNK_SIZE - filled)
+                    if (read <= 0) break
+                    filled += read
+                }
+                if (filled == 0) continue
+                val plain = if (filled == CHUNK_SIZE) buffer else buffer.copyOf(filled)
+                val chunkMsg = FileChunkMessage(
+                    fileId = fileId,
+                    chunkIndex = index,
+                    totalChunks = totalChunks,
+                    data = Base64.getEncoder().encodeToString(encrypt(plain, fileKey)),
+                    keyVersion = fileKeyVersion
+                )
+                transportProvider.broadcastMessage(
+                    topic = MqttConfig.getFileChunkTopic(groupId, fileId, index),
+                    payload = json.encodeToString(chunkMsg).toByteArray(),
+                    qos = MqttConfig.QOS_AT_LEAST_ONCE,
+                    retained = false
+                )
+                if (PUBLISH_PACING_MS > 0) delay(PUBLISH_PACING_MS)
+            }
+        }
+    }
+
+    /**
+     * Chase every file that is due, oldest schedule first. Called by the background worker.
+     *
+     * @return true if anything remains incomplete, so the caller knows to run again.
+     */
+    suspend fun runRepairPass(): Boolean {
+        return try {
+            val now = System.currentTimeMillis()
+            val due = sharedFileDao.getDueForRepair(now, MAX_FILES_PER_REPAIR_PASS)
+            due.forEach { entity ->
+                reconcileFile(entity.fileId)
+                requestMissingChunks(entity.fileId)
+            }
+            sharedFileDao.countIncomplete() > 0
+        } catch (e: Exception) {
+            Timber.e(e, "$TAG: repair pass failed")
+            true
+        }
+    }
+
+    /** User-initiated retry from the UI: clear the backoff and chase it now. */
+    suspend fun retryNow(fileId: String) {
+        sharedFileDao.clearRepairSchedule(fileId)
+        reconcileFile(fileId)
+        requestMissingChunks(fileId)
+    }
+
+    /**
+     * Exponential backoff, capped. Starts at 30 s so a chunk lost to a momentary drop is
+     * recovered quickly, and tops out at 30 min so a file whose peers are all offline stops
+     * costing anything.
+     */
+    private fun backoffFor(attempt: Int): Long {
+        val exponent = (attempt - 1).coerceIn(0, 6)
+        return (REPAIR_BASE_BACKOFF_MS shl exponent).coerceAtMost(REPAIR_MAX_BACKOFF_MS)
+    }
+
+    /** Encrypt a file-subsystem control message under the group key. */
+    private fun sealFileMessage(groupId: String, plaintext: String): ByteArray? {
+        val (key, keyVersion) = resolveEncryptionKey(groupId)
+        return runCatching {
+            json.encodeToString(
+                EncryptedFileMessage(
+                    keyVersion = keyVersion,
+                    data = Base64.getEncoder().encodeToString(encrypt(plaintext.toByteArray(), key))
+                )
+            ).toByteArray()
+        }.getOrNull()
+    }
+
+    private fun openFileMessage(groupId: String, raw: String): String? {
+        val wrapped = runCatching { json.decodeFromString<EncryptedFileMessage>(raw) }.getOrNull()
+            ?: return null
+        val key = keyForVersion(groupId, wrapped.keyVersion) ?: return null
+        return runCatching {
+            String(decrypt(Base64.getDecoder().decode(wrapped.data), key))
+        }.getOrNull()
     }
 
     /** Re-broadcast manifest + all file chunks when a peer requests it (e.g. new member). */

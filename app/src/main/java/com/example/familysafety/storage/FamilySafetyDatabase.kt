@@ -26,7 +26,7 @@ import java.security.SecureRandom
         SharedFileEntity::class,
         PendingLocationPublishEntity::class
     ],
-    version = 4,
+    version = 5,
     // Exported so each version's schema is committed as JSON under app/schemas/. That is what
     // makes a migration testable — MigrationTestHelper builds the old schema from the exported
     // file, applies the migration and asserts the result. Without it a migration can only be
@@ -136,6 +136,27 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Retry state for file transfers, so a stalled download is chased in the background
+         * instead of waiting for a user to tap it.
+         *
+         * Deliberately the same columns as `pending_location_publishes` — attemptCount,
+         * lastAttemptAt, lastError — plus `nextAttemptAt` for backoff and `lastRepairPeerId`
+         * so requests rotate between peers rather than nagging one that cannot help.
+         *
+         * Stores intent rather than bytes: a 3200-chunk transfer is one row with a schedule,
+         * not 3200 rows of payload.
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE shared_files ADD COLUMN attemptCount INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE shared_files ADD COLUMN lastAttemptAt INTEGER")
+                db.execSQL("ALTER TABLE shared_files ADD COLUMN nextAttemptAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE shared_files ADD COLUMN lastError TEXT")
+                db.execSQL("ALTER TABLE shared_files ADD COLUMN lastRepairPeerId TEXT")
+            }
+        }
+
         private fun buildRoomDatabase(context: Context, passphrase: ByteArray): FamilySafetyDatabase {
             // The retired android-database-sqlcipher artifact loaded its native library
             // implicitly; net.zetetic:sqlcipher-android requires the caller to do it. Without
@@ -149,7 +170,7 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
                 DATABASE_NAME
             )
                 .openHelperFactory(SupportOpenHelperFactory(passphrase))
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 // Deliberately NOT fallbackToDestructiveMigration(). It used to be here, and
                 // it turns any mistake in a migration into a silent wipe of every user's chat
                 // history and location history — data that exists on no server and cannot be

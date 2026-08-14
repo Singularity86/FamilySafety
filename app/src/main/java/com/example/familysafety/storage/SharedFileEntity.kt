@@ -41,7 +41,24 @@ data class SharedFileEntity(
      * a different version has to be refused rather than written. Meaningless once the file is
      * COMPLETE and the blob is gone.
      */
-    val blobKeyVersion: Int = 0
+    val blobKeyVersion: Int = 0,
+
+    /**
+     * Retry state, modelled on `PendingLocationPublishEntity` — the same shape that already
+     * proved out for location publishes, kept deliberately identical so the two are obviously
+     * the same pattern.
+     *
+     * Intent is stored here, not bytes: a 3200-chunk transfer is one row with a retry
+     * schedule, not 3200 blobs in the database. [nextAttemptAt] is when this file may next be
+     * chased; 0 means "as soon as anything runs". [lastError] is what the status board shows
+     * the user instead of a file that is simply, silently absent.
+     */
+    val attemptCount: Int = 0,
+    val lastAttemptAt: Long? = null,
+    val nextAttemptAt: Long = 0,
+    val lastError: String? = null,
+    /** Member last asked for missing chunks, so requests rotate rather than nagging one peer. */
+    val lastRepairPeerId: String? = null
 ) {
     // Room's generated equals/hashCode would compare the ByteArray by reference. That makes
     // two rows with identical bitmaps unequal, which quietly breaks Flow distinctUntilChanged
@@ -64,6 +81,11 @@ data class SharedFileEntity(
             chunksReceived == other.chunksReceived &&
             downloadState == other.downloadState &&
             blobKeyVersion == other.blobKeyVersion &&
+            attemptCount == other.attemptCount &&
+            lastAttemptAt == other.lastAttemptAt &&
+            nextAttemptAt == other.nextAttemptAt &&
+            lastError == other.lastError &&
+            lastRepairPeerId == other.lastRepairPeerId &&
             (chunkBitmap?.contentEquals(other.chunkBitmap) ?: (other.chunkBitmap == null))
     }
 

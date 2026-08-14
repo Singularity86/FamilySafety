@@ -147,4 +147,14 @@ object MqttConfig {
      */
     fun getFileRequestTopic(memberId: String): String =
         "familysafe/$memberId/files/request"
+
+    /**
+     * A member publishes here to ask one specific peer for specific missing chunks.
+     *
+     * Addressed rather than broadcast, so a gap costs one peer a handful of chunks instead of
+     * asking the whole family to re-send everything. Purely additive: peers on older builds
+     * never subscribe here, so they simply do not participate in repair.
+     */
+    fun getFileRepairTopic(memberId: String): String =
+        "familysafe/$memberId/files/repair"
 }

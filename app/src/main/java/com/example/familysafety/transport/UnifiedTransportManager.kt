@@ -236,6 +236,11 @@ class UnifiedTransportManager @Inject constructor(
                     topic.endsWith("/files/request") -> {
                         sharedFileRepositoryProvider.get().handleFileRequest(payload.toByteArray())
                     }
+
+                    topic.endsWith("/files/repair") -> {
+                        sharedFileRepositoryProvider.get()
+                            .handleChunkRepairRequest(payload.toByteArray())
+                    }
                 }
             } catch (e: Exception) {
                 Timber.e(e, "$TAG: Error routing incoming message on $topic")
