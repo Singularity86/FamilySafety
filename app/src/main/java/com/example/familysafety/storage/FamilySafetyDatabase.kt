@@ -26,7 +26,7 @@ import java.security.SecureRandom
         SharedFileEntity::class,
         PendingLocationPublishEntity::class
     ],
-    version = 3,
+    version = 4,
     // Exported so each version's schema is committed as JSON under app/schemas/. That is what
     // makes a migration testable — MigrationTestHelper builds the old schema from the exported
     // file, applies the migration and asserts the result. Without it a migration can only be
@@ -109,6 +109,33 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Explicit chunk accounting for shared files.
+         *
+         * `chunkBitmap` records which chunk indices are held, replacing a count of files in a
+         * temp directory that could say how many chunks had arrived but never which ones —
+         * so a single lost chunk stranded a file with no way to ask for it.
+         *
+         * `blobKeyVersion` records which key the in-flight blob's slots were encrypted under.
+         * Slots are stored exactly as received so they can be retransmitted verbatim, which
+         * means one blob cannot mix key versions.
+         *
+         * Additive only — no table rebuild, so existing rows are untouched. Rows mid-download
+         * are moved back to PENDING: their progress lived entirely in a directory listing that
+         * this release stops maintaining, so the honest reading of their state is "unknown",
+         * and the blob will rebuild real accounting as chunks arrive.
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE shared_files ADD COLUMN chunkBitmap BLOB")
+                db.execSQL("ALTER TABLE shared_files ADD COLUMN blobKeyVersion INTEGER NOT NULL DEFAULT 0")
+                db.execSQL(
+                    "UPDATE shared_files SET downloadState = 'PENDING', chunksReceived = 0 " +
+                        "WHERE downloadState = 'DOWNLOADING'"
+                )
+            }
+        }
+
         private fun buildRoomDatabase(context: Context, passphrase: ByteArray): FamilySafetyDatabase {
             // The retired android-database-sqlcipher artifact loaded its native library
             // implicitly; net.zetetic:sqlcipher-android requires the caller to do it. Without
@@ -122,7 +149,7 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
                 DATABASE_NAME
             )
                 .openHelperFactory(SupportOpenHelperFactory(passphrase))
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 // Deliberately NOT fallbackToDestructiveMigration(). It used to be here, and
                 // it turns any mistake in a migration into a silent wipe of every user's chat
                 // history and location history — data that exists on no server and cannot be

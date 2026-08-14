@@ -36,12 +36,47 @@ interface SharedFileDao {
         chunksReceived: Int
     )
 
+    /**
+     * Record a chunk arrival: the updated bitmap, its popcount, and the resulting state.
+     *
+     * Separate from [updateDownloadProgress] because that statement also writes `localPath`,
+     * setting it to null on every progress update — harmless while downloading, but it means
+     * progress and completion cannot share a statement.
+     */
+    @Query("""
+        UPDATE shared_files
+        SET chunkBitmap = :bitmap,
+            chunksReceived = :chunksReceived,
+            downloadState = :state,
+            blobKeyVersion = :blobKeyVersion
+        WHERE fileId = :fileId
+    """)
+    suspend fun updateChunkState(
+        fileId: String,
+        bitmap: ByteArray?,
+        chunksReceived: Int,
+        state: String,
+        blobKeyVersion: Int
+    )
+
     @Query("""
         UPDATE shared_files
         SET isDeleted = 1, deletedByMemberId = :deletedBy, deletedAt = :deletedAt
         WHERE fileId = :fileId
     """)
     suspend fun markDeleted(fileId: String, deletedBy: String, deletedAt: Long)
+
+    /**
+     * Files that still need chunks. Drives both the startup reconcile and, from Phase 2, the
+     * repair loop. `getPendingFiles` only matched the literal 'PENDING' state, so it missed
+     * everything already part-downloaded — which is exactly the set that gets stuck.
+     */
+    @Query("""
+        SELECT * FROM shared_files
+        WHERE isDeleted = 0 AND downloadState IN ('PENDING', 'DOWNLOADING', 'FAILED')
+        ORDER BY uploadedAt DESC
+    """)
+    suspend fun getIncompleteFiles(): List<SharedFileEntity>
 
     /** Total bytes of non-deleted files that are fully downloaded. */
     @Query("SELECT COALESCE(SUM(sizeBytes), 0) FROM shared_files WHERE isDeleted = 0")

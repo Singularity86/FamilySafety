@@ -11,6 +11,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -49,6 +50,13 @@ class SharedFileRepository @Inject constructor(
     private val _uploadProgress = MutableStateFlow<UploadProgress?>(null)
     val uploadProgress: StateFlow<UploadProgress?> = _uploadProgress.asStateFlow()
 
+    /**
+     * Blob storage plus the streaming paths. Constructed rather than injected: it owns no
+     * state beyond per-file locks and needs only the directory, which is resolved lazily
+     * because external storage may not be mounted when the repository is built.
+     */
+    private val fileStore = ChunkedFileStore { filesDir() }
+
     companion object {
         private const val TAG = "SharedFileRepository"
         const val MAX_TOTAL_BYTES = 500L * 1024 * 1024   // 500 MB
@@ -58,7 +66,24 @@ class SharedFileRepository @Inject constructor(
         private const val FILE_KEY_SALT = "familysafety-files-v1"
         /** Grid the encrypted manifest is padded to, so its size hides the file count. */
         private const val MANIFEST_PAD_BYTES = 1024
+
+        /**
+         * Delay between chunk publishes. Paho's default in-flight window is 10 unacked
+         * messages, and MqttTransport treats a publish exception as a dropped connection —
+         * it queues the message, marks itself disconnected and schedules a reconnect. Pacing
+         * keeps a large upload from knocking the app off its own broker.
+         */
+        private const val PUBLISH_PACING_MS = 15L
+
+        /** Free space kept in reserve when staging an upload. */
+        private const val STAGING_HEADROOM_BYTES = 16L * 1024 * 1024
+
+        /** Cap on indices in one repair request, so it fits in a single message. */
+        const val MAX_MISSING_PER_REQUEST = 256
     }
+
+    /** Bytes one chunk occupies in the blob: nonce + ciphertext + GCM tag. */
+    private fun strideBytes(): Int = fileStore.strideFor(CHUNK_SIZE, NONCE_BYTES, GCM_TAG_BITS)
 
     // =========================================================================
     // QUERIES
@@ -77,104 +102,168 @@ class SharedFileRepository @Inject constructor(
      * The uploader's device marks the file as COMPLETE immediately (no need to receive own chunks).
      */
     suspend fun uploadFile(uri: Uri): Result<Unit> {
+        var stagedFileId: String? = null
         return try {
             val groupId = groupStateManager.groupDefinition.value?.groupId
                 ?: return Result.failure(IllegalStateException("No group available"))
 
-            // Read bytes
-            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                ?: return Result.failure(IllegalArgumentException("Cannot read file"))
+            val fileName = queryDisplayName(uri)
+            val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+            val declaredSize = queryDeclaredSize(uri)
 
-            // Quota check
+            // Quota is checked against the size the provider declares, before a byte is read.
+            // The old order read the whole file into memory first and only then asked whether
+            // it would fit, so an oversized file was refused only after paying for it.
             val currentUsed = sharedFileDao.getTotalSizeBytes()
-            if (currentUsed + bytes.size > MAX_TOTAL_BYTES) {
+            if (declaredSize != null && currentUsed + declaredSize > MAX_TOTAL_BYTES) {
                 return Result.failure(IllegalStateException("Group storage limit of 500 MB reached"))
             }
+            if (declaredSize != null) {
+                val needed = declaredSize + STAGING_HEADROOM_BYTES
+                val available = fileStore.usableSpaceBytes()
+                if (available in 1 until needed) {
+                    return Result.failure(
+                        IllegalStateException(
+                            "Not enough storage: ${declaredSize / 1024} KB needed, " +
+                                "${available / 1024} KB free"
+                        )
+                    )
+                }
+            }
 
-            // Metadata
-            val contentHash = sha256Hex(bytes)
+            val fileId = UUID.randomUUID().toString()
+            stagedFileId = fileId
+
+            // Pass 1: stream the source to our own copy, hashing as it goes. Peak memory is
+            // one buffer, not the file. This replaced readBytes() + toList().chunked(), which
+            // held the whole file several times over and made large uploads an OOM.
+            val (contentHash, sizeBytes) = context.contentResolver.openInputStream(uri)?.use { input ->
+                fileStore.copyAndHash(input, fileStore.contentFile(fileId), CHUNK_SIZE)
+            } ?: return Result.failure(IllegalArgumentException("Cannot read file"))
+
+            // The hash is only known after streaming, so the duplicate check moves here and
+            // has to clean up the copy it just made.
             val existingFiles = sharedFileDao.getAllFiles()
             if (existingFiles.any { it.contentHash == contentHash && !it.isDeleted }) {
                 Timber.d("$TAG: File already in library (duplicate hash), skipping upload")
+                fileStore.deleteAll(fileId)
+                stagedFileId = null
                 return Result.success(Unit)
             }
 
-            val fileName = queryDisplayName(uri)
-            val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
-            val fileId = UUID.randomUUID().toString()
+            if (currentUsed + sizeBytes > MAX_TOTAL_BYTES) {
+                fileStore.deleteAll(fileId)
+                stagedFileId = null
+                return Result.failure(IllegalStateException("Group storage limit of 500 MB reached"))
+            }
 
-            // Group file key, plus the version tag receivers need to pick the same key
             val (fileKey, fileKeyVersion) = resolveEncryptionKey(groupId)
+            val totalChunks = chunkCountFor(sizeBytes)
+            val contentFile = fileStore.contentFile(fileId)
 
             // Persist metadata before publishing chunks so receivers can create their
-            // pending records from the manifest before chunk messages arrive.
+            // pending records from the manifest before chunk messages arrive. The uploader
+            // already holds the plaintext, so it is COMPLETE from the start — there is no
+            // window where its own file looks half-downloaded.
             val entity = SharedFileEntity(
                 fileId = fileId,
                 name = fileName,
                 mimeType = mimeType,
-                sizeBytes = bytes.size.toLong(),
+                sizeBytes = sizeBytes,
                 contentHash = contentHash,
                 uploaderMemberId = groupStateManager.localMember.value?.memberId ?: "",
                 uploadedAt = System.currentTimeMillis(),
-                chunkCount = 0,
-                localPath = null,
-                chunksReceived = 0,
-                downloadState = "PENDING"
+                chunkCount = totalChunks,
+                localPath = contentFile.absolutePath,
+                chunksReceived = totalChunks,
+                downloadState = "COMPLETE",
+                chunkBitmap = null,
+                blobKeyVersion = fileKeyVersion
             )
-
-            // Split into 32 KB chunks, encrypt each
-            val chunks = bytes.toList().chunked(CHUNK_SIZE).map { it.toByteArray() }
-            val totalChunks = chunks.size
+            sharedFileDao.upsert(entity)
+            broadcastManifest(groupId)
 
             _uploadProgress.value = UploadProgress(fileId, fileName, 0, totalChunks)
 
-            sharedFileDao.upsert(entity.copy(chunkCount = totalChunks))
+            // Pass 2: read our copy back a chunk at a time, encrypt and publish. Nothing
+            // whole-file is ever resident.
+            publishChunksFrom(
+                source = contentFile,
+                groupId = groupId,
+                fileId = fileId,
+                totalChunks = totalChunks,
+                fileKey = fileKey,
+                fileKeyVersion = fileKeyVersion
+            ) { published ->
+                _uploadProgress.value = UploadProgress(fileId, fileName, published, totalChunks)
+            }
+
             broadcastManifest(groupId)
 
-            chunks.forEachIndexed { index, chunk ->
-                val encryptedChunk = encrypt(chunk, fileKey)
+            _uploadProgress.value = null
+            stagedFileId = null
+            Timber.i("$TAG: Uploaded $fileName ($totalChunks chunks, $sizeBytes bytes)")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            _uploadProgress.value = null
+            // A half-written copy is worse than none: it counts against the quota and would be
+            // served to peers as if it were the real file.
+            stagedFileId?.let { fileStore.deleteAll(it) }
+            Timber.e(e, "$TAG: Upload failed")
+            Result.failure(e)
+        }
+    }
+
+    /** Chunks a file of [sizeBytes] splits into. Zero-length files still count as one chunk. */
+    private fun chunkCountFor(sizeBytes: Long): Int =
+        if (sizeBytes <= 0) 1 else ((sizeBytes + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt()
+
+    /**
+     * Read [source] a chunk at a time, encrypt each and broadcast it.
+     *
+     * Publishing is paced. Paho's default in-flight window is 10, and `publishRaw` treats any
+     * publish exception as a lost connection — it queues the message, marks the transport
+     * disconnected and schedules a reconnect. A tight loop over thousands of chunks therefore
+     * disconnects the app from its own broker. The old byte-boxing path was slow enough to
+     * hide that; streaming is not.
+     */
+    private suspend fun publishChunksFrom(
+        source: File,
+        groupId: String,
+        fileId: String,
+        totalChunks: Int,
+        fileKey: ByteArray,
+        fileKeyVersion: Int,
+        onProgress: (Int) -> Unit
+    ) {
+        val buffer = ByteArray(CHUNK_SIZE)
+        source.inputStream().buffered().use { input ->
+            for (index in 0 until totalChunks) {
+                var filled = 0
+                while (filled < CHUNK_SIZE) {
+                    val read = input.read(buffer, filled, CHUNK_SIZE - filled)
+                    if (read <= 0) break
+                    filled += read
+                }
+                if (filled == 0 && index > 0) break
+
+                val plain = if (filled == CHUNK_SIZE) buffer else buffer.copyOf(filled)
                 val chunkMsg = FileChunkMessage(
                     fileId = fileId,
                     chunkIndex = index,
                     totalChunks = totalChunks,
-                    data = Base64.getEncoder().encodeToString(encryptedChunk),
+                    data = Base64.getEncoder().encodeToString(encrypt(plain, fileKey)),
                     keyVersion = fileKeyVersion
                 )
-                val topic = MqttConfig.getFileChunkTopic(groupId, fileId, index)
-
-                // Use unified transport broadcast
                 transportProvider.broadcastMessage(
-                    topic = topic,
+                    topic = MqttConfig.getFileChunkTopic(groupId, fileId, index),
                     payload = json.encodeToString(chunkMsg).toByteArray(),
                     qos = MqttConfig.QOS_AT_LEAST_ONCE,
                     retained = false
                 )
-                
-                _uploadProgress.value = UploadProgress(fileId, fileName, index + 1, totalChunks)
+                onProgress(index + 1)
+                if (PUBLISH_PACING_MS > 0) delay(PUBLISH_PACING_MS)
             }
-
-            // Save file locally (uploader already has the plaintext)
-            val localPath = saveToLocalStorage(fileId, bytes)
-
-            sharedFileDao.upsert(
-                entity.copy(
-                    chunkCount = totalChunks,
-                    localPath = localPath,
-                    chunksReceived = totalChunks,
-                    downloadState = "COMPLETE"
-                )
-            )
-
-            // Broadcast updated manifest (retained so new members get it immediately)
-            broadcastManifest(groupId)
-
-            _uploadProgress.value = null
-            Timber.i("$TAG: Uploaded $fileName ($totalChunks chunks)")
-            Result.success(Unit)
-        } catch (e: Exception) {
-            _uploadProgress.value = null
-            Timber.e(e, "$TAG: Upload failed")
-            Result.failure(e)
         }
     }
 
@@ -196,7 +285,7 @@ class SharedFileRepository @Inject constructor(
                     if (existing == null) {
                         // New file — create a PENDING record to trigger download
                         sharedFileDao.upsert(sharedFile.toEntity())
-                        tryAssembleFile(sharedFile.fileId)
+                        reconcileFile(sharedFile.fileId)
                     } else if (sharedFile.isDeleted && !existing.isDeleted) {
                         // Remotely deleted
                         sharedFileDao.markDeleted(
@@ -204,9 +293,9 @@ class SharedFileRepository @Inject constructor(
                             sharedFile.deletedByMemberId ?: "",
                             sharedFile.deletedAt ?: System.currentTimeMillis()
                         )
-                        deleteLocalFile(sharedFile.fileId)
+                        fileStore.deleteAll(sharedFile.fileId)
                     } else if (existing.downloadState != "COMPLETE") {
-                        tryAssembleFile(sharedFile.fileId)
+                        reconcileFile(sharedFile.fileId)
                     }
                 }
             } catch (e: Exception) {
@@ -239,39 +328,56 @@ class SharedFileRepository @Inject constructor(
                     )
                     return@launch
                 }
-                val plainChunk = decrypt(encryptedBytes, fileKey)
 
-                writeTempChunk(fileId, chunkIndex, plainChunk)
-
-                if (entity == null) {
-                    Timber.d("$TAG: Stashed chunk $chunkIndex for $fileId before manifest arrived")
+                // Authenticate before storing. GCM's tag is what proves the chunk is intact
+                // and really came from a holder of the group key, so a corrupt or forged chunk
+                // never reaches the blob and never sets a bit.
+                try {
+                    decrypt(encryptedBytes, fileKey)
+                } catch (e: Exception) {
+                    Timber.w("$TAG: chunk $chunkIndex of $fileId failed authentication — dropping")
                     return@launch
                 }
 
-                // Count unique chunk files on disk — naturally handles concurrent coroutines
-                // and at-least-once redelivery (same chunk overwrites same file = still 1 count).
-                val tmpDir = File(filesDir(), "$fileId/.tmp")
-                val received = tmpDir.listFiles()?.size ?: 0
+                if (entity == null) {
+                    // Nothing to account against yet. Dropping is safe now in a way it was not
+                    // before: the file will be re-requested once the manifest lands, whereas
+                    // the old code wrote the chunk to disk where nothing ever counted it.
+                    Timber.d("$TAG: chunk $chunkIndex for $fileId arrived before its manifest")
+                    return@launch
+                }
 
-                sharedFileDao.updateDownloadProgress(fileId, "DOWNLOADING", null, received)
+                // Slots hold one key version. A repair chunk under a different version cannot
+                // be mixed in, because slots are stored verbatim for retransmission.
+                if (entity.blobKeyVersion != 0 && entity.blobKeyVersion != chunkMsg.keyVersion) {
+                    Timber.w(
+                        "$TAG: chunk $chunkIndex of $fileId is key version " +
+                            "${chunkMsg.keyVersion}, blob holds ${entity.blobKeyVersion} — dropping"
+                    )
+                    return@launch
+                }
 
-                if (received >= entity.chunkCount) {
-                    // Re-fetch before assembling to guard against two coroutines both seeing
-                    // received == chunkCount simultaneously.
-                    val fresh = sharedFileDao.getFileById(fileId) ?: return@launch
-                    if (fresh.downloadState == "COMPLETE") return@launch
+                val stride = strideBytes()
+                val updated = fileStore.writeChunk(
+                    fileId = fileId,
+                    chunkIndex = chunkIndex,
+                    chunkCount = entity.chunkCount,
+                    stride = stride,
+                    ciphertext = encryptedBytes,
+                    currentBitmap = entity.chunkBitmap
+                ) ?: return@launch
 
-                    val assembled = assembleChunks(fileId, entity.chunkCount)
-                    val hash = sha256Hex(assembled)
-                    if (hash != entity.contentHash) {
-                        Timber.e("$TAG: Hash mismatch for $fileId — discarding")
-                        sharedFileDao.updateDownloadProgress(fileId, "FAILED", null, received)
-                        return@launch
-                    }
-                    val localPath = saveToLocalStorage(fileId, assembled)
-                    cleanTempChunks(fileId)
-                    sharedFileDao.updateDownloadProgress(fileId, "COMPLETE", localPath, received)
-                    Timber.i("$TAG: Assembled file ${entity.name}")
+                val received = ChunkBitmap.count(updated, entity.chunkCount)
+                sharedFileDao.updateChunkState(
+                    fileId = fileId,
+                    bitmap = updated,
+                    chunksReceived = received,
+                    state = "DOWNLOADING",
+                    blobKeyVersion = chunkMsg.keyVersion
+                )
+
+                if (ChunkBitmap.isComplete(updated, entity.chunkCount)) {
+                    completeFile(fileId)
                 }
             } catch (e: Exception) {
                 Timber.e(e, "$TAG: Failed to handle chunk $chunkIndex for $fileId")
@@ -291,24 +397,28 @@ class SharedFileRepository @Inject constructor(
 
                 broadcastManifest(groupId)
 
-                sharedFileDao.getAllFiles().filter { !it.isDeleted && it.downloadState == "COMPLETE" }.forEach { entity ->
-                    val localPath = entity.localPath ?: return@forEach
-                    val bytes = File(localPath).takeIf { it.exists() }?.readBytes() ?: return@forEach
-                    val chunks = bytes.toList().chunked(CHUNK_SIZE).map { it.toByteArray() }
-                    chunks.forEachIndexed { index, chunk ->
-                        val encryptedChunk = encrypt(chunk, fileKey)
-                        val chunkMsg = FileChunkMessage(
-                            fileId = entity.fileId,
-                            chunkIndex = index,
-                            totalChunks = chunks.size,
-                            data = Base64.getEncoder().encodeToString(encryptedChunk),
-                            keyVersion = fileKeyVersion
-                        )
-                        val topic = MqttConfig.getFileChunkTopic(groupId, entity.fileId, index)
-                        transportProvider.broadcastMessage(topic, json.encodeToString(chunkMsg).toByteArray(), MqttConfig.QOS_AT_LEAST_ONCE, false)
-                    }
+                // Streams each file rather than reading it whole. This path is worse than the
+                // upload for memory, because it runs over *every* complete file in the library
+                // back to back, so one request could hold several files' worth of boxed bytes
+                // at once. It stays all-or-nothing only until Phase 2 replaces it with a
+                // request for specific missing chunks.
+                val complete = sharedFileDao.getAllFiles()
+                    .filter { !it.isDeleted && it.downloadState == "COMPLETE" }
+                var republished = 0
+                complete.forEach { entity ->
+                    val source = entity.localPath?.let { File(it) }?.takeIf { it.exists() }
+                        ?: return@forEach
+                    publishChunksFrom(
+                        source = source,
+                        groupId = groupId,
+                        fileId = entity.fileId,
+                        totalChunks = chunkCountFor(source.length()),
+                        fileKey = fileKey,
+                        fileKeyVersion = fileKeyVersion
+                    ) { }
+                    republished++
                 }
-                Timber.i("$TAG: Re-broadcast all files in response to request")
+                Timber.i("$TAG: Re-broadcast $republished files in response to request")
             } catch (e: Exception) {
                 Timber.e(e, "$TAG: Failed to handle file request")
             }
@@ -328,7 +438,7 @@ class SharedFileRepository @Inject constructor(
 
             val now = System.currentTimeMillis()
             sharedFileDao.markDeleted(fileId, localMemberId, now)
-            deleteLocalFile(fileId)
+            fileStore.deleteAll(fileId)
             broadcastManifest(groupId)
             Timber.i("$TAG: Deleted file $fileId")
             Result.success(Unit)
@@ -466,32 +576,142 @@ class SharedFileRepository @Inject constructor(
         return manifest.copy(pad = ".".repeat(target - bare))
     }
 
-    private suspend fun tryAssembleFile(fileId: String) {
+    /**
+     * Turn a fully-received blob into the finished file.
+     *
+     * Streams the blob out slot by slot, decrypting and hashing in one pass, so assembly never
+     * holds more than a chunk. The old path built the whole file in a `ByteArrayOutputStream`,
+     * copied it again with `toByteArray()`, hashed that copy and wrote it — four full-size
+     * allocations for one file.
+     *
+     * Writes to a scratch file and renames on success, so a partial assembly can never be
+     * mistaken for a complete download.
+     */
+    private suspend fun completeFile(fileId: String) {
         val entity = sharedFileDao.getFileById(fileId) ?: return
         if (entity.downloadState == "COMPLETE") return
+        if (!ChunkBitmap.isComplete(entity.chunkBitmap, entity.chunkCount)) return
 
-        val tmpDir = File(filesDir(), "$fileId/.tmp")
-        val received = tmpDir.listFiles()?.size ?: 0
-        if (received == 0) return
-
-        sharedFileDao.updateDownloadProgress(fileId, "DOWNLOADING", null, received)
-        if (received < entity.chunkCount) return
-
-        val fresh = sharedFileDao.getFileById(fileId) ?: return
-        if (fresh.downloadState == "COMPLETE") return
-
-        val assembled = assembleChunks(fileId, entity.chunkCount)
-        val hash = sha256Hex(assembled)
-        if (hash != entity.contentHash) {
-            Timber.e("$TAG: Hash mismatch for $fileId, discarding")
-            sharedFileDao.updateDownloadProgress(fileId, "FAILED", null, received)
+        val groupId = groupStateManager.groupDefinition.value?.groupId ?: return
+        val fileKey = keyForVersion(groupId, entity.blobKeyVersion) ?: run {
+            Timber.w("$TAG: cannot complete $fileId — no key for version ${entity.blobKeyVersion}")
             return
         }
 
-        val localPath = saveToLocalStorage(fileId, assembled)
-        cleanTempChunks(fileId)
-        sharedFileDao.updateDownloadProgress(fileId, "COMPLETE", localPath, received)
+        val scratch = File(fileStore.contentFile(fileId).parentFile, "content.part")
+        val hash = scratch.outputStream().buffered().use { out ->
+            fileStore.decryptTo(
+                fileId = fileId,
+                chunkCount = entity.chunkCount,
+                stride = strideBytes(),
+                out = out
+            ) { slot -> decrypt(slot, fileKey) }
+        }
+
+        if (hash == null) {
+            runCatching { scratch.delete() }
+            Timber.w("$TAG: could not assemble $fileId — will retry when more chunks arrive")
+            return
+        }
+
+        if (hash != entity.contentHash) {
+            // Every chunk authenticated individually, so this is not transmission corruption —
+            // it means the manifest's hash disagrees with bytes that all verified under the
+            // group key. Clear the accounting and let the file be fetched again rather than
+            // parking it in a terminal state with its partial data left behind, which is what
+            // the old FAILED path did.
+            Timber.e("$TAG: Hash mismatch for $fileId — discarding and re-fetching")
+            runCatching { scratch.delete() }
+            fileStore.discardBlob(fileId)
+            sharedFileDao.updateChunkState(fileId, null, 0, "PENDING", 0)
+            return
+        }
+
+        val target = fileStore.contentFile(fileId)
+        runCatching { target.delete() }
+        if (!scratch.renameTo(target)) {
+            runCatching { scratch.delete() }
+            Timber.e("$TAG: could not move assembled $fileId into place")
+            return
+        }
+
+        fileStore.discardBlob(fileId)
+        sharedFileDao.updateDownloadProgress(fileId, "COMPLETE", target.absolutePath, entity.chunkCount)
         Timber.i("$TAG: Assembled file ${entity.name}")
+    }
+
+    /**
+     * Reconcile a file's recorded accounting against what is actually on disk, then finish it
+     * if it turns out to be complete.
+     *
+     * The bitmap is a cache; the blob is the truth. When the bitmap is missing or the wrong
+     * width — an upgraded row, or a process killed between writing a chunk and committing the
+     * row — it is rebuilt by testing which slots authenticate. An unwritten slot is zeros and
+     * fails the GCM tag, so that test is exact, and it lets the database and the filesystem
+     * reconcile without a transaction spanning both.
+     */
+    private suspend fun reconcileFile(fileId: String) {
+        val entity = sharedFileDao.getFileById(fileId) ?: return
+        if (entity.downloadState == "COMPLETE" || entity.isDeleted) return
+        if (entity.chunkCount <= 0) return
+
+        val expectedWidth = ChunkBitmap.sizeFor(entity.chunkCount)
+        val needsRebuild = entity.chunkBitmap == null || entity.chunkBitmap.size != expectedWidth
+
+        val bitmap = if (needsRebuild && fileStore.blobFile(fileId).exists()) {
+            val groupId = groupStateManager.groupDefinition.value?.groupId ?: return
+            val keyVersion = if (entity.blobKeyVersion != 0) entity.blobKeyVersion else FILE_KEY_VERSION_GROUP_SECRET
+            val key = keyForVersion(groupId, keyVersion) ?: return
+            fileStore.rebuildBitmap(fileId, entity.chunkCount, strideBytes()) { slot ->
+                decrypt(slot, key)
+            }.also {
+                Timber.d("$TAG: rebuilt bitmap for $fileId from blob")
+            }
+        } else {
+            entity.chunkBitmap
+        }
+
+        val received = ChunkBitmap.count(bitmap, entity.chunkCount)
+        if (bitmap != null && !bitmap.contentEquals(entity.chunkBitmap)) {
+            sharedFileDao.updateChunkState(
+                fileId, bitmap, received, entity.downloadState, entity.blobKeyVersion
+            )
+        }
+
+        if (ChunkBitmap.isComplete(bitmap, entity.chunkCount)) {
+            completeFile(fileId)
+        }
+    }
+
+    /**
+     * Chunks this device is still missing for [fileId], ascending.
+     *
+     * This is the question the old directory-count could not answer, and the reason a single
+     * lost chunk stranded a file indefinitely. Phase 2's targeted repair asks a peer for
+     * exactly this list instead of triggering a re-broadcast of the entire library.
+     */
+    suspend fun missingChunks(fileId: String, limit: Int = MAX_MISSING_PER_REQUEST): List<Int> {
+        val entity = sharedFileDao.getFileById(fileId) ?: return emptyList()
+        if (entity.downloadState == "COMPLETE") return emptyList()
+        return ChunkBitmap.missingIndices(entity.chunkBitmap, entity.chunkCount, limit)
+    }
+
+    /**
+     * Clear storage left by the pre-blob layout and re-check anything unfinished.
+     *
+     * The `.tmp` directories held plaintext chunks and leaked on every hash mismatch, because
+     * cleanup only ran on the success path. Nothing references them now.
+     */
+    fun reconcileOnStartup() {
+        scope.launch {
+            try {
+                val swept = fileStore.sweepLegacyTempDirs()
+                if (swept > 0) Timber.i("$TAG: removed $swept legacy temp chunk directories")
+                sharedFileDao.getIncompleteFiles().forEach { reconcileFile(it.fileId) }
+            } catch (e: Exception) {
+                Timber.e(e, "$TAG: startup reconcile failed")
+            }
+        }
     }
 
     /**
@@ -587,35 +807,16 @@ class SharedFileRepository @Inject constructor(
         File(context.getExternalFilesDir(null) ?: context.filesDir, "familysafety_files")
             .also { it.mkdirs() }
 
-    private fun saveToLocalStorage(fileId: String, bytes: ByteArray): String {
-        val dir = File(filesDir(), fileId).also { it.mkdirs() }
-        val file = File(dir, "content")
-        file.writeBytes(bytes)
-        return file.absolutePath
-    }
-
-    private fun deleteLocalFile(fileId: String) {
-        File(filesDir(), fileId).deleteRecursively()
-    }
-
-    private fun writeTempChunk(fileId: String, chunkIndex: Int, bytes: ByteArray) {
-        val tmpDir = File(filesDir(), "$fileId/.tmp").also { it.mkdirs() }
-        File(tmpDir, "chunk_$chunkIndex").writeBytes(bytes)
-    }
-
-    private fun assembleChunks(fileId: String, chunkCount: Int): ByteArray {
-        val tmpDir = File(filesDir(), "$fileId/.tmp")
-        val out = java.io.ByteArrayOutputStream()
-        for (i in 0 until chunkCount) {
-            val chunk = File(tmpDir, "chunk_$i")
-            out.write(chunk.readBytes())
-        }
-        return out.toByteArray()
-    }
-
-    private fun cleanTempChunks(fileId: String) {
-        File(filesDir(), "$fileId/.tmp").deleteRecursively()
-    }
+    /** Size the provider declares for a picked document, before anything is read. */
+    private fun queryDeclaredSize(uri: Uri): Long? = runCatching {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)
+            ?.use { cursor ->
+                val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (index >= 0 && cursor.moveToFirst() && !cursor.isNull(index)) {
+                    cursor.getLong(index)
+                } else null
+            }
+    }.getOrNull()?.takeIf { it > 0 }
 
     // =========================================================================
     // ENTITY CONVERTERS

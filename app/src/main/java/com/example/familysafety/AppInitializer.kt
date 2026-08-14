@@ -226,6 +226,12 @@ class AppInitializer @Inject constructor(
                 // REPLACE resetting a healthy worker's schedule.
                 ServiceWatchdogWorker.scheduleIfNeeded(context)
 
+                // Clear plaintext chunk directories left by the pre-blob layout, and re-check
+                // every unfinished file against what is actually on disk. A download
+                // interrupted by the process dying used to stay stuck until someone tapped
+                // the file; now it is picked up on the next launch.
+                sharedFileRepository.reconcileOnStartup()
+
                 // Watch for membership changes (new members added/removed) and
                 // update MQTT subscriptions + encryption keys automatically.
                 var previousMemberIds: Set<String> = groupDef.members.map { it.memberId }.toSet()

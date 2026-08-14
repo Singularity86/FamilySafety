@@ -20,5 +20,59 @@ data class SharedFileEntity(
     val localPath: String? = null,
     val chunksReceived: Int = 0,
     /** PENDING | DOWNLOADING | COMPLETE | FAILED */
-    val downloadState: String = "PENDING"
-)
+    val downloadState: String = "PENDING",
+
+    /**
+     * Which chunks we hold, one bit each (see [com.example.familysafety.files.ChunkBitmap]).
+     *
+     * [chunksReceived] is a denormalised popcount of this, kept so the UI never has to decode
+     * the bitmap. The bitmap is the part that matters: it is what makes "which chunks are
+     * missing" answerable, which the previous directory-listing count could not do. Treated as
+     * a cache over the on-disk blob, which can rebuild it by testing which slots authenticate.
+     *
+     * Null for rows written before this existed; read as "nothing held".
+     */
+    val chunkBitmap: ByteArray? = null,
+
+    /**
+     * Which key version the in-flight blob's chunks were encrypted under.
+     *
+     * Slots are stored as received, so one blob cannot mix key versions — a repair chunk under
+     * a different version has to be refused rather than written. Meaningless once the file is
+     * COMPLETE and the blob is gone.
+     */
+    val blobKeyVersion: Int = 0
+) {
+    // Room's generated equals/hashCode would compare the ByteArray by reference. That makes
+    // two rows with identical bitmaps unequal, which quietly breaks Flow distinctUntilChanged
+    // and any test that compares entities.
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SharedFileEntity) return false
+        return fileId == other.fileId &&
+            name == other.name &&
+            mimeType == other.mimeType &&
+            sizeBytes == other.sizeBytes &&
+            contentHash == other.contentHash &&
+            uploaderMemberId == other.uploaderMemberId &&
+            uploadedAt == other.uploadedAt &&
+            chunkCount == other.chunkCount &&
+            isDeleted == other.isDeleted &&
+            deletedByMemberId == other.deletedByMemberId &&
+            deletedAt == other.deletedAt &&
+            localPath == other.localPath &&
+            chunksReceived == other.chunksReceived &&
+            downloadState == other.downloadState &&
+            blobKeyVersion == other.blobKeyVersion &&
+            (chunkBitmap?.contentEquals(other.chunkBitmap) ?: (other.chunkBitmap == null))
+    }
+
+    override fun hashCode(): Int {
+        var result = fileId.hashCode()
+        result = 31 * result + chunkCount
+        result = 31 * result + chunksReceived
+        result = 31 * result + downloadState.hashCode()
+        result = 31 * result + (chunkBitmap?.contentHashCode() ?: 0)
+        return result
+    }
+}
