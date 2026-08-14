@@ -14,7 +14,20 @@ data class SharedFile(
     val chunkCount: Int,
     val isDeleted: Boolean = false,
     val deletedByMemberId: String? = null,
-    val deletedAt: Long? = null
+    val deletedAt: Long? = null,
+    /**
+     * Whether every device should hold a copy without being asked.
+     *
+     * The point of this feature is emergency documents — an insurance card is only useful if
+     * it is already on the phone when there is no signal. But "replicate everything" does not
+     * survive contact with a large file, so the uploader marks what actually matters and the
+     * rest is listed and fetched on demand.
+     *
+     * Defaults true, which is both the safe direction and what older peers imply by omitting
+     * the field: they replicate everything, so reading their files as essential matches what
+     * they will actually do.
+     */
+    val isEssential: Boolean = true
 )
 
 @Serializable
@@ -112,6 +125,36 @@ data class ChunkRepairRequest(
  * every member can already read the manifest and the chunks, so per-pair encryption here would
  * add cost without narrowing who can read it.
  */
+/**
+ * What one device holds, sent to each peer so the family can answer "is this document
+ * actually safe?"
+ *
+ * Modelled on the announce phase of `ReplicationManager` rather than on chat's delivery
+ * receipts, and the difference matters. A receipt is a per-event fact: lose it and it is gone
+ * forever. An announcement is a state summary — it self-heals on the next tick, and a member
+ * who has just joined gets the whole picture at once instead of only what happens next.
+ */
+@Serializable
+data class FileHoldingsAnnouncement(
+    val announcerId: String,
+    val holdings: List<FileHolding>,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+@Serializable
+data class FileHolding(
+    val fileId: String,
+    /** A peer holding different bytes under the same id is not a copy of this file. */
+    val contentHash: String,
+    /** COMPLETE | PARTIAL */
+    val state: String,
+    val chunksHeld: Int,
+    val chunkCount: Int
+)
+
+const val HOLDING_COMPLETE = "COMPLETE"
+const val HOLDING_PARTIAL = "PARTIAL"
+
 @Serializable
 data class EncryptedFileMessage(
     val keyVersion: Int,

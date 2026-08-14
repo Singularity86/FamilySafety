@@ -24,7 +24,7 @@ import javax.crypto.spec.SecretKeySpec
 class FileManifestEncryptionTest {
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val padBytes = 1024
+    private val padBytes = 2048
     private val nonceBytes = 12
     private val gcmTagBits = 128
 

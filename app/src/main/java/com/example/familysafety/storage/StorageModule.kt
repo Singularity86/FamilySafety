@@ -54,4 +54,12 @@ object StorageModule {
     ): SharedFileDao {
         return database.sharedFileDao()
     }
+
+    @Provides
+    @Singleton
+    fun provideFileAvailabilityDao(
+        database: FamilySafetyDatabase
+    ): FileAvailabilityDao {
+        return database.fileAvailabilityDao()
+    }
 }

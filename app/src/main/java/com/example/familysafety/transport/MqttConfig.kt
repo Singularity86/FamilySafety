@@ -157,4 +157,13 @@ object MqttConfig {
      */
     fun getFileRepairTopic(memberId: String): String =
         "familysafe/$memberId/files/repair"
+
+    /**
+     * A member publishes here to tell one peer which files it holds.
+     *
+     * Per-recipient and never retained: a retained per-recipient message is the pollution
+     * that left stale join approvals sitting on the broker indefinitely.
+     */
+    fun getFileAvailabilityTopic(memberId: String): String =
+        "familysafe/$memberId/files/availability"
 }

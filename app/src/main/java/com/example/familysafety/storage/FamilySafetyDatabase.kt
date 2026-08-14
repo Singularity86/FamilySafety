@@ -24,9 +24,10 @@ import java.security.SecureRandom
         LocationHistoryEntity::class,
         ChatMessageEntity::class,
         SharedFileEntity::class,
+        FileAvailabilityEntity::class,
         PendingLocationPublishEntity::class
     ],
-    version = 5,
+    version = 6,
     // Exported so each version's schema is committed as JSON under app/schemas/. That is what
     // makes a migration testable — MigrationTestHelper builds the old schema from the exported
     // file, applies the migration and asserts the result. Without it a migration can only be
@@ -39,6 +40,7 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
     abstract fun locationHistoryDao(): LocationHistoryDao
     abstract fun chatMessageDao(): ChatMessageDao
     abstract fun sharedFileDao(): SharedFileDao
+    abstract fun fileAvailabilityDao(): FileAvailabilityDao
     abstract fun pendingLocationPublishDao(): PendingLocationPublishDao
 
     companion object {
@@ -157,6 +159,36 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Essential pinning, and a record of what each peer holds.
+         *
+         * `isEssential` defaults to 1 so every existing file keeps replicating exactly as it
+         * did — the on-demand behaviour is opt-in per file, never something that silently
+         * stops an already-shared document from reaching a device.
+         *
+         * `file_availability` is what lets the app answer "this document is on three of four
+         * phones", which is the only assurance that actually matters for an emergency
+         * document and which nothing in the app could previously report.
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE shared_files ADD COLUMN isEssential INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `file_availability` (
+                        `fileId` TEXT NOT NULL,
+                        `memberId` TEXT NOT NULL,
+                        `contentHash` TEXT NOT NULL,
+                        `state` TEXT NOT NULL,
+                        `chunksHeld` INTEGER NOT NULL,
+                        `chunkCount` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`fileId`, `memberId`)
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_file_availability_fileId ON file_availability(fileId)")
+            }
+        }
+
         private fun buildRoomDatabase(context: Context, passphrase: ByteArray): FamilySafetyDatabase {
             // The retired android-database-sqlcipher artifact loaded its native library
             // implicitly; net.zetetic:sqlcipher-android requires the caller to do it. Without
@@ -170,7 +202,7 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
                 DATABASE_NAME
             )
                 .openHelperFactory(SupportOpenHelperFactory(passphrase))
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 // Deliberately NOT fallbackToDestructiveMigration(). It used to be here, and
                 // it turns any mistake in a migration into a silent wipe of every user's chat
                 // history and location history — data that exists on no server and cannot be

@@ -254,7 +254,15 @@ class AppInitializer @Inject constructor(
                                 val newMemberIds = updatedGroup.members.map { it.memberId }.toSet()
                                 if (newMemberIds.size > previousMemberIds.size) {
                                     sharedFileRepository.syncNewMember(updatedGroup.groupId)
+                                    // A joiner has no idea what anyone holds; tell it now
+                                    // rather than making it wait for the next periodic tick.
+                                    sharedFileRepository.announceHoldings(force = true)
                                     Timber.d("$TAG: Triggered file sync for new member(s)")
+                                }
+                                if (newMemberIds != previousMemberIds) {
+                                    // A departed device's claim must not keep a document
+                                    // looking safer than it is.
+                                    sharedFileRepository.pruneAvailability(newMemberIds.toList())
                                 }
                                 previousMemberIds = newMemberIds
                             } catch (e: Exception) {

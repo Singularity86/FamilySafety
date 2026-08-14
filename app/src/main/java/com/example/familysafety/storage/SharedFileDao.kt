@@ -122,6 +122,9 @@ interface SharedFileDao {
         peerId: String?
     )
 
+    @Query("UPDATE shared_files SET isEssential = :essential WHERE fileId = :fileId")
+    suspend fun setEssential(fileId: String, essential: Boolean)
+
     /** Clear the retry schedule, e.g. when the user asks for an immediate retry. */
     @Query("""
         UPDATE shared_files

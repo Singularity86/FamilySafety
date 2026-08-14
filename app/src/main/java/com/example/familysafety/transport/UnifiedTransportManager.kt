@@ -237,6 +237,11 @@ class UnifiedTransportManager @Inject constructor(
                         sharedFileRepositoryProvider.get().handleFileRequest(payload.toByteArray())
                     }
 
+                    topic.endsWith("/files/availability") -> {
+                        sharedFileRepositoryProvider.get()
+                            .handleHoldingsAnnouncement(payload.toByteArray())
+                    }
+
                     topic.endsWith("/files/repair") -> {
                         sharedFileRepositoryProvider.get()
                             .handleChunkRepairRequest(payload.toByteArray())

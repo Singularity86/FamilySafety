@@ -58,7 +58,16 @@ data class SharedFileEntity(
     val nextAttemptAt: Long = 0,
     val lastError: String? = null,
     /** Member last asked for missing chunks, so requests rotate rather than nagging one peer. */
-    val lastRepairPeerId: String? = null
+    val lastRepairPeerId: String? = null,
+
+    /**
+     * Whether this device fetches the file without being asked.
+     *
+     * Essential files are chased in the background until every device holds one; the rest sit
+     * listed until someone opens them. Defaults true so nothing silently stops replicating,
+     * including files that predate the column.
+     */
+    val isEssential: Boolean = true
 ) {
     // Room's generated equals/hashCode would compare the ByteArray by reference. That makes
     // two rows with identical bitmaps unequal, which quietly breaks Flow distinctUntilChanged
@@ -86,6 +95,7 @@ data class SharedFileEntity(
             nextAttemptAt == other.nextAttemptAt &&
             lastError == other.lastError &&
             lastRepairPeerId == other.lastRepairPeerId &&
+            isEssential == other.isEssential &&
             (chunkBitmap?.contentEquals(other.chunkBitmap) ?: (other.chunkBitmap == null))
     }
 

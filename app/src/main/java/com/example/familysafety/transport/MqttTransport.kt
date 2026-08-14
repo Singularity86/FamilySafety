@@ -353,6 +353,10 @@ class MqttTransport @Inject constructor(
         topics.add(MqttConfig.getFileRepairTopic(id))
         qosLevels.add(MqttConfig.DEFAULT_QOS)
 
+        // Peers telling us which files they hold
+        topics.add(MqttConfig.getFileAvailabilityTopic(id))
+        qosLevels.add(MqttConfig.DEFAULT_QOS)
+
         try {
             mqttClient?.subscribe(topics.toTypedArray(), qosLevels.toIntArray())
             Timber.i("$TAG: Subscribed to own topics")

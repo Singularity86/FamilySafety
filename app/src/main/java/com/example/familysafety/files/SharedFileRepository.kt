@@ -5,6 +5,8 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.example.familysafety.core.RateLimiters
 import com.example.familysafety.group.GroupStateManager
+import com.example.familysafety.storage.FileAvailabilityEntity
+import com.example.familysafety.storage.FileCopyCount
 import com.example.familysafety.storage.SharedFileDao
 import com.example.familysafety.storage.SharedFileEntity
 import com.example.familysafety.transport.MqttConfig
@@ -42,6 +44,7 @@ import javax.inject.Singleton
 class SharedFileRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val sharedFileDao: SharedFileDao,
+    private val fileAvailabilityDao: com.example.familysafety.storage.FileAvailabilityDao,
     private val groupStateManager: GroupStateManager,
     private val transportProvider: com.example.familysafety.transport.TransportProvider
 ) {
@@ -58,6 +61,10 @@ class SharedFileRepository @Inject constructor(
      */
     private val fileStore = ChunkedFileStore { filesDir() }
 
+    /** Debounce for holdings announcements; see [announceHoldings]. */
+    @Volatile
+    private var lastAnnouncementAt = 0L
+
     companion object {
         private const val TAG = "SharedFileRepository"
         const val MAX_TOTAL_BYTES = 500L * 1024 * 1024   // 500 MB
@@ -65,8 +72,16 @@ class SharedFileRepository @Inject constructor(
         private const val GCM_TAG_BITS = 128
         private const val NONCE_BYTES = 12
         private const val FILE_KEY_SALT = "familysafety-files-v1"
-        /** Grid the encrypted manifest is padded to, so its size hides the file count. */
-        private const val MANIFEST_PAD_BYTES = 1024
+        /**
+         * Grid the encrypted manifest is padded to, so its size hides the file count.
+         *
+         * Widened from 1 KiB when `isEssential` was added to each file entry: the extra
+         * ~19 bytes per file pushed a three-file manifest out of the bucket a one-file
+         * manifest sits in, so the two became distinguishable by length again. A unit test
+         * caught it. Every byte here is spent on a single retained message, which is a cheap
+         * way to buy back the property the padding exists for.
+         */
+        private const val MANIFEST_PAD_BYTES = 2048
 
         /**
          * Delay between chunk publishes. Paho's default in-flight window is 10 unacked
@@ -90,6 +105,15 @@ class SharedFileRepository @Inject constructor(
 
         private const val REPAIR_BASE_BACKOFF_MS = 30_000L
         private const val REPAIR_MAX_BACKOFF_MS = 30 * 60_000L
+
+        /** Minimum gap between holdings announcements. */
+        private const val ANNOUNCE_DEBOUNCE_MS = 30_000L
+
+        /**
+         * Schedule marker for a file this device is not fetching. Non-essential files sit
+         * listed until someone opens them, at which point the schedule is cleared to 0.
+         */
+        private const val NEVER = Long.MAX_VALUE
     }
 
     /** Bytes one chunk occupies in the blob: nonce + ciphertext + GCM tag. */
@@ -293,9 +317,12 @@ class SharedFileRepository @Inject constructor(
                 manifest.files.forEach { sharedFile ->
                     val existing = sharedFileDao.getFileById(sharedFile.fileId)
                     if (existing == null) {
-                        // New file — create a PENDING record to trigger download
-                        sharedFileDao.upsert(sharedFile.toEntity())
-                        reconcileFile(sharedFile.fileId)
+                        // New file — record it, then decide whether to chase it. Essential
+                        // files start downloading now; the rest wait to be opened.
+                        val entity = sharedFile.toEntity()
+                        sharedFileDao.upsert(entity)
+                        applyFetchPolicy(entity)
+                        if (entity.isEssential) reconcileFile(sharedFile.fileId)
                     } else if (sharedFile.isDeleted && !existing.isDeleted) {
                         // Remotely deleted
                         sharedFileDao.markDeleted(
@@ -305,7 +332,11 @@ class SharedFileRepository @Inject constructor(
                         )
                         fileStore.deleteAll(sharedFile.fileId)
                     } else if (existing.downloadState != "COMPLETE") {
-                        reconcileFile(sharedFile.fileId)
+                        if (existing.isEssential != sharedFile.isEssential) {
+                            sharedFileDao.setEssential(sharedFile.fileId, sharedFile.isEssential)
+                        }
+                        sharedFileDao.getFileById(sharedFile.fileId)?.let { applyFetchPolicy(it) }
+                        if (sharedFile.isEssential) reconcileFile(sharedFile.fileId)
                     }
                 }
             } catch (e: Exception) {
@@ -396,6 +427,107 @@ class SharedFileRepository @Inject constructor(
     }
 
     // =========================================================================
+    // AVAILABILITY
+    // =========================================================================
+
+    /** How many peers hold a complete, hash-matching copy of each file. */
+    fun observeCopyCounts(): Flow<List<FileCopyCount>> = fileAvailabilityDao.observeCompleteCounts()
+
+    /**
+     * Tell every peer what this device holds.
+     *
+     * Debounced, because completing a batch of files would otherwise fire one announcement per
+     * file. Sent per-recipient and encrypted, not retained — a retained per-recipient message
+     * is the pollution problem that left stale join approvals sitting on the broker.
+     */
+    fun announceHoldings(force: Boolean = false) {
+        scope.launch {
+            try {
+                val now = System.currentTimeMillis()
+                if (!force && now - lastAnnouncementAt < ANNOUNCE_DEBOUNCE_MS) return@launch
+                lastAnnouncementAt = now
+
+                val groupDef = groupStateManager.groupDefinition.value ?: return@launch
+                val myMemberId = groupStateManager.localMember.value?.memberId ?: return@launch
+
+                val holdings = sharedFileDao.getAllFiles()
+                    .filter { !it.isDeleted && it.chunkCount > 0 }
+                    .map { entity ->
+                        FileHolding(
+                            fileId = entity.fileId,
+                            contentHash = entity.contentHash,
+                            state = if (entity.downloadState == "COMPLETE") HOLDING_COMPLETE else HOLDING_PARTIAL,
+                            chunksHeld = entity.chunksReceived,
+                            chunkCount = entity.chunkCount
+                        )
+                    }
+                if (holdings.isEmpty()) return@launch
+
+                val payload = sealFileMessage(
+                    groupDef.groupId,
+                    json.encodeToString(
+                        FileHoldingsAnnouncement(announcerId = myMemberId, holdings = holdings)
+                    )
+                ) ?: return@launch
+
+                groupDef.members.filter { it.memberId != myMemberId }.forEach { member ->
+                    transportProvider.sendMessage(
+                        member.memberId,
+                        MqttConfig.getFileAvailabilityTopic(member.memberId),
+                        payload,
+                        MqttConfig.QOS_AT_LEAST_ONCE,
+                        false
+                    )
+                }
+                Timber.d("$TAG: announced ${holdings.size} holdings")
+            } catch (e: Exception) {
+                Timber.e(e, "$TAG: failed to announce holdings")
+            }
+        }
+    }
+
+    fun handleHoldingsAnnouncement(payload: ByteArray) {
+        scope.launch {
+            try {
+                val groupDef = groupStateManager.groupDefinition.value ?: return@launch
+                val plain = openFileMessage(groupDef.groupId, String(payload)) ?: return@launch
+                val announcement = json.decodeFromString<FileHoldingsAnnouncement>(plain)
+
+                // Only members count. A departed device's claim must not keep a document
+                // looking safer than it is.
+                if (groupDef.findMemberById(announcement.announcerId) == null) {
+                    Timber.w("$TAG: holdings from non-member ${announcement.announcerId.take(8)}")
+                    return@launch
+                }
+
+                val now = System.currentTimeMillis()
+                val rows = announcement.holdings.map { holding ->
+                    FileAvailabilityEntity(
+                        fileId = holding.fileId,
+                        memberId = announcement.announcerId,
+                        contentHash = holding.contentHash,
+                        state = holding.state,
+                        chunksHeld = holding.chunksHeld,
+                        chunkCount = holding.chunkCount,
+                        updatedAt = now
+                    )
+                }
+                fileAvailabilityDao.upsertAll(rows)
+                Timber.d(
+                    "$TAG: ${announcement.announcerId.take(8)} holds ${rows.count { it.state == HOLDING_COMPLETE }} complete"
+                )
+            } catch (e: Exception) {
+                Timber.e(e, "$TAG: failed to handle holdings announcement")
+            }
+        }
+    }
+
+    /** Drop availability rows for members who have left. */
+    suspend fun pruneAvailability(currentMemberIds: List<String>) {
+        runCatching { fileAvailabilityDao.deleteForMembersNotIn(currentMemberIds) }
+    }
+
+    // =========================================================================
     // TARGETED REPAIR
     // =========================================================================
 
@@ -425,8 +557,17 @@ class SharedFileRepository @Inject constructor(
             return false
         }
 
-        val peers = groupDef.members.map { it.memberId }.filter { it != myMemberId }
-        if (peers.isEmpty()) return false
+        val allPeers = groupDef.members.map { it.memberId }.filter { it != myMemberId }
+        if (allPeers.isEmpty()) return false
+
+        // Prefer peers that have announced a complete copy — asking a device that is itself
+        // missing the chunk wastes a whole backoff cycle. Falls back to everyone when no
+        // announcement has arrived yet, which is also the case for peers on older builds.
+        val holders = runCatching { fileAvailabilityDao.getCompleteHolders(fileId) }
+            .getOrDefault(emptyList())
+            .filter { it in allPeers }
+        val peers = holders.ifEmpty { allPeers }
+
         // Rotate: start after whoever we asked last.
         val startIndex = entity.lastRepairPeerId
             ?.let { peers.indexOf(it) }
@@ -579,7 +720,16 @@ class SharedFileRepository @Inject constructor(
                 reconcileFile(entity.fileId)
                 requestMissingChunks(entity.fileId)
             }
-            sharedFileDao.countIncomplete() > 0
+
+            // Re-state what this device holds on every pass. An announcement is a state
+            // summary, not an event, so a lost one costs nothing — the next tick corrects it.
+            // That is why this uses the announce pattern rather than per-file receipts.
+            announceHoldings()
+
+            // Only essential files keep the worker alive. A non-essential file nobody has
+            // opened is not "incomplete work", it is simply not wanted here yet, and
+            // treating it as pending would keep rescheduling the worker forever.
+            sharedFileDao.getDueForRepair(now + REPAIR_MAX_BACKOFF_MS, Int.MAX_VALUE).isNotEmpty()
         } catch (e: Exception) {
             Timber.e(e, "$TAG: repair pass failed")
             true
@@ -877,7 +1027,12 @@ class SharedFileRepository @Inject constructor(
 
         fileStore.discardBlob(fileId)
         sharedFileDao.updateDownloadProgress(fileId, "COMPLETE", target.absolutePath, entity.chunkCount)
+        sharedFileDao.clearRepairSchedule(fileId)
         Timber.i("$TAG: Assembled file ${entity.name}")
+
+        // Tell the family this device now holds it, so their status boards can say so and
+        // their repair requests can be aimed here.
+        announceHoldings()
     }
 
     /**
@@ -1066,15 +1221,55 @@ class SharedFileRepository @Inject constructor(
         fileId = fileId, name = name, mimeType = mimeType, sizeBytes = sizeBytes,
         contentHash = contentHash, uploaderMemberId = uploaderMemberId,
         uploadedAt = uploadedAt, chunkCount = chunkCount,
-        isDeleted = isDeleted, deletedByMemberId = deletedByMemberId, deletedAt = deletedAt
+        isDeleted = isDeleted, deletedByMemberId = deletedByMemberId, deletedAt = deletedAt,
+        isEssential = isEssential
     )
+
+    /**
+     * Mark a file so the background pass either chases it or leaves it alone.
+     *
+     * Essential files are pursued until every device holds one. The rest are parked with a
+     * schedule that never comes due, so they appear in the library and download when opened —
+     * which is what keeps a large file from being pushed onto every phone in the family.
+     */
+    private suspend fun applyFetchPolicy(entity: SharedFileEntity) {
+        if (entity.downloadState == "COMPLETE" || entity.isDeleted) return
+        val target = if (entity.isEssential) 0L else NEVER
+        if (entity.nextAttemptAt == target) return
+        sharedFileDao.recordRepairAttempt(
+            fileId = entity.fileId,
+            attemptAt = entity.lastAttemptAt ?: 0L,
+            nextAttemptAt = target,
+            lastError = entity.lastError,
+            peerId = entity.lastRepairPeerId
+        )
+    }
+
+    /** Called when the user opens a file that has not downloaded: fetch it now. */
+    suspend fun requestDownload(fileId: String) {
+        sharedFileDao.clearRepairSchedule(fileId)
+        reconcileFile(fileId)
+        requestMissingChunks(fileId)
+    }
+
+    /** Change whether a file replicates to every device without being asked. */
+    suspend fun setEssential(fileId: String, essential: Boolean): Result<Unit> = runCatching {
+        val groupId = groupStateManager.groupDefinition.value?.groupId
+            ?: throw IllegalStateException("No group")
+        sharedFileDao.setEssential(fileId, essential)
+        sharedFileDao.getFileById(fileId)?.let { applyFetchPolicy(it) }
+        broadcastManifest(groupId)
+        if (essential) requestMissingChunks(fileId)
+        Unit
+    }
 
     private fun SharedFile.toEntity() = SharedFileEntity(
         fileId = fileId, name = name, mimeType = mimeType, sizeBytes = sizeBytes,
         contentHash = contentHash, uploaderMemberId = uploaderMemberId,
         uploadedAt = uploadedAt, chunkCount = chunkCount,
         isDeleted = isDeleted, deletedByMemberId = deletedByMemberId, deletedAt = deletedAt,
-        localPath = null, chunksReceived = 0, downloadState = if (isDeleted) "COMPLETE" else "PENDING"
+        localPath = null, chunksReceived = 0, downloadState = if (isDeleted) "COMPLETE" else "PENDING",
+        isEssential = isEssential
     )
 }
 
