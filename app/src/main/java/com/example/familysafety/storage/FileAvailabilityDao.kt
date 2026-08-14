@@ -28,6 +28,15 @@ interface FileAvailabilityDao {
     """)
     fun observeCompleteCounts(): Flow<List<FileCopyCount>>
 
+    /**
+     * How many peers have ever told us what they hold.
+     *
+     * Zero means the mechanism is not running — every other device is on a build that does not
+     * announce — not that nobody has a copy. The UI must not turn silence into an alarm.
+     */
+    @Query("SELECT COUNT(DISTINCT memberId) FROM file_availability")
+    fun observeAnnouncingPeerCount(): Flow<Int>
+
     @Query("SELECT * FROM file_availability WHERE fileId = :fileId")
     suspend fun getForFile(fileId: String): List<FileAvailabilityEntity>
 

@@ -476,6 +476,15 @@ class SharedFileRepository @Inject constructor(
     fun observeCopyCounts(): Flow<List<FileCopyCount>> = fileAvailabilityDao.observeCompleteCounts()
 
     /**
+     * How many peers have ever reported their holdings.
+     *
+     * Zero means no peer is running a build that announces, so a copy count of zero is
+     * ignorance rather than absence — and telling someone their insurance card exists only on
+     * this phone when it may well be on three others is worse than saying nothing.
+     */
+    fun observeAnnouncingPeerCount(): Flow<Int> = fileAvailabilityDao.observeAnnouncingPeerCount()
+
+    /**
      * Tell every peer what this device holds.
      *
      * Debounced, because completing a batch of files would otherwise fire one announcement per

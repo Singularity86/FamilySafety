@@ -46,7 +46,14 @@ data class FileStatusRow(
     val copiesElsewhere: Int,
     val totalMembers: Int,
     val lastActivityAt: Long?,
-    val lastActivityDetail: String?
+    val lastActivityDetail: String?,
+    /**
+     * Whether any peer has reported its holdings at all.
+     *
+     * When false, [copiesElsewhere] being zero means "nobody has told us", not "nobody has a
+     * copy", and every claim about redundancy has to be withheld rather than guessed.
+     */
+    val availabilityKnown: Boolean = true
 ) {
     val status: FileStatus = when {
         entity.downloadState == "COMPLETE" -> FileStatus.AVAILABLE
@@ -72,6 +79,13 @@ data class FileStatusRow(
     /** True when at least one other device holds it, so losing this phone is survivable. */
     val isRedundant: Boolean = copiesElsewhere > 0
 
+    /**
+     * True only when we can actually say a file is nowhere else. Absence of an announcement
+     * is not evidence of absence.
+     */
+    val isKnownToBeOnlyHere: Boolean =
+        availabilityKnown && entity.downloadState == "COMPLETE" && copiesElsewhere == 0
+
     val progressFraction: Float =
         if (entity.chunkCount > 0) entity.chunksReceived.toFloat() / entity.chunkCount else 0f
 
@@ -93,9 +107,12 @@ data class FileStatusRow(
      * internal state. "Waiting for a family member's phone" is actionable; "PENDING" is not.
      */
     val explanation: String = when (status) {
-        FileStatus.AVAILABLE ->
-            if (isRedundant) "On this phone and $copiesElsewhere other${if (copiesElsewhere == 1) "" else "s"}"
-            else "On this phone only — no other device has a copy yet"
+        FileStatus.AVAILABLE -> when {
+            isRedundant -> "On this phone and $copiesElsewhere other${if (copiesElsewhere == 1) "" else "s"}"
+            !availabilityKnown ->
+                "On this phone. Other devices have not reported in — they may need updating."
+            else -> "On this phone only — no other device has a copy yet"
+        }
         FileStatus.UPLOADING -> "Sending to the family"
         FileStatus.DOWNLOADING -> "Downloading — ${entity.chunksReceived} of ${entity.chunkCount} pieces"
         FileStatus.WAITING_FOR_PEER ->

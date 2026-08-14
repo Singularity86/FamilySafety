@@ -48,9 +48,14 @@ class FilesViewModel @Inject constructor(
     val board: StateFlow<List<FileStatusRow>> = combine(
         fileRepository.observeAllFiles(),
         fileRepository.observeCopyCounts(),
-        groupStateManager.groupDefinition
-    ) { files, copyCounts, group ->
+        groupStateManager.groupDefinition,
+        fileRepository.observeAnnouncingPeerCount()
+    ) { files, copyCounts, group, announcingPeers ->
         val copies = copyCounts.associate { it.fileId to it.copies }
+        // Until at least one peer reports its holdings, a copy count of zero means we have
+        // not been told — not that no copy exists. Claiming a document is nowhere else on
+        // that basis would be alarming and wrong.
+        val availabilityKnown = announcingPeers > 0
         val names = group?.members?.associate { it.memberId to it.displayName } ?: emptyMap()
         val memberCount = group?.members?.size ?: 1
         files.filterNot { it.isDeleted }.map { entity ->
@@ -60,7 +65,8 @@ class FilesViewModel @Inject constructor(
                 copiesElsewhere = copies[entity.fileId] ?: 0,
                 totalMembers = memberCount,
                 lastActivityAt = entity.lastAttemptAt,
-                lastActivityDetail = entity.lastError
+                lastActivityDetail = entity.lastError,
+                availabilityKnown = availabilityKnown
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())

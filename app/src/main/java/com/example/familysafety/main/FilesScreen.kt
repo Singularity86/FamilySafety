@@ -100,9 +100,7 @@ fun FilesScreen(
                 it.status == com.example.familysafety.files.FileStatus.STALLED ||
                     it.status == com.example.familysafety.files.FileStatus.WAITING_FOR_PEER
             }
-            val onlyHere = board.count {
-                it.status == com.example.familysafety.files.FileStatus.AVAILABLE && !it.isRedundant
-            }
+            val onlyHere = board.count { it.isKnownToBeOnlyHere }
             if (board.isNotEmpty()) {
                 Surface(
                     onClick = onOpenStatusBoard,
@@ -366,19 +364,30 @@ private fun FileCard(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    StatusPill(
-                        containerColor = when (row.status) {
-                            com.example.familysafety.files.FileStatus.STALLED ->
-                                MaterialTheme.colorScheme.errorContainer
-                            com.example.familysafety.files.FileStatus.AVAILABLE ->
-                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f)
-                            else -> MaterialTheme.colorScheme.tertiaryContainer
-                        }
-                    ) {
-                        Text(
-                            row.shortLabel,
-                            style = MaterialTheme.typography.labelSmall
+                    // A finished file needs a mark, not a sentence. On a three-column grid
+                    // the word "Available" ate most of the tile width to say what the
+                    // thumbnail already showed, and it crowded out the states that actually
+                    // need reading.
+                    if (row.status == com.example.familysafety.files.FileStatus.AVAILABLE) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Downloaded",
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary
                         )
+                    } else {
+                        StatusPill(
+                            containerColor = when (row.status) {
+                                com.example.familysafety.files.FileStatus.STALLED ->
+                                    MaterialTheme.colorScheme.errorContainer
+                                else -> MaterialTheme.colorScheme.tertiaryContainer
+                            }
+                        ) {
+                            Text(
+                                row.shortLabel,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
                     }
                     if (row.entity.isEssential) {
                         Icon(
@@ -394,8 +403,15 @@ private fun FileCard(
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        .padding(4.dp)
+                        // Thumbnails are arbitrary images; a pale scan left white dots
+                        // invisible. The scrim makes them readable over anything.
+                        .background(
+                            Color.Black.copy(alpha = 0.45f),
+                            RoundedCornerShape(6.dp)
+                        )
+                        .padding(horizontal = 5.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     val total = row.totalMembers.coerceAtLeast(1)
                     val held = row.totalCopies.coerceIn(0, total)
@@ -406,7 +422,7 @@ private fun FileCard(
                                 .clip(CircleShape)
                                 .background(
                                     if (index < held) MaterialTheme.colorScheme.primary
-                                    else Color.White.copy(alpha = 0.45f)
+                                    else Color.White.copy(alpha = 0.55f)
                                 )
                         )
                     }

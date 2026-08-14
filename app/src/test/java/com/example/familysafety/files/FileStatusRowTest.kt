@@ -39,14 +39,16 @@ class FileStatusRowTest {
     private fun row(
         entity: SharedFileEntity = entity(),
         copiesElsewhere: Int = 0,
-        totalMembers: Int = 4
+        totalMembers: Int = 4,
+        availabilityKnown: Boolean = true
     ) = FileStatusRow(
         entity = entity,
         uploaderName = "Maria",
         copiesElsewhere = copiesElsewhere,
         totalMembers = totalMembers,
         lastActivityAt = null,
-        lastActivityDetail = null
+        lastActivityDetail = null,
+        availabilityKnown = availabilityKnown
     )
 
     @Test
@@ -146,6 +148,32 @@ class FileStatusRowTest {
             assertTrue("label for ${r.status}", r.shortLabel.isNotBlank())
             assertTrue("explanation for ${r.status}", r.explanation.isNotBlank())
         }
+    }
+
+    @Test
+    fun silenceFromPeersIsNotTreatedAsAbsence() {
+        // Every other device may be on a build that does not announce. Telling someone their
+        // insurance card exists only on this phone, when it is probably on three others, is
+        // both alarming and wrong.
+        val r = row(entity(state = "COMPLETE"), copiesElsewhere = 0, availabilityKnown = false)
+
+        assertFalse("must not claim it is only here", r.isKnownToBeOnlyHere)
+        assertTrue(r.explanation.contains("have not reported in"))
+    }
+
+    @Test
+    fun onlyHereIsClaimedOnlyWhenPeersHaveActuallyReported() {
+        val known = row(entity(state = "COMPLETE"), copiesElsewhere = 0, availabilityKnown = true)
+
+        assertTrue(known.isKnownToBeOnlyHere)
+        assertTrue(known.explanation.contains("no other device"))
+    }
+
+    @Test
+    fun aFileNotHeldHereIsNeverReportedAsOnlyHere() {
+        val r = row(entity(state = "PENDING"), copiesElsewhere = 0, availabilityKnown = true)
+
+        assertFalse(r.isKnownToBeOnlyHere)
     }
 
     @Test

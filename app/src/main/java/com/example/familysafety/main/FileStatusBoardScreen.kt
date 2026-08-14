@@ -107,7 +107,7 @@ private fun FileStatusList(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        val atRisk = rows.count { it.status == FileStatus.AVAILABLE && !it.isRedundant }
+        val atRisk = rows.count { it.isKnownToBeOnlyHere }
         if (atRisk > 0) {
             item {
                 // The point of the whole feature: a document that exists on exactly one phone
@@ -151,7 +151,10 @@ private fun FileStatusCard(
     onTogglePin: (String, Boolean) -> Unit
 ) {
     OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(
+            Modifier.padding(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = statusIcon(row.status),
@@ -189,7 +192,10 @@ private fun FileStatusCard(
                 )
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.heightIn(min = 40.dp)
+            ) {
                 CopiesIndicator(row = row)
                 Spacer(Modifier.weight(1f))
                 if (row.status == FileStatus.STALLED || row.status == FileStatus.WAITING_FOR_PEER) {
