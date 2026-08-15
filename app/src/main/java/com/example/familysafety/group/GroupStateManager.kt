@@ -571,6 +571,22 @@ class GroupStateManager(
                 updaterMemberId = updaterMemberId
             )
             if (rejection != null) {
+                // A broken chain means the two states diverged and then both moved on. That
+                // is not an authorization failure and rejecting it is permanent: we can never
+                // accept anything descended from their branch, so we never learn about the
+                // members added on it — and, because an update signed by a member we do not
+                // know is refused outright, we then cannot accept anything *they* send
+                // either. One missed addition cascades into never catching up again.
+                //
+                // Observed with three devices holding three different rosters, each missing
+                // exactly the members added on branches it had rejected.
+                //
+                // Reconcile instead. Phase 2 only handled the equal-version case; branches
+                // that advanced to different versions fell through to here.
+                if (rejection.startsWith(GroupTransitionValidator.CHAIN_MISMATCH_PREFIX)) {
+                    timber.log.Timber.w("GroupStateManager: chain mismatch with ${updaterMemberId.take(8)} — reconciling diverged branches")
+                    return reconcileDivergedLocked(currentGroup, remoteDefinition, updaterMemberId)
+                }
                 return GroupOperationResult.Failure(GroupError.UnauthorizedChange(rejection))
             }
         }
@@ -652,6 +668,50 @@ class GroupStateManager(
 
         val merged = GroupStateMerge.merge(winner = remoteDefinition, ours = currentGroup)
         return commitStateLocked(merged ?: remoteDefinition)
+    }
+
+    /**
+     * Reconcile two branches that diverged and then both advanced.
+     *
+     * The remote is ahead by version, so it becomes the base and we re-parent onto it: the
+     * union of both rosters, minus the union of both tombstone sets, one version past theirs
+     * and chained to their hash. That makes the result an ordinary successor *of their state*,
+     * so when we broadcast it they accept it through the normal rules and both sides land on
+     * the same roster.
+     *
+     * Everything protecting identity still applies — immutable group fields, no key rotation,
+     * added members hashing to their own ID, append-only tombstones, and no resurrection of a
+     * removed member. Only the chain rule is set aside, because a chain that cannot be
+     * verified is exactly the situation being repaired.
+     */
+    private suspend fun reconcileDivergedLocked(
+        currentGroup: GroupDefinition,
+        remoteDefinition: GroupDefinition,
+        updaterMemberId: String
+    ): GroupOperationResult<GroupDefinition> {
+        val rejection = GroupTransitionValidator.validateConcurrent(
+            current = currentGroup,
+            remote = remoteDefinition,
+            updaterMemberId = updaterMemberId
+        )
+        if (rejection != null) {
+            return GroupOperationResult.Failure(GroupError.UnauthorizedChange(rejection))
+        }
+
+        _events.emit(
+            GroupStateEvent.ConflictDetected(
+                localVersion = currentGroup.version,
+                remoteVersion = remoteDefinition.version
+            )
+        )
+
+        val merged = GroupStateMerge.merge(winner = remoteDefinition, ours = currentGroup)
+        val resolved = merged ?: remoteDefinition
+        timber.log.Timber.i(
+            "GroupStateManager: reconciled diverged branches — ${resolved.members.size} members " +
+                "at v${resolved.version} (was ${currentGroup.members.size} at v${currentGroup.version})"
+        )
+        return commitStateLocked(withPreservedTombstones(currentGroup, resolved))
     }
 
     /** Persist [newState], publish it, and emit the resulting events. */

@@ -37,6 +37,15 @@ import java.security.MessageDigest
  */
 object GroupTransitionValidator {
 
+    /**
+     * Prefix identifying a broken hash chain, so callers can tell it apart from a genuine
+     * authorization failure. A chain mismatch means the two states diverged and both moved
+     * on — recoverable by merging — whereas the other rejections mean the update must not be
+     * applied at all.
+     */
+    const val CHAIN_MISMATCH_PREFIX = "previousStateHash"
+
+
     /** memberId = SHA-256(ed25519PublicKeyBytes).take(16).toHex() — must match CryptoProvider.deriveMemberId. */
     fun deriveMemberIdFromKey(ed25519PublicKeyHex: String): String {
         val publicKey = ed25519PublicKeyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
@@ -97,7 +106,7 @@ object GroupTransitionValidator {
             remote.version == current.version + 1 &&
             remote.previousStateHash != current.computeStateHash()
         ) {
-            return "previousStateHash does not chain from our current state"
+            return "$CHAIN_MISMATCH_PREFIX does not chain from our current state"
         }
 
         val currentById = current.members.associateBy { it.memberId }
