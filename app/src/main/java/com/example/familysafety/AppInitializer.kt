@@ -263,6 +263,9 @@ class AppInitializer @Inject constructor(
                                     // A departed device's claim must not keep a document
                                     // looking safer than it is.
                                     sharedFileRepository.pruneAvailability(newMemberIds.toList())
+                                    // Nor should their last known position stay on the map,
+                                    // where it has no name to attach to.
+                                    locationRepository.pruneToMembers(newMemberIds)
                                 }
                                 previousMemberIds = newMemberIds
                             } catch (e: Exception) {

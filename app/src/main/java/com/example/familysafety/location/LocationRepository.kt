@@ -42,8 +42,25 @@ class LocationRepository @Inject constructor(
 
         try {
             val latestLocations = locationHistoryRepository.getLatestLocationsForAllMembers()
-            _memberLocations.value = latestLocations
-            Timber.d("LocationRepository: Initialized with ${latestLocations.size} locations from history")
+
+            // History is keyed by member ID and kept for 30 days, so it outlives group
+            // membership: anyone who left, anyone from a family that was recreated, and any
+            // member missing from this device's roster all still have rows. The map draws one
+            // marker per entry and labels it `displayName ?: "?"`, so every one of those
+            // became an anonymous question-mark pin sitting on a stale position.
+            //
+            // History itself is left alone — it is the user's data, and the History screen is
+            // entitled to it. What gets filtered is the live map.
+            val known = groupStateManager.groupDefinition.value?.members?.map { it.memberId }?.toSet()
+            val filtered = if (known.isNullOrEmpty()) latestLocations
+            else latestLocations.filterKeys { it in known }
+
+            val dropped = latestLocations.size - filtered.size
+            if (dropped > 0) {
+                Timber.i("LocationRepository: ignoring $dropped location(s) from non-members")
+            }
+            _memberLocations.value = filtered
+            Timber.d("LocationRepository: Initialized with ${filtered.size} locations from history")
             isInitialized = true
         } catch (e: Exception) {
             Timber.e(e, "LocationRepository: Failed to initialize from history")
@@ -134,6 +151,24 @@ class LocationRepository @Inject constructor(
             } catch (e: Exception) {
                 Timber.e(e, "LocationRepository: Failed to persist locations batch")
             }
+        }
+    }
+
+    /**
+     * Drop live locations for anyone no longer in the group.
+     *
+     * Called whenever membership changes. Without it a removed member's last known position
+     * stays on the map indefinitely — as a question-mark pin, since there is no longer a name
+     * to put on it.
+     */
+    fun pruneToMembers(memberIds: Collection<String>) {
+        if (memberIds.isEmpty()) return
+        val allowed = memberIds.toSet()
+        val before = _memberLocations.value.size
+        _memberLocations.value = _memberLocations.value.filterKeys { it in allowed }
+        val dropped = before - _memberLocations.value.size
+        if (dropped > 0) {
+            Timber.i("LocationRepository: dropped $dropped location(s) for departed members")
         }
     }
 

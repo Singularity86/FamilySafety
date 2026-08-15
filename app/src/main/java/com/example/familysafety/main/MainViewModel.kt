@@ -502,9 +502,20 @@ class MainViewModel @Inject constructor(
         try {
             EncryptedGroupStatePersistence.getInstance(context).deleteGroupDefinition()
         } catch (_: Exception) {}
+        // Not silently swallowed any more. Leaving is presented to the user as erasing this
+        // device's identity; if that fails, the recovery phrase and signing keys stay on disk
+        // while the app shows the welcome screen as though they were gone. destroyKeys now
+        // verifies its own work and falls back to deleting the file, and a failure past that
+        // is at least recorded rather than invisible.
         try {
-            AndroidKeyStoreLocalKeyStore(context).destroyKeys()
-        } catch (_: Exception) {}
+            val store = AndroidKeyStoreLocalKeyStore(context)
+            store.destroyKeys()
+            if (!store.isFullyDestroyed()) {
+                timber.log.Timber.e("leaveFamily: identity still present after destroyKeys")
+            }
+        } catch (e: Exception) {
+            timber.log.Timber.e(e, "leaveFamily: could not destroy identity keys")
+        }
         try {
             locationPublishOutboxRepository.clearForMember(localMemberId.value)
         } catch (_: Exception) {}

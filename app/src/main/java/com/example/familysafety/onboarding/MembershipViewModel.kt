@@ -70,11 +70,28 @@ class MembershipViewModel @Inject constructor(
                 if (AndroidKeyStoreLocalKeyStore(context).isInitialized()) {
                     MembershipState.Approved
                 } else {
-                    prefs.edit().remove(KEY_ONBOARDING_COMPLETE).apply()
+                    // A clean "false" is a real answer: the keystore opened and says there is
+                    // no identity. Safe to forget onboarding ever completed.
+                    Timber.w("Onboarding was complete but no identity is stored — resetting")
+                    prefs.edit().remove(KEY_ONBOARDING_COMPLETE).commit()
                     MembershipState.Unauthenticated
                 }
             } catch (e: Exception) {
-                prefs.edit().remove(KEY_ONBOARDING_COMPLETE).apply()
+                // A throw is NOT an answer. It means we could not read the keystore, which is
+                // a different thing from there being nothing in it — and the two used to be
+                // treated identically, deleting the flag either way.
+                //
+                // Hardening, not a fix for an observed failure: no case of this has been seen.
+                // It matters because of what follows from it. A device with a perfectly good
+                // identity would land on the welcome screen, where the obvious action is
+                // "Create New Family" — generating a fresh identity and abandoning the real
+                // one, along with the group, its history, and a recovery phrase the user still
+                // believes works. A momentary read error should not be able to cost that.
+                //
+                // Keep the flag. Show onboarding for this launch only, so the next start can
+                // recover on its own. A clean `false` above still clears it, so leaving the
+                // family behaves exactly as before.
+                Timber.e(e, "Could not read the keystore; keeping onboarding flag for retry")
                 MembershipState.Unauthenticated
             }
         }

@@ -6,6 +6,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.goterl.lazysodium.LazySodiumAndroid
 import com.goterl.lazysodium.SodiumAndroid
+import timber.log.Timber
 import java.io.File
 import java.security.GeneralSecurityException
 import java.security.KeyStore
@@ -260,8 +261,30 @@ class AndroidKeyStoreLocalKeyStore(
         // Clear stored keys. commit() for the same reason the writes use it — leaving the
         // group also restarts the process, and a wipe that does not reach disk leaves the
         // old identity behind for the next launch to pick up.
-        encryptedPrefs.edit().clear().commit()
+        val cleared = runCatching { encryptedPrefs.edit().clear().commit() }.getOrDefault(false)
+
+        // Verify, do not assume. Leaving the family is presented to the user as erasing this
+        // device's identity, and the caller wraps this in a silent catch — so a failure here
+        // used to leave the signing keys and, worse, the BIP-39 recovery phrase sitting in
+        // storage while the app showed the welcome screen as though everything was gone.
+        // Confirmed on a real device on 2026-08-14: after leaving, all seven identity entries
+        // were still present.
+        //
+        // If the normal clear did not take, delete the backing file outright. The keys are
+        // meant to be unrecoverable at this point, so there is nothing to preserve.
+        if (!cleared || isInitialized()) {
+            Timber.w("destroyKeys: clear did not take, deleting the keystore file")
+            runCatching { context.deleteSharedPreferences(PREFS_NAME) }
+            runCatching { File(context.dataDir, "shared_prefs/$PREFS_NAME.xml").delete() }
+            runCatching { deleteKeystoreKey() }
+        }
     }
+
+    /**
+     * True when no identity remains in storage. Used to confirm a wipe actually happened
+     * rather than trusting that it did.
+     */
+    fun isFullyDestroyed(): Boolean = runCatching { !isInitialized() }.getOrDefault(false)
 
     /**
      * Delete the Android Keystore encryption key.

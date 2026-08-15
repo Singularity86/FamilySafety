@@ -327,7 +327,13 @@ fun MapScreen(
         // osmdroid draws overlays in list order, so whatever is added last ends up on top.
         // Sorting the raised member to the end is what puts their pin above pins that
         // overlap it; everyone else keeps their existing relative order.
-        val drawOrder = memberLocations.entries.sortedBy { it.key == raisedMemberId }
+        // Only draw people who are actually in the family. A location whose member is
+        // unknown used to render as an anonymous "?" pin at a stale position — the residue of
+        // a departed member, a recreated family, or a roster this device has not caught up
+        // with. A pin nobody can identify is worse than no pin.
+        val drawOrder = memberLocations.entries
+            .filter { entry -> familyMembers.any { it.memberId == entry.key } }
+            .sortedBy { it.key == raisedMemberId }
         drawOrder.forEach { (memberId, location) ->
             val member = familyMembers.find { it.memberId == memberId }
             val avatar = memberAvatars[memberId]
