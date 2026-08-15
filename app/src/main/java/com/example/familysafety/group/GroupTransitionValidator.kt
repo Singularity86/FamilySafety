@@ -123,17 +123,22 @@ object GroupTransitionValidator {
             }
         }
 
-        // Tombstones are append-only. Dropping one is how a removed member would be
-        // readmitted without anyone authorizing an addition, so losing any is a rejection
-        // rather than something to merge back in.
-        val droppedTombstones = current.removedMemberIds - remote.removedMemberIds
-        if (droppedTombstones.isNotEmpty()) {
-            return "removal tombstones cannot be withdrawn " +
-                "(updater ${updaterMemberId.take(8)} dropped ${droppedTombstones.size})"
-        }
-
-        // A tombstoned member must not appear in the roster, or the tombstone is decorative.
-        val resurrected = remoteById.keys.intersect(remote.removedMemberIds)
+        // Tombstones are append-only, but a state that simply lacks them is NOT an attempt
+        // to withdraw them. `removedMemberIds` defaults to empty, so every peer on a build
+        // from before tombstones existed sends exactly that — and this used to read it as
+        // "they dropped our tombstones" and reject the whole update.
+        //
+        // The effect was severe and easy to miss: as soon as one member left, creating the
+        // first tombstone, a device stopped accepting *any* group update from an older peer,
+        // including member additions. Rosters diverged and stayed diverged, which looks to
+        // the user like family members going missing.
+        //
+        // Our tombstones are preserved by the caller unioning them in, so nothing is lost by
+        // accepting. What still must not happen is a tombstoned member reappearing in the
+        // roster — checked below against the union, so it holds whether or not the sender
+        // knows about tombstones at all.
+        val effectiveTombstones = current.removedMemberIds + remote.removedMemberIds
+        val resurrected = remoteById.keys.intersect(effectiveTombstones)
         if (resurrected.isNotEmpty()) {
             return "removed member ${resurrected.first().take(8)} is present in the roster"
         }

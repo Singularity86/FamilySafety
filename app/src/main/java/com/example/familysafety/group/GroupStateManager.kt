@@ -575,7 +575,36 @@ class GroupStateManager(
             }
         }
 
-        return commitStateLocked(remoteDefinition)
+        // Our tombstones are ours to keep. A peer on a build that predates them sends an empty
+        // set, and taking that verbatim would silently readmit everyone we have removed —
+        // which is exactly why this used to be enforced by rejecting the whole update. Union
+        // instead: we accept their roster changes and lose none of our removals.
+        return commitStateLocked(withPreservedTombstones(currentGroup, remoteDefinition))
+    }
+
+    /**
+     * [remote] with our tombstones merged in, and anyone tombstoned dropped from the roster.
+     *
+     * Absence of a tombstone in an incoming state means "this sender does not know about
+     * tombstones", not "this member is back". Treating those as the same thing is how a
+     * removed member would quietly reappear.
+     */
+    private fun withPreservedTombstones(
+        current: GroupDefinition?,
+        remote: GroupDefinition
+    ): GroupDefinition {
+        val ours = current?.removedMemberIds ?: emptySet()
+        if (ours.isEmpty()) return remote
+        val merged = remote.removedMemberIds + ours
+        if (merged == remote.removedMemberIds &&
+            remote.members.none { it.memberId in merged }
+        ) {
+            return remote
+        }
+        return remote.copy(
+            members = remote.members.filterNot { it.memberId in merged }.toSet(),
+            removedMemberIds = merged
+        )
     }
 
     /**

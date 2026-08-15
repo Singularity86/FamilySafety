@@ -281,15 +281,47 @@ class GroupTransitionValidatorTest {
     }
 
     @Test
-    fun `a tombstone can never be withdrawn`() {
+    fun `dropping a tombstone cannot readmit the member`() {
         // Dropping a tombstone is how a removed member gets back in without anyone
-        // authorizing an addition.
+        // authorizing an addition. What matters is that they stay out — the rejection is
+        // keyed on the member reappearing, not on the tombstone set shrinking, so it holds
+        // whether the sender omitted the tombstone deliberately or simply does not know
+        // tombstones exist.
         val current = group().copy(removedMemberIds = setOf(aliceId))
         val remote = successorOf(current).copy(removedMemberIds = emptySet())
 
         val reason = GroupTransitionValidator.validate(current, remote, creatorId)
         assertNotNull(reason)
-        assertTrue(reason!!.contains("withdrawn"))
+        assertTrue(reason!!.contains("present in the roster"))
+    }
+
+    @Test
+    fun `a peer that does not know about tombstones is still accepted`() {
+        // The interop case, and the reason the old rule was wrong. Builds from before
+        // tombstones existed serialize no such field, so it arrives as an empty set. Reading
+        // that as "they withdrew our tombstones" and rejecting meant that as soon as one
+        // member left, a device stopped accepting *every* update from an older peer —
+        // including member additions. Rosters diverged permanently, which reads to a user as
+        // family members going missing.
+        val current = group(members = setOf(creator, bob)).copy(removedMemberIds = setOf(aliceId))
+        // Older peer: no tombstones, and it does not list the removed member either.
+        val remote = successorOf(current, members = setOf(creator, bob))
+            .copy(removedMemberIds = emptySet())
+
+        assertNull(GroupTransitionValidator.validate(current, remote, creatorId))
+    }
+
+    @Test
+    fun `an older peer adding a member is accepted while our removal stands`() {
+        val newcomer = member(
+            GroupTransitionValidator.deriveMemberIdFromKey("ee".repeat(32)),
+            "ee".repeat(32)
+        )
+        val current = group(members = setOf(creator, bob)).copy(removedMemberIds = setOf(aliceId))
+        val remote = successorOf(current, members = setOf(creator, bob, newcomer))
+            .copy(removedMemberIds = emptySet())
+
+        assertNull(GroupTransitionValidator.validate(current, remote, bobId))
     }
 
     @Test
