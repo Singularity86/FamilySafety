@@ -1,7 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <!-- External files dir: getExternalFilesDir(null)/familysafety_files -->
+    <!--
+        Legacy plaintext copies under getExternalFilesDir(null)/familysafety_files. Files
+        shared from this release on are stored encrypted and are never served from here; the
+        entry stays until the startup pass has migrated every device's older documents.
+    -->
     <external-files-path
         name="shared_files"
         path="familysafety_files/" />
+
+    <!--
+        Where a document is decrypted so another app can open it. Private cache, cleared on
+        every launch. This is the only path by which a shared document leaves the app in the
+        clear, and it does so one file at a time under an explicit read grant.
+    -->
+    <cache-path
+        name="shared_file_views"
+        path="shared_file_views/" />
 </paths>

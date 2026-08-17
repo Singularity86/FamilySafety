@@ -62,8 +62,34 @@ data class EncryptedFileManifest(
     /** Which key encrypted [data]; same scheme as [FileChunkMessage.keyVersion]. */
     val keyVersion: Int,
     /** Base64 of `nonce ‖ ciphertext ‖ tag` over the serialized [FileManifest]. */
-    val data: String
+    val data: String,
+    /**
+     * Who published this manifest. Verified against *our* current roster, never against
+     * keys carried in the message — the same rule `GroupSyncManager` follows, and the
+     * reason a forged manifest cannot simply supply the key that validates it.
+     */
+    val signerMemberId: String = "",
+    /**
+     * Hex Ed25519 signature over [manifestSigningPayload].
+     *
+     * Encryption alone proved only that the publisher held the group key, and the manifest
+     * was previously not signed at all: anyone able to publish to the broker could rewrite
+     * a family's entire file list, including marking documents deleted. Defaulted to empty
+     * so a manifest from a build that predates signing still parses and can be reported as
+     * unsigned rather than failing to decode.
+     */
+    val signature: String = ""
 )
+
+/**
+ * The exact bytes covered by [EncryptedFileManifest.signature].
+ *
+ * Both fields are included so the key version cannot be swapped underneath a valid
+ * signature, and the ciphertext is signed rather than the plaintext so a manifest is
+ * authenticated before anything is decrypted.
+ */
+fun manifestSigningPayload(keyVersion: Int, data: String): ByteArray =
+    "$keyVersion|$data".toByteArray(Charsets.UTF_8)
 
 @Serializable
 data class FileChunkMessage(
@@ -85,6 +111,19 @@ const val FILE_KEY_VERSION_LEGACY = 1
 
 /** Random per-group key carried inside the encrypted GroupDefinition. */
 const val FILE_KEY_VERSION_GROUP_SECRET = 2
+
+/**
+ * `GroupCipher.deriveSubkey(fileEncryptionKey, PURPOSE_FILES)` — the group key with domain
+ * separation, matching how presence already derives its own subkey instead of using the
+ * shared secret raw.
+ *
+ * **Readable but not yet written.** Landing the reader ahead of the writer is what makes the
+ * eventual flip safe: a build that can already open version 3 keeps working the day some
+ * device starts producing it, whereas flipping both at once means every peer still on the
+ * previous release silently stops being able to decrypt new files. Version 2 remains what
+ * this build publishes; see `PROJECT_STATUS.md`.
+ */
+const val FILE_KEY_VERSION_GROUP_SUBKEY = 3
 
 @Serializable
 data class FileRequestMessage(

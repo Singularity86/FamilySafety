@@ -52,6 +52,13 @@ class ChunkedFileStore(
 
     fun blobFile(fileId: String): File = File(fileDir(fileId), BLOB_NAME)
 
+    /**
+     * The plaintext copy written by builds before at-rest encryption.
+     *
+     * Nothing writes here any more. Kept because the startup pass has to be able to name what
+     * it is migrating away from, and because "this file does not exist" is the assertion that
+     * pins the property.
+     */
     fun contentFile(fileId: String): File = File(fileDir(fileId), CONTENT_NAME)
 
     /** Legacy per-chunk directory from before the blob store; swept on startup. */
@@ -218,35 +225,84 @@ class ChunkedFileStore(
     }
 
     /**
-     * Copy [input] to [target] in fixed buffers, hashing as it goes.
+     * Stream [input] straight into the blob, encrypting chunk by chunk, and return the
+     * plaintext SHA-256, the byte count and how many chunks it took.
      *
-     * This is what replaced `contentResolver.openInputStream(uri)?.use { it.readBytes() }`
-     * followed by `bytes.toList().chunked(...)`. That path held the whole file in memory
-     * several times over and, because `chunked` builds a `List<List<Byte>>` of boxed
-     * references before rematerialising every chunk, cost several times the file size again
-     * in transient reference arrays. Peak usage here is one buffer.
+     * This is the upload path, and it exists so that a document is **never written to disk in
+     * the clear**. It used to be staged as plaintext, published from that copy, and then left
+     * there permanently as the stored form — a database encrypted with SQLCipher describing
+     * insurance cards and passports lying beside it unencrypted. Peak memory is one buffer,
+     * as it was for the staging pass this replaced; that property is what stopped a large
+     * upload being an OOM and it is preserved here.
+     *
+     * Slots are written in the same wire format a receiver stores, so the uploader's blob and
+     * a downloader's blob are the same object. Publishing then re-reads slots verbatim instead
+     * of encrypting a second time, which also means the bytes every peer receives are exactly
+     * the bytes the uploader verified.
      */
-    suspend fun copyAndHash(
+    suspend fun encryptInto(
         input: InputStream,
-        target: File,
-        bufferSize: Int
-    ): Pair<String, Long> = withContext(Dispatchers.IO) {
-        val digest = MessageDigest.getInstance("SHA-256")
-        val buffer = ByteArray(bufferSize)
-        var total = 0L
-        target.parentFile?.mkdirs()
-        target.outputStream().buffered().use { out ->
-            while (true) {
-                val read = input.read(buffer)
-                if (read <= 0) break
-                digest.update(buffer, 0, read)
-                out.write(buffer, 0, read)
-                total += read
+        fileId: String,
+        chunkSize: Int,
+        stride: Int,
+        encryptChunk: (ByteArray) -> ByteArray
+    ): EncryptedIngest? = withContext(Dispatchers.IO) {
+        lockFor(fileId).withLock {
+            try {
+                val digest = MessageDigest.getInstance("SHA-256")
+                val buffer = ByteArray(chunkSize)
+                var total = 0L
+                var index = 0
+                val blob = blobFile(fileId)
+                runCatching { shortLengthFile(fileId).delete() }
+                RandomAccessFile(blob, "rw").use { raf ->
+                    raf.setLength(0)
+                    while (true) {
+                        var filled = 0
+                        while (filled < chunkSize) {
+                            val read = input.read(buffer, filled, chunkSize - filled)
+                            if (read <= 0) break
+                            filled += read
+                        }
+                        // A zero-length file still has to be one chunk, or there is nothing
+                        // to hash, publish or verify and the receiver waits for ever.
+                        if (filled == 0 && index > 0) break
+
+                        val plain = if (filled == chunkSize) buffer else buffer.copyOf(filled)
+                        digest.update(plain)
+                        total += filled
+
+                        val ciphertext = encryptChunk(plain)
+                        if (ciphertext.size > stride) {
+                            Timber.e("Chunk $index of $fileId exceeds stride $stride")
+                            return@withLock null
+                        }
+                        raf.seek(index.toLong() * stride)
+                        raf.write(ciphertext)
+                        if (ciphertext.size < stride) writeShortLength(fileId, index, ciphertext.size)
+                        index++
+
+                        if (filled < chunkSize) break
+                    }
+                }
+                EncryptedIngest(
+                    contentHash = digest.digest().joinToString("") { "%02x".format(it) },
+                    sizeBytes = total,
+                    chunkCount = index
+                )
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to encrypt $fileId into its blob")
+                null
             }
-            out.flush()
         }
-        digest.digest().joinToString("") { "%02x".format(it) } to total
     }
+
+    /** Result of [encryptInto]: everything about the file that is only knowable after reading it. */
+    data class EncryptedIngest(
+        val contentHash: String,
+        val sizeBytes: Long,
+        val chunkCount: Int
+    )
 
     /** Drop the in-flight blob once the file is complete, or when giving up on it. */
     suspend fun discardBlob(fileId: String) = withContext(Dispatchers.IO) {

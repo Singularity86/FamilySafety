@@ -1,7 +1,15 @@
 # FamilySafety — iOS Port Specification & Interop Contract
 
-**Version 1.8 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
-revised 2026-08-12 against Android 1.12.7 (versionCode 25).**
+**Version 1.9 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
+revised 2026-08-15 against Android 1.12.10 (versionCode 28) plus the unreleased file
+correctness-and-privacy work.**
+
+> **Known gap.** The shared-file rebuild landed on Android in four phases and only the last
+> of them is written up here. The targeted chunk-repair message (Phase 2), the `isEssential`
+> field on `SharedFile` and the holdings announcement (Phase 3) are **on the wire and not yet
+> in this document** — §6.7 describes the file subsystem as it was before them. Read the
+> Android `files/SharedFileModels.kt` for those until this is reconciled. Everything marked
+> 1.9 below *is* current.
 
 All additions since 1.0 are optional fields that older senders omit, so the wire stays
 backward compatible. Two of them still change what a correct implementation must do:
@@ -36,6 +44,12 @@ backward compatible. Two of them still change what a correct implementation must
   member's traffic and discarding it. Tombstones also change `computeStateHash` for any
   group that has ever removed someone, so an implementation that drops the field will
   disagree about the state hash and fail every chain check. `PROTOCOL_VERSION` is now **3**.
+- **1.9**, manifest signatures and deletion tombstones (§6.7): `EncryptedFileManifest` gains
+  `signerMemberId` and `signature`, and the manifest now carries entries for **deleted** files
+  rather than omitting them. Both are breaking in effect. An unsigned manifest is refused, so
+  a client that does not sign will silently stop updating anyone's file list; a client that
+  does not honour tombstones will keep documents the family has deleted, and will republish
+  them. Also defines file `keyVersion` **3** as readable-but-not-written.
 - **1.7**, protocol version advertisement (§6.2): `PresenceUpdate.protocolVersion`.
   Additive on the wire, but an iOS client that omits it is read as generation 1 and every
   Android peer will permanently label the user "needs to update" — so emit it. Set it to
@@ -442,8 +456,11 @@ so it needs no separate distribution path. Two consequences for an implementatio
 ```json
 // FileManifest — retained on the group manifest topic. ENCRYPTED since 1.12.2; see below.
 { "groupId": "...", "files": [ SharedFile... ], "version": 0, "pad": "..." }  // version = epoch ms
-// EncryptedFileManifest — what is actually published when the group has a file key
-{ "keyVersion": 2, "data": "<base64 of AES-GCM blob over the FileManifest JSON>" }
+// EncryptedFileManifest — what is actually published when the group has a file key.
+// signerMemberId + signature added in 1.9 and REQUIRED on receive; see "Manifest
+// authenticity" below. Older senders omit both, which decodes to "" and is refused.
+{ "keyVersion": 2, "data": "<base64 of AES-GCM blob over the FileManifest JSON>",
+  "signerMemberId": "...", "signature": "<hex Ed25519 over \"{keyVersion}|{data}\">" }
 // SharedFile
 { "fileId": "<uuid>", "name": "...", "mimeType": "...", "sizeBytes": 0,
   "contentHash": "<sha256 hex of plaintext>", "uploaderMemberId": "...", "uploadedAt": 0,
@@ -469,7 +486,8 @@ both.
 | `keyVersion` | Key | Notes |
 |---|---|---|
 | 1 (default when field absent) | `SHA-256(groupId + "familysafety-files-v1")` | Legacy. Both inputs are public — the salt is a constant in the binary and the groupId appears in the topic name — so this provides **no confidentiality against anyone who can reach the broker**. Implement for read compatibility only. |
-| 2 | `GroupDefinition.fileEncryptionKey`, hex-decoded to 32 bytes | Random per group, distributed only inside the encrypted group definition. |
+| 2 | `GroupDefinition.fileEncryptionKey`, hex-decoded to 32 bytes | Random per group, distributed only inside the encrypted group definition. **What Android publishes today.** |
+| 3 | `SHA-256(fileEncryptionKey ‖ "files")` — the §6.2 subkey derivation with purpose `files` | Purpose separation, so recovering a file key does not also yield presence. **Implement the reader now; do not write it yet.** Android 1.12.10 and earlier map an unrecognised version to the legacy key, so a device that publishes version 3 makes its files undecryptable to every peer that has not updated. The writer flips in a later release, once readers are everywhere. |
 
 Rules for an implementation:
 
@@ -480,8 +498,12 @@ Rules for an implementation:
 - A version 2 chunk received while `fileEncryptionKey` is null cannot be decrypted.
   Drop the chunk and surface it; do not attempt the version 1 key, which fails GCM
   authentication anyway.
-- Re-broadcast (`files/request`) re-encrypts from local plaintext, so it uses the
-  *current* key and tags accordingly. This migrates legacy files opportunistically.
+- Re-broadcast (`files/request`) and chunk repair both retransmit **stored ciphertext
+  verbatim**, tagged with the key version the stored copy actually holds. Android used to
+  re-encrypt these from a local plaintext copy under the current key, which migrated legacy
+  files opportunistically; it no longer keeps plaintext to re-encrypt from, so a legacy file
+  stays version 1 until the family is recreated. Do not "upgrade" a chunk in transit — the
+  requester writes what arrives into a per-file blob that cannot mix key versions.
 - Decoders must tolerate the absent field. Android decodes with
   `ignoreUnknownKeys = true`; the Swift side should use an optional with a default of 1.
 
@@ -497,25 +519,93 @@ broadcast so a joining member still catches up instantly.
 
 Sending:
 
-1. Pad the `FileManifest` to a **1 KiB** multiple using the same `pad` scheme as §6.1
+1. Pad the `FileManifest` to a **2 KiB** multiple using the same `pad` scheme as §6.1
    (measure with `pad` empty, round up, fill with `.`). This stops ciphertext length from
-   revealing the file count and name lengths.
+   revealing the file count and name lengths. *(Was 1 KiB; widened when `isEssential` was
+   added to each entry, because the extra bytes per file pushed a three-file manifest out of
+   the bucket a one-file manifest sits in and made the two distinguishable by length again.
+   A client still padding to 1 KiB reintroduces that leak.)*
 2. AES-256-GCM the serialized manifest with the group key, 12-byte nonce, 128-bit tag,
    blob layout `nonce ‖ ciphertext ‖ tag`.
-3. Publish `{keyVersion: 2, data: <base64 blob>}`, retained.
+3. Sign and publish as described under "Manifest authenticity" below, retained.
 
 Receiving — **both shapes appear on this topic**, since a retained plaintext manifest
 from before the upgrade outlives it and older senders still publish plaintext:
 
-1. Try to decode `EncryptedFileManifest`. If it parses, decrypt with the key for its
-   `keyVersion`; if no such key is held, drop the message.
-2. Otherwise decode as a bare `FileManifest`.
+1. Try to decode `EncryptedFileManifest`. If it parses, **verify the signature first**, then
+   decrypt with the key for its `keyVersion`; if no such key is held, drop the message.
+2. Otherwise decode as a bare `FileManifest` — **only if this group has no
+   `fileEncryptionKey`.** Once the group has one, a plaintext manifest is either a stale
+   retained message or an attempt, and must be refused.
 
 The two shapes have disjoint required fields, so the attempt order is unambiguous.
 
-A group with no `fileEncryptionKey` (created before 1.12.0) publishes plaintext. Do not
-"fix" that by encrypting with the version 1 key — it is derivable by anyone on the
-broker, so it would look like protection without providing any.
+A group with no `fileEncryptionKey` (created before 1.12.0) publishes plaintext and cannot
+sign in a way anyone can check against a key nobody shares. Do not "fix" that by encrypting
+with the version 1 key — it is derivable by anyone on the broker, so it would look like
+protection without providing any. Recreating the family is the fix.
+
+#### Manifest authenticity (since 1.9)
+
+The manifest is the file library's index. It names every document, and an entry marked
+deleted in it deletes that document on **every device in the family**. Until 1.9 it was
+encrypted but unsigned, with an unconditional plaintext fallback, so anyone able to publish
+to the broker could rewrite or empty a family's library.
+
+Signing, over the **ciphertext** rather than the plaintext, so a manifest is authenticated
+before anything is decrypted:
+
+```
+signingPayload = UTF8("{keyVersion}|{data}")     // data = the base64 string as published
+signature      = hex(Ed25519_sign(signingPayload, ourEd25519PrivateKey))
+signerMemberId = our memberId
+```
+
+The key version is inside the payload deliberately: without it, a valid signature could be
+kept while relabelling the manifest to a weaker key.
+
+Verifying, in this order:
+
+1. If `signature` or `signerMemberId` is empty, **refuse**. Absent is not valid — treating it
+   as valid means forging a manifest requires only leaving the field out. During rollout this
+   means a peer on an older build stops updating this device's file list until it updates,
+   which is the correct trade.
+2. Look `signerMemberId` up in **our own current roster**. If they are not a member, refuse.
+   Never verify against a key carried in the message, for the same reason §7.3 gives for
+   group sync.
+3. Verify the signature over `signingPayload` with that member's `ed25519PublicKey`. Refuse
+   on failure. Only then decrypt.
+
+#### Deletion tombstones (since 1.9)
+
+Deletion propagates as an entry that is **present and flagged**, not as an absence — an
+absent entry is indistinguishable from a file the publisher has never heard of.
+
+- The publisher includes every non-deleted file **plus** every `isDeleted` entry whose
+  `deletedAt` is within the retention window. Android's window is **90 days**: a tombstone has
+  to outlive any device that might still be holding the file, and the cost of being generous
+  is a few hundred bytes in one retained message. Past the window the row is dropped entirely.
+- On receive, for each entry:
+  - **known locally and not yet deleted, arriving deleted** → mark deleted, erase the stored
+    blob and any decrypted cache copy. Do not ask the user.
+  - **unknown locally and arriving deleted** → record the tombstone anyway. Without it, a
+    slower peer that still holds the file republishes it and it comes back.
+  - a device holding a tombstone must not serve, request or accept chunks for that `fileId`.
+
+Before 1.9 Android built the manifest from a query filtering `isDeleted = 0`, so tombstones
+never left the device while the confirmation dialog said "delete for everyone in the family".
+The receive-side branch existed the whole time and no sender ever reached it. For medical
+records and IDs that is a privacy failure rather than a missing feature, and an
+implementation that omits it is not merely incomplete — it is the same failure.
+
+#### At-rest storage (Android behaviour, no wire effect)
+
+Recorded because it changes what the two implementations can assume about each other, not
+because it crosses the wire: Android no longer keeps a plaintext copy of any shared document.
+A file is stored as one sparse blob of wire-format chunk ciphertexts, decrypted to a private
+cache file only while another app is opening it, and that cache is cleared on launch. A peer
+therefore cannot expect a re-broadcast to arrive re-encrypted under the current key — see the
+`keyVersion` rules above.
 
 ---
 

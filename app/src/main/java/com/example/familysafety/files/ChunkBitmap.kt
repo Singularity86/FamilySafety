@@ -26,6 +26,20 @@ object ChunkBitmap {
 
     fun empty(chunkCount: Int): ByteArray = ByteArray(sizeFor(chunkCount))
 
+    /**
+     * Every chunk held. Used by the uploader, which has the whole file from the outset.
+     *
+     * Trailing bits past [chunkCount] in the final byte are left clear so [count] and
+     * [isComplete] agree with a bitmap built one chunk at a time.
+     */
+    fun full(chunkCount: Int): ByteArray {
+        val out = empty(chunkCount)
+        for (i in 0 until chunkCount) {
+            out[i / 8] = (out[i / 8].toInt() or (1 shl (i % 8))).toByte()
+        }
+        return out
+    }
+
     fun isSet(bitmap: ByteArray?, index: Int): Boolean {
         if (bitmap == null || index < 0) return false
         val byte = index / 8

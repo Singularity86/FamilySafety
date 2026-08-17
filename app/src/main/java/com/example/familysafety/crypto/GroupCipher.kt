@@ -27,6 +27,15 @@ object GroupCipher {
     const val PURPOSE_PRESENCE = "presence"
 
     /**
+     * Purpose label for shared files, used by file key version 3.
+     *
+     * Files were the one subsystem still using the group key raw, so recovering a single
+     * file chunk's key handed over presence and everything else derived from the same
+     * secret. Changing this string silently breaks interop.
+     */
+    const val PURPOSE_FILES = "files"
+
+    /**
      * Derive a 32-byte subkey for [purpose] from the hex-encoded group key.
      *
      * SHA-256 over `key ‖ purpose`. Not HKDF, but the input is already a uniformly random

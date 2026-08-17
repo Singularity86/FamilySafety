@@ -24,6 +24,45 @@ interface SharedFileDao {
     @Query("SELECT * FROM shared_files WHERE fileId = :fileId")
     suspend fun getFileById(fileId: String): SharedFileEntity?
 
+    /**
+     * What goes into a published manifest: live files **and** recent tombstones.
+     *
+     * [getAllFiles] filters `isDeleted = 0`, and the manifest was built from it. Deleting a
+     * file therefore removed it here and nowhere else, while the confirmation dialog said
+     * "delete for everyone in the family" — the receiving side even had a remote-deletion
+     * branch that no sender ever reached. For medical records and IDs that is a privacy
+     * failure rather than a missing feature.
+     *
+     * Tombstones are dropped once they are older than [cutoff]. They exist to outlive any
+     * device that might still be holding the file, not forever: a peer offline longer than
+     * the retention window rejoins with the file still listed, which the manifest will not
+     * correct. The window is set well beyond any plausible offline period for that reason.
+     */
+    @Query("""
+        SELECT * FROM shared_files
+        WHERE isDeleted = 0 OR deletedAt >= :cutoff
+        ORDER BY uploadedAt DESC
+    """)
+    suspend fun getFilesForManifest(cutoff: Long): List<SharedFileEntity>
+
+    /** Drop tombstones past the retention window, so they do not accumulate for ever. */
+    @Query("DELETE FROM shared_files WHERE isDeleted = 1 AND deletedAt < :cutoff")
+    suspend fun purgeExpiredTombstones(cutoff: Long): Int
+
+    /**
+     * Completed files still stored as plaintext, for the one-time at-rest migration.
+     *
+     * `localPath` is null for every file written by this release — the encrypted blob is the
+     * stored form — so a non-null path on a complete row means the copy predates that and is
+     * sitting unencrypted on external storage.
+     */
+    @Query("""
+        SELECT * FROM shared_files
+        WHERE isDeleted = 0 AND downloadState = 'COMPLETE' AND localPath IS NOT NULL
+        ORDER BY sizeBytes ASC
+    """)
+    suspend fun getPlaintextStoredFiles(): List<SharedFileEntity>
+
     @Query("""
         UPDATE shared_files
         SET downloadState = :state, localPath = :localPath, chunksReceived = :chunksReceived

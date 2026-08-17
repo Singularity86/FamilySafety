@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.example.familysafety.core.RateLimiters
+import com.example.familysafety.crypto.GroupCipher
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.storage.FileAvailabilityEntity
 import com.example.familysafety.storage.FileTransferEvent
@@ -49,7 +50,9 @@ class SharedFileRepository @Inject constructor(
     private val fileAvailabilityDao: com.example.familysafety.storage.FileAvailabilityDao,
     private val fileTransferLogDao: com.example.familysafety.storage.FileTransferLogDao,
     private val groupStateManager: GroupStateManager,
-    private val transportProvider: com.example.familysafety.transport.TransportProvider
+    private val transportProvider: com.example.familysafety.transport.TransportProvider,
+    /** Signs outgoing manifests; incoming ones are verified against the group roster. */
+    private val cryptoProvider: com.example.familysafety.group.LazysodiumCryptoProvider
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -116,6 +119,20 @@ class SharedFileRepository @Inject constructor(
         private const val LOG_RETENTION_MS = 14L * 24 * 60 * 60 * 1000
 
         /**
+         * How long a deletion is republished before the tombstone itself is dropped.
+         *
+         * A tombstone has to outlive every device that might still be holding the file, or a
+         * phone that was off for the whole window comes back, sees the file missing from the
+         * manifest, and keeps its copy of a document the family deleted. Ninety days is well
+         * past any plausible offline period for a family phone, and the cost of being generous
+         * is a few hundred bytes per deleted file in one retained message.
+         */
+        private const val TOMBSTONE_RETENTION_MS = 90L * 24 * 60 * 60 * 1000
+
+        /** Where a document is briefly decrypted so another app can open it. */
+        private const val VIEW_CACHE_DIR = "shared_file_views"
+
+        /**
          * Schedule marker for a file this device is not fetching. Non-essential files sit
          * listed until someone opens them, at which point the schedule is cleared to 0.
          */
@@ -174,12 +191,29 @@ class SharedFileRepository @Inject constructor(
             val fileId = UUID.randomUUID().toString()
             stagedFileId = fileId
 
-            // Pass 1: stream the source to our own copy, hashing as it goes. Peak memory is
-            // one buffer, not the file. This replaced readBytes() + toList().chunked(), which
-            // held the whole file several times over and made large uploads an OOM.
-            val (contentHash, sizeBytes) = context.contentResolver.openInputStream(uri)?.use { input ->
-                fileStore.copyAndHash(input, fileStore.contentFile(fileId), CHUNK_SIZE)
-            } ?: return Result.failure(IllegalArgumentException("Cannot read file"))
+            val (fileKey, fileKeyVersion) = resolveEncryptionKey(groupId)
+
+            // Pass 1: stream the source straight into the encrypted blob, hashing the
+            // plaintext as it goes. Peak memory is one buffer, not the file — and, unlike the
+            // staged copy this replaced, the document is never written to disk in the clear.
+            val input = context.contentResolver.openInputStream(uri)
+                ?: return Result.failure(IllegalArgumentException("Cannot read file"))
+            val ingest = input.use {
+                fileStore.encryptInto(it, fileId, CHUNK_SIZE, strideBytes()) { plain ->
+                    encrypt(plain, fileKey)
+                }
+            }
+            if (ingest == null) {
+                // Reading the document worked and storing it did not — a full disk, or a
+                // volume that went away mid-write. Kept distinct from "cannot read", because
+                // the two send the user somewhere completely different.
+                fileStore.deleteAll(fileId)
+                stagedFileId = null
+                return Result.failure(IllegalStateException("Could not store the file"))
+            }
+            val contentHash = ingest.contentHash
+            val sizeBytes = ingest.sizeBytes
+            val totalChunks = ingest.chunkCount
 
             // The hash is only known after streaming, so the duplicate check moves here and
             // has to clean up the copy it just made.
@@ -197,13 +231,9 @@ class SharedFileRepository @Inject constructor(
                 return Result.failure(IllegalStateException("Group storage limit of 500 MB reached"))
             }
 
-            val (fileKey, fileKeyVersion) = resolveEncryptionKey(groupId)
-            val totalChunks = chunkCountFor(sizeBytes)
-            val contentFile = fileStore.contentFile(fileId)
-
             // Persist metadata before publishing chunks so receivers can create their
             // pending records from the manifest before chunk messages arrive. The uploader
-            // already holds the plaintext, so it is COMPLETE from the start — there is no
+            // holds every chunk already, so it is COMPLETE from the start — there is no
             // window where its own file looks half-downloaded.
             val entity = SharedFileEntity(
                 fileId = fileId,
@@ -214,10 +244,12 @@ class SharedFileRepository @Inject constructor(
                 uploaderMemberId = groupStateManager.localMember.value?.memberId ?: "",
                 uploadedAt = System.currentTimeMillis(),
                 chunkCount = totalChunks,
-                localPath = contentFile.absolutePath,
+                // Null means "the blob is the stored form". A path here marks a plaintext
+                // copy from before this release, which the startup sweep migrates.
+                localPath = null,
                 chunksReceived = totalChunks,
                 downloadState = "COMPLETE",
-                chunkBitmap = null,
+                chunkBitmap = ChunkBitmap.full(totalChunks),
                 blobKeyVersion = fileKeyVersion
             )
             sharedFileDao.upsert(entity)
@@ -226,14 +258,12 @@ class SharedFileRepository @Inject constructor(
             log(fileId, FileTransferEvent.UPLOAD_STARTED, "$totalChunks pieces, ${sizeBytes / 1024} KB")
             _uploadProgress.value = UploadProgress(fileId, fileName, 0, totalChunks)
 
-            // Pass 2: read our copy back a chunk at a time, encrypt and publish. Nothing
-            // whole-file is ever resident.
-            publishChunksFrom(
-                source = contentFile,
+            // Pass 2: read the blob's slots back and publish them verbatim. No second
+            // encryption pass, and no plaintext anywhere in the send path.
+            publishChunksFromBlob(
                 groupId = groupId,
                 fileId = fileId,
                 totalChunks = totalChunks,
-                fileKey = fileKey,
                 fileKeyVersion = fileKeyVersion
             ) { published ->
                 _uploadProgress.value = UploadProgress(fileId, fileName, published, totalChunks)
@@ -256,12 +286,13 @@ class SharedFileRepository @Inject constructor(
         }
     }
 
-    /** Chunks a file of [sizeBytes] splits into. Zero-length files still count as one chunk. */
-    private fun chunkCountFor(sizeBytes: Long): Int =
-        if (sizeBytes <= 0) 1 else ((sizeBytes + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt()
-
     /**
-     * Read [source] a chunk at a time, encrypt each and broadcast it.
+     * Publish the blob's chunks, each one exactly as it is stored.
+     *
+     * This used to read a plaintext copy back and encrypt every chunk a second time. Sending
+     * the stored ciphertext verbatim removes that pass, removes the need for the key at send
+     * time, and makes the bytes peers receive identical to the bytes the uploader hashed and
+     * verified — the same property that already lets repair retransmit a slot untouched.
      *
      * Publishing is paced. Paho's default in-flight window is 10, and `publishRaw` treats any
      * publish exception as a lost connection — it queues the message, marks the transport
@@ -269,43 +300,33 @@ class SharedFileRepository @Inject constructor(
      * disconnects the app from its own broker. The old byte-boxing path was slow enough to
      * hide that; streaming is not.
      */
-    private suspend fun publishChunksFrom(
-        source: File,
+    private suspend fun publishChunksFromBlob(
         groupId: String,
         fileId: String,
         totalChunks: Int,
-        fileKey: ByteArray,
         fileKeyVersion: Int,
-        onProgress: (Int) -> Unit
+        indices: Iterable<Int> = 0 until totalChunks,
+        onProgress: (Int) -> Unit = {}
     ) {
-        val buffer = ByteArray(CHUNK_SIZE)
-        source.inputStream().buffered().use { input ->
-            for (index in 0 until totalChunks) {
-                var filled = 0
-                while (filled < CHUNK_SIZE) {
-                    val read = input.read(buffer, filled, CHUNK_SIZE - filled)
-                    if (read <= 0) break
-                    filled += read
-                }
-                if (filled == 0 && index > 0) break
-
-                val plain = if (filled == CHUNK_SIZE) buffer else buffer.copyOf(filled)
-                val chunkMsg = FileChunkMessage(
-                    fileId = fileId,
-                    chunkIndex = index,
-                    totalChunks = totalChunks,
-                    data = Base64.getEncoder().encodeToString(encrypt(plain, fileKey)),
-                    keyVersion = fileKeyVersion
-                )
-                transportProvider.broadcastMessage(
-                    topic = MqttConfig.getFileChunkTopic(groupId, fileId, index),
-                    payload = json.encodeToString(chunkMsg).toByteArray(),
-                    qos = MqttConfig.QOS_AT_LEAST_ONCE,
-                    retained = false
-                )
-                onProgress(index + 1)
-                if (PUBLISH_PACING_MS > 0) delay(PUBLISH_PACING_MS)
-            }
+        var sent = 0
+        for (index in indices) {
+            val ciphertext = fileStore.readChunk(fileId, index, strideBytes()) ?: continue
+            val chunkMsg = FileChunkMessage(
+                fileId = fileId,
+                chunkIndex = index,
+                totalChunks = totalChunks,
+                data = Base64.getEncoder().encodeToString(ciphertext),
+                keyVersion = fileKeyVersion
+            )
+            transportProvider.broadcastMessage(
+                topic = MqttConfig.getFileChunkTopic(groupId, fileId, index),
+                payload = json.encodeToString(chunkMsg).toByteArray(),
+                qos = MqttConfig.QOS_AT_LEAST_ONCE,
+                retained = false
+            )
+            sent++
+            onProgress(sent)
+            if (PUBLISH_PACING_MS > 0) delay(PUBLISH_PACING_MS)
         }
     }
 
@@ -324,7 +345,12 @@ class SharedFileRepository @Inject constructor(
 
                 manifest.files.forEach { sharedFile ->
                     val existing = sharedFileDao.getFileById(sharedFile.fileId)
-                    if (existing == null) {
+                    if (existing == null && sharedFile.isDeleted) {
+                        // A tombstone for a file this device never saw. Kept rather than
+                        // ignored, so that if a slow peer republishes the file itself this
+                        // device already knows it was deleted and does not resurrect it.
+                        sharedFileDao.upsert(sharedFile.toEntity())
+                    } else if (existing == null) {
                         // New file — record it, then decide whether to chase it. Essential
                         // files start downloading now; the rest wait to be opened.
                         val entity = sharedFile.toEntity()
@@ -332,13 +358,19 @@ class SharedFileRepository @Inject constructor(
                         applyFetchPolicy(entity)
                         if (entity.isEssential) reconcileFile(sharedFile.fileId)
                     } else if (sharedFile.isDeleted && !existing.isDeleted) {
-                        // Remotely deleted
+                        // Deleted by someone else in the family. This branch has existed
+                        // since the feature shipped; until the manifest carried tombstones,
+                        // nothing ever reached it.
                         sharedFileDao.markDeleted(
                             sharedFile.fileId,
                             sharedFile.deletedByMemberId ?: "",
                             sharedFile.deletedAt ?: System.currentTimeMillis()
                         )
                         fileStore.deleteAll(sharedFile.fileId)
+                        runCatching { File(viewCacheDir(), sharedFile.fileId).deleteRecursively() }
+                        runCatching { fileAvailabilityDao.deleteForFile(sharedFile.fileId) }
+                        log(sharedFile.fileId, FileTransferEvent.DELETED, "deleted by the family")
+                        Timber.i("$TAG: removed ${existing.name} — deleted elsewhere in the family")
                     } else if (existing.downloadState != "COMPLETE") {
                         if (existing.isEssential != sharedFile.isEssential) {
                             sharedFileDao.setEssential(sharedFile.fileId, sharedFile.isEssential)
@@ -701,16 +733,21 @@ class SharedFileRepository @Inject constructor(
                     Timber.d("$TAG: asked for chunks of ${request.fileId} we do not hold in full")
                     return@launch
                 }
-                val source = entity.localPath?.let { File(it) }?.takeIf { it.exists() } ?: return@launch
+                if (!fileStore.blobFile(entity.fileId).exists()) return@launch
 
-                val (fileKey, fileKeyVersion) = resolveEncryptionKey(groupId)
                 val wanted = request.missing.filter { it in 0 until entity.chunkCount }
                     .distinct()
                     .sorted()
                     .take(MAX_CHUNKS_PER_REPAIR_RESPONSE)
                 if (wanted.isEmpty()) return@launch
 
-                serveChunks(source, groupId, entity.fileId, entity.chunkCount, wanted, fileKey, fileKeyVersion)
+                publishChunksFromBlob(
+                    groupId = groupId,
+                    fileId = entity.fileId,
+                    totalChunks = entity.chunkCount,
+                    fileKeyVersion = entity.blobKeyVersion,
+                    indices = wanted
+                )
                 log(
                     entity.fileId,
                     FileTransferEvent.CHUNKS_SERVED,
@@ -726,47 +763,6 @@ class SharedFileRepository @Inject constructor(
         }
     }
 
-    /** Read just the requested chunk indices from [source] and publish them. */
-    private suspend fun serveChunks(
-        source: File,
-        groupId: String,
-        fileId: String,
-        totalChunks: Int,
-        indices: List<Int>,
-        fileKey: ByteArray,
-        fileKeyVersion: Int
-    ) {
-        val buffer = ByteArray(CHUNK_SIZE)
-        java.io.RandomAccessFile(source, "r").use { raf ->
-            for (index in indices) {
-                val offset = index.toLong() * CHUNK_SIZE
-                if (offset >= raf.length()) continue
-                raf.seek(offset)
-                var filled = 0
-                while (filled < CHUNK_SIZE) {
-                    val read = raf.read(buffer, filled, CHUNK_SIZE - filled)
-                    if (read <= 0) break
-                    filled += read
-                }
-                if (filled == 0) continue
-                val plain = if (filled == CHUNK_SIZE) buffer else buffer.copyOf(filled)
-                val chunkMsg = FileChunkMessage(
-                    fileId = fileId,
-                    chunkIndex = index,
-                    totalChunks = totalChunks,
-                    data = Base64.getEncoder().encodeToString(encrypt(plain, fileKey)),
-                    keyVersion = fileKeyVersion
-                )
-                transportProvider.broadcastMessage(
-                    topic = MqttConfig.getFileChunkTopic(groupId, fileId, index),
-                    payload = json.encodeToString(chunkMsg).toByteArray(),
-                    qos = MqttConfig.QOS_AT_LEAST_ONCE,
-                    retained = false
-                )
-                if (PUBLISH_PACING_MS > 0) delay(PUBLISH_PACING_MS)
-            }
-        }
-    }
 
     /**
      * Chase every file that is due, oldest schedule first. Called by the background worker.
@@ -842,32 +838,25 @@ class SharedFileRepository @Inject constructor(
         scope.launch {
             try {
                 val groupId = groupStateManager.groupDefinition.value?.groupId ?: return@launch
-                // Re-encrypted fresh from the local plaintext, so this uses the current
-                // key regardless of which one the file originally arrived under. That
-                // also quietly migrates legacy files to the group key as they replicate.
-                val (fileKey, fileKeyVersion) = resolveEncryptionKey(groupId)
 
                 broadcastManifest(groupId)
 
-                // Streams each file rather than reading it whole. This path is worse than the
-                // upload for memory, because it runs over *every* complete file in the library
-                // back to back, so one request could hold several files' worth of boxed bytes
-                // at once. It stays all-or-nothing only until Phase 2 replaces it with a
-                // request for specific missing chunks.
+                // Republishes stored slots rather than re-reading and re-encrypting a
+                // plaintext copy, which no longer exists. Each file goes out under the key
+                // version its blob actually holds; a legacy file therefore stays legacy here
+                // instead of being quietly re-keyed mid-broadcast, which is the honest
+                // behaviour — those families need to be recreated, not patched in transit.
                 val complete = sharedFileDao.getAllFiles()
                     .filter { !it.isDeleted && it.downloadState == "COMPLETE" }
                 var republished = 0
                 complete.forEach { entity ->
-                    val source = entity.localPath?.let { File(it) }?.takeIf { it.exists() }
-                        ?: return@forEach
-                    publishChunksFrom(
-                        source = source,
+                    if (!fileStore.blobFile(entity.fileId).exists()) return@forEach
+                    publishChunksFromBlob(
                         groupId = groupId,
                         fileId = entity.fileId,
-                        totalChunks = chunkCountFor(source.length()),
-                        fileKey = fileKey,
-                        fileKeyVersion = fileKeyVersion
-                    ) { }
+                        totalChunks = entity.chunkCount,
+                        fileKeyVersion = entity.blobKeyVersion
+                    )
                     republished++
                 }
                 Timber.i("$TAG: Re-broadcast $republished files in response to request")
@@ -890,8 +879,15 @@ class SharedFileRepository @Inject constructor(
 
             val now = System.currentTimeMillis()
             sharedFileDao.markDeleted(fileId, localMemberId, now)
-            log(fileId, FileTransferEvent.DELETED, "deleted on this phone")
+            log(fileId, FileTransferEvent.DELETED, "deleted for the whole family")
             fileStore.deleteAll(fileId)
+            runCatching { File(viewCacheDir(), fileId).deleteRecursively() }
+            // Who held a copy stops being a fact about a file once it is gone; leaving the
+            // rows means the status board can still be asked "how many devices have this".
+            runCatching { fileAvailabilityDao.deleteForFile(fileId) }
+            // The manifest now carries the tombstone, so this is the message that actually
+            // deletes the document on everyone else's phone — which is what the confirmation
+            // dialog has been promising all along.
             broadcastManifest(groupId)
             Timber.i("$TAG: Deleted file $fileId")
             Result.success(Unit)
@@ -957,17 +953,29 @@ class SharedFileRepository @Inject constructor(
     // =========================================================================
 
     private suspend fun broadcastManifest(groupId: String) {
-        val files = sharedFileDao.getAllFiles().map { it.toSharedFile() }
+        // Tombstones ride along with the live files. Building this from `getAllFiles()`, whose
+        // query filters `isDeleted = 0`, is why "delete for everyone in the family" deleted the
+        // file on exactly one phone.
+        val files = sharedFileDao
+            .getFilesForManifest(System.currentTimeMillis() - TOMBSTONE_RETENTION_MS)
+            .map { it.toSharedFile() }
         val manifest = FileManifest(groupId, files, System.currentTimeMillis())
         val topic = MqttConfig.getFileManifestTopic(groupId)
 
         val (fileKey, fileKeyVersion) = resolveEncryptionKey(groupId)
-        val payload = if (fileKeyVersion == FILE_KEY_VERSION_GROUP_SECRET) {
+        val payload = if (fileKeyVersion != FILE_KEY_VERSION_LEGACY) {
+            val data = Base64.getEncoder().encodeToString(
+                encrypt(json.encodeToString(padManifest(manifest)).toByteArray(), fileKey)
+            )
             val wrapped = EncryptedFileManifest(
                 keyVersion = fileKeyVersion,
-                data = Base64.getEncoder().encodeToString(
-                    encrypt(json.encodeToString(padManifest(manifest)).toByteArray(), fileKey)
-                )
+                data = data,
+                signerMemberId = groupStateManager.localMember.value?.memberId.orEmpty(),
+                signature = runCatching {
+                    cryptoProvider
+                        .signMessage(manifestSigningPayload(fileKeyVersion, data))
+                        .joinToString("") { "%02x".format(it) }
+                }.onFailure { Timber.e(it, "$TAG: could not sign manifest") }.getOrDefault("")
             )
             json.encodeToString(wrapped).toByteArray()
         } else {
@@ -987,17 +995,30 @@ class SharedFileRepository @Inject constructor(
     }
 
     /**
-     * Decode a manifest that may be encrypted or legacy plaintext.
+     * Decode a manifest, authenticating it before decrypting it.
      *
-     * Both shapes appear on the same topic during rollout, and a retained plaintext
-     * manifest from before the upgrade can outlive it, so the encrypted form is tried
-     * first and plaintext is the fallback. Returns null when neither parses, or when the
-     * manifest is encrypted under a key this device does not hold.
+     * The manifest is the file library's index: it names every document, and marking one
+     * deleted in it deletes that document on every device. It was previously accepted from
+     * anyone — unsigned, with an unconditional plaintext fallback — so anyone able to publish
+     * to the broker could rewrite or empty a family's library. Two rules close that:
+     *
+     * - the signature must verify against the roster entry for [EncryptedFileManifest.signerMemberId],
+     *   looked up in *our* group state and never in the message, so a forger cannot supply the
+     *   key that validates their own signature;
+     * - the plaintext fallback is refused outright once the group has a real shared key, since
+     *   from that point a plaintext manifest is either a stale retained message or an attempt.
+     *
+     * Groups predating the shared key have no key to sign against and keep the old plaintext
+     * behaviour, with the exposure recorded in SECURITY_REVIEW.md F1/F7; recreating the family
+     * is the fix there, not a patch here.
      */
     private fun decodeManifest(raw: String, groupId: String): FileManifest? {
+        val hasGroupKey = !groupStateManager.groupDefinition.value?.fileEncryptionKey.isNullOrBlank()
+
         runCatching { json.decodeFromString<EncryptedFileManifest>(raw) }
             .getOrNull()
             ?.let { wrapped ->
+                if (!verifyManifestSignature(wrapped)) return null
                 val key = keyForVersion(groupId, wrapped.keyVersion)
                 if (key == null) {
                     Timber.w(
@@ -1013,9 +1034,47 @@ class SharedFileRepository @Inject constructor(
                 }.onFailure { Timber.e(it, "$TAG: failed to decrypt manifest") }.getOrNull()
             }
 
+        if (hasGroupKey) {
+            Timber.w("$TAG: refusing a plaintext manifest — this group has a shared key")
+            return null
+        }
         return runCatching { json.decodeFromString<FileManifest>(raw) }
             .onFailure { Timber.e(it, "$TAG: failed to parse manifest") }
             .getOrNull()
+    }
+
+    /**
+     * Whether [wrapped] was signed by a current member of this family.
+     *
+     * Unsigned manifests are refused rather than tolerated. During a rollout that means a peer
+     * on an older build stops updating this device's file list until it updates — which the
+     * Family screen already reports as "needs to update" — and that is the right trade: an
+     * accepted-if-absent signature is not a signature, since forging one only requires leaving
+     * the field out.
+     */
+    private fun verifyManifestSignature(wrapped: EncryptedFileManifest): Boolean {
+        if (wrapped.signature.isBlank() || wrapped.signerMemberId.isBlank()) {
+            Timber.w("$TAG: refusing an unsigned manifest")
+            return false
+        }
+        val signer = groupStateManager.groupDefinition.value?.members
+            ?.firstOrNull { it.memberId == wrapped.signerMemberId }
+        if (signer == null) {
+            Timber.w(
+                "$TAG: manifest signed by ${wrapped.signerMemberId.take(8)}, " +
+                    "who is not in this family"
+            )
+            return false
+        }
+        val ok = runCatching {
+            cryptoProvider.verifySignature(
+                message = manifestSigningPayload(wrapped.keyVersion, wrapped.data),
+                signature = wrapped.signature.hexToBytes(),
+                publicKey = signer.ed25519PublicKey.hexToBytes()
+            )
+        }.getOrDefault(false)
+        if (!ok) Timber.e("$TAG: manifest signature does not verify — discarding")
+        return ok
     }
 
     /**
@@ -1051,19 +1110,21 @@ class SharedFileRepository @Inject constructor(
             return
         }
 
-        val scratch = File(fileStore.contentFile(fileId).parentFile, "content.part")
-        val hash = scratch.outputStream().buffered().use { out ->
+        // Verified by streaming, never assembled. The blob *is* the stored file now, so there
+        // is nothing to write out — this pass exists only to prove the chunks decrypt in order
+        // to the bytes the manifest promised. Previously the same pass produced a plaintext
+        // copy that then stayed on external storage permanently.
+        val hash = DiscardingOutputStream().use { sink ->
             fileStore.decryptTo(
                 fileId = fileId,
                 chunkCount = entity.chunkCount,
                 stride = strideBytes(),
-                out = out
+                out = sink
             ) { slot -> decrypt(slot, fileKey) }
         }
 
         if (hash == null) {
-            runCatching { scratch.delete() }
-            Timber.w("$TAG: could not assemble $fileId — will retry when more chunks arrive")
+            Timber.w("$TAG: could not verify $fileId — will retry when more chunks arrive")
             return
         }
 
@@ -1075,25 +1136,19 @@ class SharedFileRepository @Inject constructor(
             // the old FAILED path did.
             log(fileId, FileTransferEvent.HASH_MISMATCH, "contents did not match, fetching again")
             Timber.e("$TAG: Hash mismatch for $fileId — discarding and re-fetching")
-            runCatching { scratch.delete() }
             fileStore.discardBlob(fileId)
             sharedFileDao.updateChunkState(fileId, null, 0, "PENDING", 0)
             return
         }
 
-        val target = fileStore.contentFile(fileId)
-        runCatching { target.delete() }
-        if (!scratch.renameTo(target)) {
-            runCatching { scratch.delete() }
-            Timber.e("$TAG: could not move assembled $fileId into place")
-            return
-        }
-
-        fileStore.discardBlob(fileId)
-        sharedFileDao.updateDownloadProgress(fileId, "COMPLETE", target.absolutePath, entity.chunkCount)
+        // The blob is deliberately kept. It is both the stored copy of the document and what
+        // this device serves to peers asking for repair, so discarding it here — as the old
+        // path did, once a plaintext copy existed — would leave nothing to serve and nothing
+        // encrypted to hold.
+        sharedFileDao.updateDownloadProgress(fileId, "COMPLETE", null, entity.chunkCount)
         sharedFileDao.clearRepairSchedule(fileId)
         log(fileId, FileTransferEvent.DOWNLOAD_COMPLETE, "verified ${entity.chunkCount} pieces")
-        Timber.i("$TAG: Assembled file ${entity.name}")
+        Timber.i("$TAG: Verified file ${entity.name}")
 
         // Tell the family this device now holds it, so their status boards can say so and
         // their repair requests can be aimed here.
@@ -1167,11 +1222,141 @@ class SharedFileRepository @Inject constructor(
             try {
                 val swept = fileStore.sweepLegacyTempDirs()
                 if (swept > 0) Timber.i("$TAG: removed $swept legacy temp chunk directories")
+                clearViewCache()
+                val purged = sharedFileDao.purgeExpiredTombstones(
+                    System.currentTimeMillis() - TOMBSTONE_RETENTION_MS
+                )
+                if (purged > 0) Timber.i("$TAG: dropped $purged expired tombstones")
+                encryptLegacyPlaintextFiles()
                 sharedFileDao.getIncompleteFiles().forEach { reconcileFile(it.fileId) }
             } catch (e: Exception) {
                 Timber.e(e, "$TAG: startup reconcile failed")
             }
         }
+    }
+
+    /**
+     * Move documents shared before this release out of plaintext and into the blob store.
+     *
+     * Every rule here exists because the failure mode is losing a document the family cannot
+     * get back from anywhere:
+     *
+     * - one file at a time, smallest first, so an interruption costs the least and the common
+     *   case finishes even on a nearly full phone;
+     * - the plaintext is deleted only after the encrypted copy has been read back and hashed
+     *   to the value already recorded — a re-encryption that verifies is the only one that
+     *   counts;
+     * - both copies exist at once, so the file's own size is required free, and the pass stops
+     *   rather than filling the volume;
+     * - the row is left exactly as it was on any failure, so the next launch simply tries
+     *   again. `localPath` is the resume marker: it is cleared only on success.
+     */
+    private suspend fun encryptLegacyPlaintextFiles() {
+        val groupId = groupStateManager.groupDefinition.value?.groupId ?: return
+        val pending = sharedFileDao.getPlaintextStoredFiles()
+        if (pending.isEmpty()) return
+        Timber.i("$TAG: ${pending.size} file(s) still stored as plaintext — encrypting")
+
+        val (fileKey, fileKeyVersion) = resolveEncryptionKey(groupId)
+        for (entity in pending) {
+            val plaintext = entity.localPath?.let { File(it) }
+            if (plaintext == null || !plaintext.exists()) {
+                // The row claims a copy that is not there. Clear the claim so the ordinary
+                // repair path can fetch it, rather than leaving a file that looks available.
+                sharedFileDao.updateChunkState(entity.fileId, null, 0, "PENDING", 0)
+                sharedFileDao.updateDownloadProgress(entity.fileId, "PENDING", null, 0)
+                continue
+            }
+            if (fileStore.usableSpaceBytes() in 1 until plaintext.length()) {
+                Timber.w("$TAG: not enough free space to encrypt ${entity.name}; will retry")
+                break
+            }
+
+            val ingest = runCatching {
+                plaintext.inputStream().use { input ->
+                    fileStore.encryptInto(input, entity.fileId, CHUNK_SIZE, strideBytes()) {
+                        encrypt(it, fileKey)
+                    }
+                }
+            }.getOrNull()
+
+            if (ingest == null || ingest.contentHash != entity.contentHash) {
+                Timber.e("$TAG: re-encrypting ${entity.name} did not verify; leaving it as it was")
+                fileStore.discardBlob(entity.fileId)
+                continue
+            }
+
+            sharedFileDao.updateChunkState(
+                entity.fileId,
+                ChunkBitmap.full(ingest.chunkCount),
+                ingest.chunkCount,
+                "COMPLETE",
+                fileKeyVersion
+            )
+            sharedFileDao.updateDownloadProgress(
+                entity.fileId, "COMPLETE", null, ingest.chunkCount
+            )
+            runCatching { plaintext.delete() }
+            log(entity.fileId, FileTransferEvent.DOWNLOAD_COMPLETE, "now stored encrypted")
+            Timber.i("$TAG: encrypted ${entity.name} at rest")
+        }
+    }
+
+    /**
+     * Decrypt a document into the cache so another app can open it, and return that file.
+     *
+     * This is the only place a document exists in the clear, and it is in `cacheDir` — private
+     * to the app, wiped on every launch, and reachable by other apps only through the
+     * `FileProvider` grant that opening it issues.
+     *
+     * Returns null when the file is not fully held, which is a normal state: non-essential
+     * files sit listed until someone wants them.
+     */
+    suspend fun materializeForViewing(fileId: String): File? {
+        val entity = sharedFileDao.getFileById(fileId) ?: return null
+        if (entity.isDeleted || entity.downloadState != "COMPLETE") return null
+
+        // A file from before at-rest encryption is still plaintext on disk until the startup
+        // pass gets to it; opening it should not have to wait for that.
+        entity.localPath?.let { path ->
+            val legacy = File(path)
+            if (legacy.exists()) return legacy
+        }
+
+        val target = File(File(viewCacheDir(), fileId), safeFileName(entity.name))
+        if (target.exists() && target.length() > 0) return target
+
+        val groupId = groupStateManager.groupDefinition.value?.groupId ?: return null
+        val key = keyForVersion(groupId, entity.blobKeyVersion) ?: return null
+
+        target.parentFile?.mkdirs()
+        val hash = runCatching {
+            target.outputStream().buffered().use { out ->
+                fileStore.decryptTo(fileId, entity.chunkCount, strideBytes(), out) { slot ->
+                    decrypt(slot, key)
+                }
+            }
+        }.getOrNull()
+
+        if (hash != entity.contentHash) {
+            runCatching { target.delete() }
+            Timber.e("$TAG: could not decrypt ${entity.name} for viewing")
+            return null
+        }
+        return target
+    }
+
+    private fun viewCacheDir(): File = File(context.cacheDir, VIEW_CACHE_DIR).also { it.mkdirs() }
+
+    /**
+     * Drop everything decrypted for viewing.
+     *
+     * Run at startup rather than after each open: an app the user handed the file to may still
+     * be reading it when they come back to this one, and deleting it under them turns "open"
+     * into a blank screen. A launch is the first moment nothing can still be holding a grant.
+     */
+    private fun clearViewCache() {
+        runCatching { File(context.cacheDir, VIEW_CACHE_DIR).deleteRecursively() }
     }
 
     /**
@@ -1191,15 +1376,30 @@ class SharedFileRepository @Inject constructor(
         }
     }
 
-    /** The key a received chunk says it was encrypted with. */
+    /**
+     * The key a received chunk or manifest says it was encrypted with.
+     *
+     * Version 3 is readable here but not yet written anywhere (see
+     * [FILE_KEY_VERSION_GROUP_SUBKEY]): landing the reader a release ahead of the writer is
+     * what lets the writer be flipped later without every peer on the previous build silently
+     * losing the ability to decrypt new files.
+     *
+     * An unrecognised version now returns null instead of falling back to the legacy key. The
+     * fallback could never succeed — GCM would reject the wrong key anyway — but it turned
+     * "this build is too old to read that" into an indistinguishable decryption failure.
+     */
     private fun keyForVersion(groupId: String, keyVersion: Int): ByteArray? =
         when (keyVersion) {
-            FILE_KEY_VERSION_GROUP_SECRET ->
-                groupStateManager.groupDefinition.value?.fileEncryptionKey
-                    ?.takeIf { it.isNotBlank() }
-                    ?.hexToBytes()
-            else -> deriveLegacyFileKey(groupId)
+            FILE_KEY_VERSION_GROUP_SUBKEY ->
+                groupKeyHex()?.let { GroupCipher.deriveSubkey(it, GroupCipher.PURPOSE_FILES) }
+            FILE_KEY_VERSION_GROUP_SECRET -> groupKeyHex()?.hexToBytes()
+            // 0 is a row written before blobKeyVersion existed; it can only be legacy.
+            FILE_KEY_VERSION_LEGACY, 0 -> deriveLegacyFileKey(groupId)
+            else -> null
         }
+
+    private fun groupKeyHex(): String? =
+        groupStateManager.groupDefinition.value?.fileEncryptionKey?.takeIf { it.isNotBlank() }
 
     private fun String.hexToBytes(): ByteArray =
         chunked(2).map { it.toInt(16).toByte() }.toByteArray()
@@ -1257,6 +1457,24 @@ class SharedFileRepository @Inject constructor(
         return fromProvider?.takeIf { it.isNotBlank() }
             ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
             ?: "file"
+    }
+
+    /**
+     * A file name that can only ever name a file inside the directory it is joined to.
+     *
+     * A shared file's name arrives from a peer in the manifest, and until this release it was
+     * only ever displayed. Decrypting for viewing puts it on a path, and a name like
+     * `../../databases/familysafety_encrypted.db` would then write outside the cache and into
+     * app-private storage. Separators and traversal are stripped rather than rejected, so a
+     * document with an awkward name still opens.
+     */
+    private fun safeFileName(name: String): String {
+        val cleaned = name
+            .map { if (it == '/' || it == '\\' || it.isISOControl()) '_' else it }
+            .joinToString("")
+            .trim()
+            .trimStart('.')
+        return cleaned.takeIf { it.isNotBlank() }?.take(120) ?: "document"
     }
 
     private fun sha256Hex(bytes: ByteArray): String =
@@ -1341,6 +1559,19 @@ class SharedFileRepository @Inject constructor(
         localPath = null, chunksReceived = 0, downloadState = if (isDeleted) "COMPLETE" else "PENDING",
         isEssential = isEssential
     )
+}
+
+/**
+ * A sink that throws its input away.
+ *
+ * Verifying a completed download means streaming every chunk through a digest; it does not
+ * mean producing a copy. Writing that stream to a file was how the plaintext document ended up
+ * on disk in the first place. `OutputStream.nullOutputStream()` would do the same job but is
+ * Java 11, above this project's minSdk 26.
+ */
+private class DiscardingOutputStream : java.io.OutputStream() {
+    override fun write(b: Int) = Unit
+    override fun write(b: ByteArray, off: Int, len: Int) = Unit
 }
 
 data class UploadProgress(

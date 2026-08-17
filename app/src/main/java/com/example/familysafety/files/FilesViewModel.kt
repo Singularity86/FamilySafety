@@ -138,37 +138,61 @@ class FilesViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Open a document in whatever app handles its type.
+     *
+     * Documents are stored encrypted, so this decrypts one into the private cache first and
+     * hands that file out under a read grant. It is asynchronous for the same reason: a large
+     * document has to be streamed and hashed before it can be shown, and doing that on the
+     * main thread is how a tap turns into a frozen screen.
+     */
     fun openFile(file: SharedFileEntity, context: Context) {
-        val localPath = file.localPath
-        if (localPath == null || !File(localPath).exists()) {
-            // Opening a file that is not here is now a normal, expected action rather than a
+        if (file.downloadState != "COMPLETE") {
+            // Opening a file that is not here is a normal, expected action rather than a
             // repair: non-essential files are deliberately left undownloaded until wanted.
             // This asks one peer for exactly the missing pieces, where it used to ask everyone
             // to re-broadcast their entire library.
             _errorMessage.value = "Downloading \"${file.name}\"…"
-            viewModelScope.launch {
-                fileRepository.requestDownload(file.fileId)
-            }
+            viewModelScope.launch { fileRepository.requestDownload(file.fileId) }
             return
         }
-        val f = File(localPath)
-        try {
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                f
-            )
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, file.mimeType)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+        viewModelScope.launch {
+            val decrypted = fileRepository.materializeForViewing(file.fileId)
+            if (decrypted == null) {
+                _errorMessage.value = "Could not open \"${file.name}\""
+                return@launch
             }
-            context.startActivity(intent)
-        } catch (e: Exception) {
-            _errorMessage.value = "No app found to open this file"
-            Timber.e(e, "Failed to open file")
+            try {
+                val uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    decrypted
+                )
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, file.mimeType)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                _errorMessage.value = "No app found to open this file"
+                Timber.e(e, "Failed to open file")
+            }
         }
     }
+
+    /**
+     * The decrypted file backing a grid thumbnail, or null while it is being produced.
+     *
+     * Thumbnails used to point straight at the stored file, which only worked because that
+     * file was plaintext. Now the image has to be decrypted first, and the grid asks for it
+     * per tile so nothing is decrypted that never comes on screen.
+     */
+    suspend fun thumbnailFile(file: SharedFileEntity): File? =
+        if (file.downloadState == "COMPLETE" && file.mimeType.startsWith("image/")) {
+            fileRepository.materializeForViewing(file.fileId)
+        } else null
 
     fun clearError() {
         _errorMessage.value = null
