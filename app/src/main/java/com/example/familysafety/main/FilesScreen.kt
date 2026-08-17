@@ -21,8 +21,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
+import com.example.familysafety.vault.VaultKeyDerivation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -43,10 +48,18 @@ import java.util.Locale
 @Composable
 fun FilesScreen(
     onOpenStatusBoard: () -> Unit = {},
+    onOpenVault: (String) -> Unit = {},
     viewModel: FilesViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
-    val files by viewModel.files.collectAsState()
+    val keyboard = LocalSoftwareKeyboardController.current
+    var query by remember { mutableStateOf("") }
+    val allFiles by viewModel.files.collectAsState()
+    val files = remember(allFiles, query) {
+        val needle = query.trim()
+        if (needle.isBlank()) allFiles
+        else allFiles.filter { it.name.contains(needle, ignoreCase = true) }
+    }
     val totalUsedBytes by viewModel.totalUsedBytes.collectAsState()
     val uploadProgress by viewModel.uploadProgress.collectAsState()
     val memberNames by viewModel.memberNames.collectAsState()
@@ -90,6 +103,35 @@ fun FilesScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            // Search, and the way into the vault.
+            //
+            // Typing filters the grid. Submitting from the keyboard tries the text as a vault
+            // code instead — which is why there is no "enter code" prompt anywhere in this
+            // app: a prompt would prove a vault exists, and the whole design rests on that
+            // being unknowable. Any text of at least the minimum length opens a vault, so
+            // submitting never distinguishes a real code from anything else.
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                label = { Text("Search files") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(
+                    onGo = {
+                        val typed = query.trim()
+                        if (typed.length >= VaultKeyDerivation.MIN_CODE_LENGTH) {
+                            query = ""
+                            keyboard?.hide()
+                            onOpenVault(typed)
+                        }
+                    }
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+
             // Storage usage bar
             StorageBar(usedBytes = totalUsedBytes, maxBytes = SharedFileRepository.MAX_TOTAL_BYTES)
 
@@ -200,6 +242,7 @@ fun FilesScreen(
                             file = file,
                             uploaderName = memberNames[file.uploaderMemberId] ?: "Unknown",
                             status = statusByFile[file.fileId],
+                            thumbnailProvider = viewModel::thumbnailFile,
                             onClick = { viewModel.openFile(file, context) },
                             onLongClick = { fileToDelete = file }
                         )
@@ -281,12 +324,20 @@ private fun FileCard(
     file: SharedFileEntity,
     uploaderName: String,
     status: com.example.familysafety.files.FileStatusRow?,
+    thumbnailProvider: suspend (SharedFileEntity) -> File?,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
     val isComplete = file.downloadState == "COMPLETE"
     val isDownloading = file.downloadState == "DOWNLOADING"
     val isPending = file.downloadState == "PENDING"
+
+    // Documents are stored encrypted, so a thumbnail is a decryption rather than a file path.
+    // Done per tile and keyed on the file so only what is actually on screen is decrypted,
+    // and the icon stands in until it is ready rather than the tile flashing empty.
+    val thumbnail by produceState<File?>(initialValue = null, file.fileId, file.downloadState) {
+        value = thumbnailProvider(file)
+    }
 
     OutlinedCard(
         modifier = Modifier
@@ -297,9 +348,9 @@ private fun FileCard(
             // Background layer — shimmer while downloading, thumbnail/icon when ready
             when {
                 isDownloading -> ShimmerBox(modifier = Modifier.fillMaxSize())
-                file.mimeType.startsWith("image/") && isComplete && file.localPath != null ->
+                file.mimeType.startsWith("image/") && isComplete && thumbnail != null ->
                     AsyncImage(
-                        model = File(file.localPath),
+                        model = thumbnail,
                         contentDescription = file.name,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()

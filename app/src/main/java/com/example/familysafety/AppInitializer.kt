@@ -67,6 +67,7 @@ class AppInitializer @Inject constructor(
     private val groupSyncManager: GroupSyncManager,
     private val avatarRepository: AvatarRepository,
     private val sharedFileRepository: SharedFileRepository,
+    private val vaultRepository: com.example.familysafety.vault.VaultRepository,
     private val securityEventRepository: SecurityEventRepository,
     private val locationPublishOutboxRepository: LocationPublishOutboxRepository
 ) {
@@ -232,6 +233,12 @@ class AppInitializer @Inject constructor(
                 // interrupted by the process dying used to stay stuck until someone tapped
                 // the file; now it is picked up on the next launch.
                 sharedFileRepository.reconcileOnStartup()
+
+                // Create the vault container if it does not exist, and clear anything a
+                // previous session decrypted for viewing. Runs on every device, for every
+                // family, whether or not a vault code has ever been set — a container that
+                // appeared only once someone had a vault would announce that they had one.
+                vaultRepository.initializeOnStartup()
 
                 // Background repair for files still missing chunks. Until now the only thing
                 // that ever repaired a stalled transfer was a user tapping the file.

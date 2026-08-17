@@ -357,6 +357,20 @@ class MqttTransport @Inject constructor(
         topics.add(MqttConfig.getFileAvailabilityTopic(id))
         qosLevels.add(MqttConfig.DEFAULT_QOS)
 
+        // The vault container, retained for the group. Subscribed unconditionally: a device
+        // that subscribed only once a vault existed would announce that one does.
+        topics.add(MqttConfig.getVaultContainerTopic(gId))
+        qosLevels.add(MqttConfig.DEFAULT_QOS)
+
+        // Vault document bytes (wildcard), stored opaquely whether or not this device holds
+        // a code that can read them.
+        topics.add(MqttConfig.getVaultChunkWildcardTopic(gId))
+        qosLevels.add(MqttConfig.DEFAULT_QOS)
+
+        // Requests for vault chunks addressed to us
+        topics.add(MqttConfig.getVaultRepairTopic(id))
+        qosLevels.add(MqttConfig.DEFAULT_QOS)
+
         try {
             mqttClient?.subscribe(topics.toTypedArray(), qosLevels.toIntArray())
             Timber.i("$TAG: Subscribed to own topics")

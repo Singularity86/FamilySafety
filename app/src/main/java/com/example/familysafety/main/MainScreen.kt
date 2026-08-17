@@ -99,6 +99,9 @@ fun MainScreen(
     viewModel: MainViewModel = hiltViewModel(),
     chatViewModel: ChatViewModel = hiltViewModel(),
     filesViewModel: FilesViewModel = hiltViewModel(),
+    // Hoisted so the Files screen and the vault share one instance: the session, and with
+    // it the key, is held in the ViewModel and must not be recreated between the two.
+    vaultViewModel: com.example.familysafety.vault.VaultViewModel = hiltViewModel(),
     geofenceViewModel: GeofenceViewModel = hiltViewModel(),
     onThemeChanged: (ThemeMode) -> Unit = {},
     onReplayTutorial: () -> Unit = {},
@@ -369,6 +372,10 @@ fun MainScreen(
                         )
                         2 -> FilesScreen(
                             onOpenStatusBoard = { navController.navigate("file_status_board") },
+                            onOpenVault = { code ->
+                                vaultViewModel.openWithCode(code)
+                                navController.navigate("vault")
+                            },
                             viewModel = filesViewModel
                         )
                         3 -> ChatScreen(
@@ -415,7 +422,21 @@ fun MainScreen(
         composable(MainRoute.Files.route) {
             FilesScreen(
                 onOpenStatusBoard = { navController.navigate("file_status_board") },
+                onOpenVault = { code ->
+                    vaultViewModel.openWithCode(code)
+                    navController.navigate("vault")
+                },
                 viewModel = filesViewModel
+            )
+        }
+
+        // Reached only by submitting text from the Files search box. Not in the bottom nav,
+        // not linked from anywhere, and named nothing in the UI — the route exists, but
+        // nothing on screen ever points at it.
+        composable("vault") {
+            VaultScreen(
+                onBack = { navController.popBackStack() },
+                viewModel = vaultViewModel
             )
         }
 

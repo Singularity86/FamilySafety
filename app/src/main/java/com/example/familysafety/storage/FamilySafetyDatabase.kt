@@ -26,9 +26,10 @@ import java.security.SecureRandom
         SharedFileEntity::class,
         FileAvailabilityEntity::class,
         FileTransferLogEntity::class,
-        PendingLocationPublishEntity::class
+        PendingLocationPublishEntity::class,
+        VaultBlobEntity::class
     ],
-    version = 7,
+    version = 8,
     // Exported so each version's schema is committed as JSON under app/schemas/. That is what
     // makes a migration testable — MigrationTestHelper builds the old schema from the exported
     // file, applies the migration and asserts the result. Without it a migration can only be
@@ -44,6 +45,7 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
     abstract fun fileAvailabilityDao(): FileAvailabilityDao
     abstract fun fileTransferLogDao(): FileTransferLogDao
     abstract fun pendingLocationPublishDao(): PendingLocationPublishDao
+    abstract fun vaultBlobDao(): VaultBlobDao
 
     companion object {
         private const val DATABASE_NAME = "familysafety_encrypted.db"
@@ -214,6 +216,31 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Chunk accounting for vault document bytes.
+         *
+         * Every device gets this table whether or not anyone in the family ever sets a vault
+         * code, and it stays empty until someone does — an empty table is not evidence of
+         * anything, and a table created lazily on first use would be.
+         *
+         * It holds no names, types, sizes or hashes; see [VaultBlobEntity] for why that is
+         * deliberate rather than incomplete.
+         */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `vault_blobs` (
+                        `fileId` TEXT NOT NULL,
+                        `chunkCount` INTEGER NOT NULL,
+                        `chunksReceived` INTEGER NOT NULL DEFAULT 0,
+                        `chunkBitmap` BLOB,
+                        `updatedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`fileId`)
+                    )
+                """.trimIndent())
+            }
+        }
+
         private fun buildRoomDatabase(context: Context, passphrase: ByteArray): FamilySafetyDatabase {
             // The retired android-database-sqlcipher artifact loaded its native library
             // implicitly; net.zetetic:sqlcipher-android requires the caller to do it. Without
@@ -227,7 +254,10 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
                 DATABASE_NAME
             )
                 .openHelperFactory(SupportOpenHelperFactory(passphrase))
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                .addMigrations(
+                    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
+                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8
+                )
                 // Deliberately NOT fallbackToDestructiveMigration(). It used to be here, and
                 // it turns any mistake in a migration into a silent wipe of every user's chat
                 // history and location history — data that exists on no server and cannot be

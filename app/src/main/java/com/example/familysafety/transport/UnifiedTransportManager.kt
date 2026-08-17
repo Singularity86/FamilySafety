@@ -32,7 +32,8 @@ class UnifiedTransportManager @Inject constructor(
     private val replicationManagerProvider: Provider<ReplicationManager>,
     private val inviteManagerProvider: Provider<InviteManager>,
     private val groupSyncManagerProvider: Provider<GroupSyncManager>,
-    private val sharedFileRepositoryProvider: Provider<SharedFileRepository>
+    private val sharedFileRepositoryProvider: Provider<SharedFileRepository>,
+    private val vaultRepositoryProvider: Provider<com.example.familysafety.vault.VaultRepository>
 ) : TransportProvider {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -245,6 +246,28 @@ class UnifiedTransportManager @Inject constructor(
                     topic.endsWith("/files/repair") -> {
                         sharedFileRepositoryProvider.get()
                             .handleChunkRepairRequest(payload.toByteArray())
+                    }
+
+                    topic.contains("/vault/container") -> {
+                        vaultRepositoryProvider.get().handleIncomingContainer(payload.toByteArray())
+                    }
+
+                    topic.contains("/vault/chunk/") -> {
+                        val parts = topic.split("/vault/chunk/", limit = 2)
+                        if (parts.size == 2) {
+                            val chunkParts = parts[1].split("/")
+                            if (chunkParts.size >= 2) {
+                                vaultRepositoryProvider.get().handleIncomingChunk(
+                                    fileId = chunkParts[0],
+                                    chunkIndex = chunkParts[1].toIntOrNull() ?: 0,
+                                    payload = payload.toByteArray()
+                                )
+                            }
+                        }
+                    }
+
+                    topic.endsWith("/vault/repair") -> {
+                        vaultRepositoryProvider.get().handleChunkRequest(payload.toByteArray())
                     }
                 }
             } catch (e: Exception) {

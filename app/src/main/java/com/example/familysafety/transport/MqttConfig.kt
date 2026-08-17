@@ -166,4 +166,36 @@ object MqttConfig {
      */
     fun getFileAvailabilityTopic(memberId: String): String =
         "familysafe/$memberId/files/availability"
+
+    // =========================================================================
+    // VAULT TOPICS
+    // =========================================================================
+
+    /**
+     * The vault container, retained for the group.
+     *
+     * Every family has one whether or not anyone has set a code, and it is the same size
+     * either way, so the topic existing and carrying traffic reveals nothing beyond the fact
+     * that the app has the feature. Deliberately not folded into the file manifest: the
+     * container is mutable and the manifest describes immutable, content-addressed files.
+     */
+    fun getVaultContainerTopic(groupId: String): String =
+        "familysafe/group/$groupId/vault/container"
+
+    /**
+     * Bytes of a vault document, broadcast to the group.
+     *
+     * Chunks carry an opaque id and nothing else. A device without the code stores them and
+     * cannot tell them from any other blob it holds — which is the point, since the documents
+     * still have to reach every phone to be useful in an emergency.
+     */
+    fun getVaultChunkTopic(groupId: String, fileId: String, chunkIndex: Int): String =
+        "familysafe/group/$groupId/vault/chunk/$fileId/$chunkIndex"
+
+    fun getVaultChunkWildcardTopic(groupId: String): String =
+        "familysafe/group/$groupId/vault/chunk/#"
+
+    /** A request for specific chunks of a vault document, addressed to one peer. */
+    fun getVaultRepairTopic(memberId: String): String =
+        "familysafe/$memberId/vault/repair"
 }

@@ -70,4 +70,12 @@ object StorageModule {
     ): FileAvailabilityDao {
         return database.fileAvailabilityDao()
     }
+
+    @Provides
+    @Singleton
+    fun provideVaultBlobDao(
+        database: FamilySafetyDatabase
+    ): VaultBlobDao {
+        return database.vaultBlobDao()
+    }
 }
