@@ -1,15 +1,13 @@
 # FamilySafety — iOS Port Specification & Interop Contract
 
-**Version 1.9 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
-revised 2026-08-15 against Android 1.12.10 (versionCode 28) plus the unreleased file
-correctness-and-privacy work.**
+**Version 1.10 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
+revised 2026-08-16 against Android `main` at 4f3c1f0, which is 1.12.10 (versionCode 28) plus
+the unreleased shared-file rebuild and the family vault.**
 
-> **Known gap.** The shared-file rebuild landed on Android in four phases and only the last
-> of them is written up here. The targeted chunk-repair message (Phase 2), the `isEssential`
-> field on `SharedFile` and the holdings announcement (Phase 3) are **on the wire and not yet
-> in this document** — §6.7 describes the file subsystem as it was before them. Read the
-> Android `files/SharedFileModels.kt` for those until this is reconciled. Everything marked
-> 1.9 below *is* current.
+> The shared-file rebuild that landed in six phases is now fully written up: targeted repair
+> and the durable outbox (§6.7), `isEssential` and holdings announcements (§6.7), manifest
+> signatures and deletion tombstones (§6.7), and the vault (§6.8). Nothing in the file or
+> vault subsystems is left to be read out of the Android source.
 
 All additions since 1.0 are optional fields that older senders omit, so the wire stays
 backward compatible. Two of them still change what a correct implementation must do:
@@ -50,6 +48,21 @@ backward compatible. Two of them still change what a correct implementation must
   a client that does not sign will silently stop updating anyone's file list; a client that
   does not honour tombstones will keep documents the family has deleted, and will republish
   them. Also defines file `keyVersion` **3** as readable-but-not-written.
+- **1.10a**, targeted chunk repair and pinning (§6.7): `ChunkRepairRequest` and
+  `FileHoldingsAnnouncement`, both wrapped in `EncryptedFileMessage`, on two new
+  per-recipient topics; and `isEssential` on `SharedFile`. Additive on the wire — a client
+  that implements none of it still transfers files — but it will never repair a gap, never
+  answer a peer's repair request, and never be counted as holding a copy, so a family
+  containing it sees "on 2 of 3 devices" indefinitely. `isEssential` defaults to **true** on
+  absence, which matches what an older peer actually does.
+- **1.10b**, the family vault (§6.8): a fixed-size slot container synced on its own retained
+  topic, with document bytes on their own chunk path. **The three vault topics must be
+  subscribed unconditionally by every device**, and the container must be created full of
+  random bytes on first run whether or not a code is ever set — a client that creates or
+  subscribes lazily announces that a vault exists, which is the one thing the design cannot
+  allow. A client that skips the vault entirely is safe as long as it still stores and serves
+  vault chunks; a client that stores the container but never republishes it is not, because
+  a family member's additions will not reach the devices behind it.
 - **1.7**, protocol version advertisement (§6.2): `PresenceUpdate.protocolVersion`.
   Additive on the wire, but an iOS client that omits it is read as generation 1 and every
   Android peer will permanently label the user "needs to update" — so emit it. Set it to
@@ -203,11 +216,22 @@ against the QR invite's `inviterMemberId` (§8.4).
 | `familysafe/group/{groupId}/files/manifest` | `EncryptedFileManifest` since 1.12.2; bare `FileManifest` from older senders | ✅ group key (was ❌) | **yes** |
 | `familysafe/group/{groupId}/files/chunk/{fileId}/{chunkIndex}` | plaintext `FileChunkMessage` (data field AES-GCM encrypted) | contents ✅ (group key — **version 1 is not confidential**, see §6.7) | no |
 | `familysafe/{id}/files/request` | plaintext `FileRequestMessage` | ❌ | no |
+| `familysafe/{id}/files/repair` | `EncryptedFileMessage` wrapping `ChunkRepairRequest` | ✅ group key | no |
+| `familysafe/{id}/files/availability` | `EncryptedFileMessage` wrapping `FileHoldingsAnnouncement` | ✅ group key | no |
+| `familysafe/group/{groupId}/vault/container` | `VaultContainerMessage` | container is already opaque; signed | **yes** |
+| `familysafe/group/{groupId}/vault/chunk/{fileId}/{chunkIndex}` | plaintext `VaultChunkMessage` (data field AES-GCM under the item's content key) | contents ✅ (per-item key, not the group key) | no |
+| `familysafe/{id}/vault/repair` | plaintext `VaultChunkRequest` | ❌ (names only an opaque id) | no |
 
 Own subscriptions on connect: `chat`, `location_inbox`, `chat/receipt`, `chat/read`,
 `replication/request|data|announce`, `join_request`, `join_approval`, `sync_request`,
-`group_sync`, group `ack`, files `manifest`, files `chunk/#` (wildcard), `files/request`.
+`group_sync`, group `ack`, files `manifest`, files `chunk/#` (wildcard), `files/request`,
+`files/repair`, `files/availability`, `vault/container`, `vault/chunk/#` (wildcard),
+`vault/repair`.
 Per-peer subscriptions: `location` (legacy), `presence`.
+
+The three vault topics are subscribed **unconditionally, by every device, in every family**,
+whether or not anyone has ever set a vault code. A client that subscribed to them only once a
+vault existed would announce that one exists — see §6.8.
 
 ---
 
@@ -462,9 +486,24 @@ so it needs no separate distribution path. Two consequences for an implementatio
 { "keyVersion": 2, "data": "<base64 of AES-GCM blob over the FileManifest JSON>",
   "signerMemberId": "...", "signature": "<hex Ed25519 over \"{keyVersion}|{data}\">" }
 // SharedFile
+// isEssential added in 1.10a. ABSENT from older senders and MUST default to TRUE — an older
+// peer replicates everything, so reading its files as essential matches what it will do.
 { "fileId": "<uuid>", "name": "...", "mimeType": "...", "sizeBytes": 0,
   "contentHash": "<sha256 hex of plaintext>", "uploaderMemberId": "...", "uploadedAt": 0,
-  "chunkCount": 0, "isDeleted": false, "deletedByMemberId": null, "deletedAt": null }
+  "chunkCount": 0, "isDeleted": false, "deletedByMemberId": null, "deletedAt": null,
+  "isEssential": true }
+// EncryptedFileMessage — the wrapper for every file control message below. Same shape and
+// same key as EncryptedFileManifest: a bare request names a file and how much of it a device
+// is missing, which is the metadata the manifest was encrypted to stop leaking.
+{ "keyVersion": 2, "data": "<base64 of AES-GCM blob over the inner JSON>" }
+// ChunkRepairRequest — inside EncryptedFileMessage, on familysafe/{peerId}/files/repair
+{ "requestId": "<uuid>", "requesterId": "...", "fileId": "...",
+  "contentHash": "<sha256 hex>", "totalChunks": 0, "missing": [3, 7, 11], "timestamp": 0 }
+// FileHoldingsAnnouncement — inside EncryptedFileMessage, on familysafe/{peerId}/files/availability
+{ "announcerId": "...", "holdings": [ FileHolding... ], "timestamp": 0 }
+// FileHolding — state is "COMPLETE" or "PARTIAL"
+{ "fileId": "...", "contentHash": "<sha256 hex>", "state": "COMPLETE",
+  "chunksHeld": 0, "chunkCount": 0 }
 // FileChunkMessage — plaintext wrapper, encrypted data
 // keyVersion added in Android 1.12.0 (18). ABSENT on the wire from older senders and
 // MUST default to 1 when decoding.
@@ -598,6 +637,66 @@ The receive-side branch existed the whole time and no sender ever reached it. Fo
 records and IDs that is a privacy failure rather than a missing feature, and an
 implementation that omits it is not merely incomplete — it is the same failure.
 
+#### Targeted chunk repair (since 1.10a)
+
+Chunks are broadcast once. Before this there was no gap detection and no retry: the only
+recovery was a user tapping an undownloaded file, which made *every* peer re-publish *every
+chunk of every complete file* to the whole group. A file was observed taking half a day to
+arrive — it was not slow, it had stopped, and it finished the moment somebody touched it.
+
+An implementation needs three things:
+
+1. **Know which chunks it holds**, per file, by index. A count is not enough; the question
+   that matters when a transfer stalls is *which* chunks are missing. Android stores a bitmap
+   (bit *i* = chunk *i*, LSB-first within each byte) alongside the row. The representation is
+   local — nothing about it crosses the wire — but the capability is not optional.
+2. **Ask one peer for exactly what is missing**, by publishing a `ChunkRepairRequest` wrapped
+   in `EncryptedFileMessage` to `familysafe/{peerId}/files/repair`. Cap the index list so it
+   fits one message (Android sends at most 256) and re-ask until the file completes.
+   `contentHash` binds the request to exact bytes: if the responder's copy hashes differently
+   the two are looking at different versions, and sending chunks would corrupt the requester's
+   copy rather than repair it, so the responder must **refuse** on mismatch.
+3. **Answer** by publishing the requested chunks to the ordinary group chunk topic, not back
+   to the requester alone. A repair reply is then indistinguishable from an original upload,
+   needs no new receive path, and any other device with the same gap picks it up for free.
+   Android serves at most 64 chunks per request and leaves the requester to re-ask.
+
+Retries must survive process death and back off — Android stores the schedule on the file row
+and drains it from a `WorkManager` job with a network constraint, 30 s base backoff to a
+30-minute ceiling, rotating between peers so one that cannot help is not asked forever.
+
+**Pace the publish loop.** Paho's default in-flight window is 10 unacknowledged messages and
+Android treats a publish exception as a dropped connection, so an unpaced loop over thousands
+of chunks disconnects the client from its own broker. Android sleeps 15 ms between chunk
+publishes. Any implementation that streams faster than the old byte-boxing path needs the
+equivalent.
+
+#### Essential pinning and availability (since 1.10a)
+
+`SharedFile.isEssential` is set by the uploader and editable afterwards by anyone.
+
+- **Essential** files download automatically on every device.
+- **Non-essential** files are listed and fetched only when someone opens them.
+
+This is a deliberate behaviour change from "everything auto-downloads", and it is what makes
+the guarantee affordable: an insurance card is only useful if it is already on the phone when
+there is no signal, but pushing a 2 GB video to four phones is not.
+
+Peers announce what they hold by publishing a `FileHoldingsAnnouncement`, wrapped in
+`EncryptedFileMessage`, to each peer's `familysafe/{peerId}/files/availability`. It is a state
+summary, not an event: it self-heals on the next tick and a member who has just joined gets
+the whole picture at once. Android debounces to at most one announcement per 30 s.
+
+Two anti-forgery rules, both worth copying:
+
+- Count a peer as holding a copy only when `state` is `COMPLETE` **and** its `contentHash`
+  matches the local row. A peer holding different bytes under the same id is not a copy, and
+  counting it reports a document as safe when it is not.
+- **Absence of an announcement is not absence of a copy.** Until at least one peer has
+  announced anything, a count of zero means "nobody has told us" — an implementation that
+  renders that as "this document exists nowhere else" will alarm people about files that are
+  fine, which for emergency documents is worse than saying nothing.
+
 #### At-rest storage (Android behaviour, no wire effect)
 
 Recorded because it changes what the two implementations can assume about each other, not
@@ -606,6 +705,145 @@ A file is stored as one sparse blob of wire-format chunk ciphertexts, decrypted 
 cache file only while another app is opening it, and that cache is cleared on launch. A peer
 therefore cannot expect a re-broadcast to arrive re-encrypted under the current key — see the
 `keyVersion` rules above.
+
+---
+
+### 6.8 The family vault
+
+Documents shared with everyone who knows a code, and invisible to everyone who does not —
+including to the devices holding the bytes. It is optional to *use* and **not optional to
+support**: a client that ignores it stops vault documents reaching the devices behind it.
+
+```json
+// VaultContainerMessage — retained on familysafe/group/{groupId}/vault/container
+{ "version": 0, "data": "<base64 of the whole 131072-byte container>",
+  "signerMemberId": "...", "signature": "<hex Ed25519 over \"{version}|{data}\">" }
+// VaultChunkMessage — on familysafe/group/{groupId}/vault/chunk/{fileId}/{chunkIndex}
+{ "fileId": "<uuid>", "chunkIndex": 0, "totalChunks": 0,
+  "data": "<base64 of nonce ‖ ciphertext ‖ tag under the item's content key>" }
+// VaultChunkRequest — on familysafe/{peerId}/vault/repair
+{ "requesterId": "...", "fileId": "<uuid>", "missing": [0, 1, 2], "timestamp": 0 }
+// VaultSlotPayload — never on the wire; this is what is sealed into a slot
+{ "fileId": "<uuid>", "name": "...", "mimeType": "...", "sizeBytes": 0,
+  "contentHash": "<sha256 hex of plaintext>", "contentKeyHex": "<64 hex>", "chunkCount": 0,
+  "addedAt": 0, "addedBy": "<memberId>", "state": "ACTIVE", "revision": 0, "pad": "..." }
+```
+
+#### The container
+
+| | |
+|---|---|
+| Slots | **256** |
+| Slot size | **512** bytes (12-byte nonce + ciphertext + 16-byte tag) |
+| Container size | **131072** bytes, always, forever |
+| Plaintext room per slot | **484** bytes — every payload is padded to exactly this |
+| Replicas per item | **2** |
+| Documents per code | 64 |
+
+Created full of `SecureRandom` bytes **on first run, on every device, in every family**,
+whether or not a code is ever set. It has no header, no magic number and no version byte.
+Nothing anywhere records that a vault was created, so there is no setup state to find and no
+question about it that can be answered.
+
+#### Opening, and why there is no wrong code
+
+```
+vaultKey(code) = Argon2id(
+    password = UTF8(code),
+    salt     = SHA-256(UTF8(groupId))[0..15],     // crypto_pwhash SALTBYTES
+    outLen   = 32,
+    opslimit = crypto_pwhash_OPSLIMIT_INTERACTIVE,
+    memlimit = crypto_pwhash_MEMLIMIT_INTERACTIVE, // 64 MiB; MODERATE's 256 MiB thrashes a phone
+    alg      = crypto_pwhash_ALG_ARGON2ID13)
+```
+
+Opening means attempting AES-256-GCM on **every** slot and keeping whatever authenticates.
+The family code opens the real slots, a decoy code opens the decoy slots, and any other code
+opens nothing and yields an empty vault.
+
+Rules an implementation must not break:
+
+- **Never report a wrong code.** There is no such thing. An empty vault is the ordinary result
+  and must be presented as an empty vault. An error message would prove that a correct code
+  exists.
+- **Never exit early.** Derive, then try all 256 slots, regardless of outcome. A timing
+  difference is as good as an error message.
+- **Never store the code, the key, or a hash of either.** A code in the binary would be the F2
+  broker-credential mistake again.
+- **Never offer an "enter code" prompt.** The prompt itself proves a vault exists. Android's
+  entry point is the file search box: typing filters the list, submitting (IME "Go", 6+
+  characters) opens a vault. Any string opens one, so submitting distinguishes nothing.
+
+An item appears in `REPLICAS` slots; when several copies of one `fileId` open, the **highest
+`revision` wins**. `state` is `ACTIVE` or `RECLAIMED` — deletion flips the state and keeps the
+bytes rather than overwriting the slot, so it can be undone.
+
+#### Slot order, and the collision you cannot avoid
+
+Each key walks the container in its own order, so a vault returns to its own slots instead of
+scattering writes. It must match across platforms, so it is **not** a seeded platform RNG:
+
+```
+order = [0 .. 255]
+block = SHA-256(key ‖ "slots"); offset = 0
+for i from 255 down to 1:
+    if offset + 4 > 32: block = SHA-256(block); offset = 0
+    v = big-endian uint32 of block[offset .. offset+3]; offset += 4
+    j = v mod (i + 1)
+    swap order[i], order[j]
+```
+
+Allocation walks that order and takes the first slot that does **not** open under this key.
+That is the only test available — and it means writing to one vault can overwrite a slot
+belonging to a vault whose code this device does not know. **This is inherent, not a defect:**
+the indistinguishability that makes the decoy credible is the same property that makes
+allocation blind. Two replicas per item turn a collision into loss of redundancy rather than
+loss of the document. Do not attempt to "fix" it with an occupancy map — that would reveal how
+many vaults exist.
+
+#### Container sync
+
+Retained, versioned, signed, on rules identical to the file manifest:
+
+- Sign over `"{version}|{data}"`; the version is inside the payload so a signature cannot be
+  replayed at a higher version to roll the family back.
+- Verify `signerMemberId` against **our own current roster**, never a key from the message.
+- **Refuse an unsigned container.** Accepting one lets anyone reaching the broker replace a
+  family's vault with random bytes, which is indistinguishable from erasing it.
+- **Ignore any version at or below the highest already seen**, and refuse anything that is not
+  exactly 131072 bytes.
+
+`data` is deliberately *not* encrypted under the group key. It is already nothing but GCM
+ciphertext and random filler, and wrapping it would only hide from the relay that a container
+exists — which the topic already implies.
+
+#### Document bytes
+
+Stored in a blob store of their own under a random UUID, encrypted with the item's
+`contentKeyHex`, chunked at 32 KiB exactly like shared files. They are deliberately **not**
+shared files: a `SharedFile` row would put them in the manifest, which every member can read,
+telling the whole family how many documents a vault holds.
+
+Receiving a vault chunk **asks no questions and does no authentication**. A device very likely
+holds no code that can read what is arriving, and refusing to store what it cannot verify
+would mean vault documents never left the phone that added them. The content key
+authenticates every chunk at the moment someone opens the vault; a corrupt chunk fails there.
+
+Serving a `VaultChunkRequest` likewise consults only the blob store. Holding the bytes is the
+entire qualification, and answering reveals nothing — every device holds every vault document,
+so answering does not imply being able to read it.
+
+A device that was offline when a document was added fetches it the next time someone opens the
+vault **on that device**. It cannot do better: without a code it does not know the blob is
+referenced by anything.
+
+#### Runtime rules
+
+Screen marked `FLAG_SECURE` (iOS: keep it out of the app switcher snapshot). Key in memory
+only, dropped when the screen stops and after an idle timeout (Android: 3 minutes). Decrypt to
+a private cache only while another app opens the document, and wipe that cache on close and at
+launch. No thumbnails, no photo-library or Files-app export, no notifications, and vault items
+never appear in any transfer log or status board.
 
 ---
 
@@ -984,8 +1222,23 @@ Android-side rename + member-remove correctly.
 **Phase 5 — Chat.** Messages, group chat, delivery/read receipts, local store.
 *Done when:* bidirectional chat with Android incl. receipts.
 
-**Phase 6 — Replication + files.** *Done when:* fresh iOS install backfills history from an
-Android peer; a file uploaded on Android opens on iOS (hash-verified).
+**Phase 6 — Replication + files.** Includes the whole of §6.7, not just the happy path:
+per-index chunk accounting, targeted repair with a durable retry schedule, `isEssential`,
+holdings announcements, manifest **signing** (unsigned manifests are refused by Android, so an
+iOS client that does not sign will silently stop updating anyone's file list) and deletion
+tombstones. *Done when:* a fresh iOS install backfills history from an Android peer; a file
+uploaded on Android opens on iOS (hash-verified); killing iOS mid-transfer and relaunching
+resumes to completion **without a user tap**; deleting on Android removes it from iOS; and an
+Android peer's status board reports the iOS device as holding a copy.
+
+**Phase 6.5 — Vault** (§6.8). Separable from Phase 6 and worth its own session, because the
+failure modes are unlike anything else in the app: every assertion is about something *not*
+being observable. *Done when:* Argon2id matches Android for a shared code (compare derived key
+hex on both), a code that opens nothing shows an empty vault with no error and no measurable
+timing difference, a document added on Android opens on iOS under the same code and is
+invisible under a different one, and the container is byte-identical on both devices after a
+write from either. **Do not ship the container creation lazily** — it must exist, full of
+random bytes, from first launch.
 
 **Phase 7 — Background strategy, geofences, history, polish, App Store prep** (§11).
 

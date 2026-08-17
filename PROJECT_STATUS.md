@@ -1,10 +1,10 @@
 # FamilySafety (Jibaro Family Safety) — Project Status
 
-Snapshot date: 2026-08-13. Branch: `main` (level with `origin/main`, HEAD `b19f5d7`).
+Snapshot date: 2026-08-16. Branch: `main`, level with `origin/main`, HEAD `4f3c1f0`.
 
-Supersedes the 2026-08-12 snapshot. Seven commits since, and the situation changed
-materially: **versionCode 26 is uploaded to Play**, closing a gap where the shipped build was
-unusable on current Pixel hardware.
+Supersedes the 2026-08-13 snapshot, which was written when Phase 0 of the file redesign was
+the newest thing in the tree. Thirteen commits since. **The file redesign is finished — all
+six phases plus the vault are in `main`** — and versionCode 28 is uploaded to Play.
 
 ## Scope of this document
 
@@ -18,7 +18,7 @@ wrong when checked, so the distinction is kept deliberately.
 ## What the app is, right now
 
 Privacy-first, end-to-end-encrypted family location/chat/file app.
-`applicationId jibaro.spacepirate.love`, **1.12.8 / versionCode 26**, targetSdk 36, minSdk 26.
+`applicationId jibaro.spacepirate.love`, **1.12.10 / versionCode 28**, targetSdk 36, minSdk 26.
 
 - No accounts — BIP-39 mnemonic → SLIP-10 → Ed25519/X25519 identity.
 - Location, chat, files, group membership and presence are all E2EE. An MQTT relay moves
@@ -26,22 +26,22 @@ Privacy-first, end-to-end-encrypted family location/chat/file app.
   alongside it.
 - `MessageProtocol.PROTOCOL_VERSION = 3`. Peers below it are named on the Family screen as
   "needs to update" rather than silently failing to appear.
-- Encrypted local history (Room + SQLCipher), replicated between family devices.
+- Encrypted local history (Room + SQLCipher, **schema v8**), replicated between family devices.
+- Shared documents are stored encrypted at rest and never assembled in the clear.
+- A shared family vault, opened by a code that is never stored anywhere.
 
-## Track 1 — Play: 26 shipped, rollout outstanding
+**419 unit tests, 0 failures** at HEAD.
 
-**versionCode 26 uploaded 2026-08-13** *(user-reported)*. Before that Play served 1.12.0 (18),
-with 24 uploaded but not rolled out.
+## Track 1 — Play: 28 shipped, family recreation still outstanding
 
-This mattered more than a normal release: **24 and 18 cannot create a family on a Pixel 9/10**
-(see Track 2). Anyone on recent Pixel hardware was locked out at the point of naming their
-family, with no error — the app died and relaunched at the welcome screen.
+versionCode 26 was uploaded 2026-08-13 and **28 is now the shipped build** *(user-reported)*.
+28 carries the member-list fixes from Track 3.
 
-**Still outstanding — the family recreation.** The file-content, file-name and presence
-protections all depend on a group key generated when a family is *created*. Families made
-before 1.12.0 carry no key and silently fall back to old behaviour. To switch them on:
-everyone updates to 26 → everyone leaves → **one person creates the family on 26** →
-re-invite. Doing this on an older build produces no key and achieves nothing.
+**Still outstanding — the family recreation.** Unchanged from the last two snapshots, and now
+more valuable than it was: the file-content, file-name, presence *and* vault protections all
+depend on a group key generated when a family is *created*. Families made before 1.12.0 carry
+no key and silently fall back to old behaviour. To switch them on: everyone updates → everyone
+leaves → **one person creates the family on the current build** → re-invite.
 
 Leaving destroys local group data *and identity keys*: new member IDs, new mnemonics, and
 **old recovery phrases stop working**. Tell people before they leave.
@@ -51,115 +51,139 @@ Recreating also clears the forked group state described in Track 3.
 `PLAY_STORE_CHECKLIST.md` remains stale — it lists all four launch blockers as outstanding and
 claims targetSdk 35. Refresh it into a per-release checklist or delete it.
 
-## Track 2 — The Pixel outage: 16 KB memory pages
+## Track 2 — The Pixel outage: closed
 
-Reported as "entering the family name sends me back to the start screen, every time" on a
-Pixel 10a running Android 17.
-
-Pixel 10 devices use **16 KB memory pages**; the linker refuses to load a native library
-aligned for 4 KB pages. Four of six shipped libraries were: libsodium, libsqlcipher, ML Kit's
-barcode scanner, and a CameraX helper. Nothing in onboarding touches native code until
-"Create Family" is pressed — BIP-39 is pure JVM — so the failure landed exactly there. It threw
-`UnsatisfiedLinkError`, an `Error` rather than an `Exception`, so the surrounding `catch`
-blocks never saw it.
-
-Fixed in `1e52602` by moving to lazysodium-android **5.2.0**, `net.zetetic:sqlcipher-android`
-**4.9.0**, ML Kit 17.3.0 and CameraX 1.4.2. **arm64-v8a verified 16 KB-clean end to end** by
-reading ELF program headers of every library in the bundle.
+16 KB memory pages on Pixel 9/10 made 1.12.0 (18) and 1.12.4 (24) unable to create a family at
+all. Fixed in `1e52602` by moving to lazysodium-android 5.2.0, `net.zetetic:sqlcipher-android`
+4.9.0, ML Kit 17.3.0 and CameraX 1.4.2; arm64-v8a verified 16 KB-clean by reading ELF program
+headers of every library in the bundle. Shipped in 26. Nothing outstanding.
 
 Two traps recorded so they are not rediscovered:
 
 - **Maven's search index lists lazysodium-android only to 5.1.0 (2022)**, making it look
   abandoned. 5.2.0 shipped May 2025 and is aligned — visible only in the repository listing.
-- **`clean` is not sufficient.** A `clean assembleDebug` produced an APK missing the entire
-  `storage` package; it installed and crashed with `ClassNotFoundException` for a class Kotlin
-  had compiled. Only `--rerun-tasks` produced a correct artifact. **Build release bundles with
-  `--rerun-tasks` and verify the dex** — the shipped AAB was checked directly (162 storage
-  class definitions present) rather than inferred from a successful build.
+- **`clean` is not sufficient.** A `clean assembleDebug` once produced an APK missing the
+  entire `storage` package; it installed and crashed with `ClassNotFoundException` for a class
+  Kotlin had compiled. Build release bundles with `--rerun-tasks`, **and verify the artifact
+  rather than the build log** — the shipped AAB was checked by counting class definitions in
+  its dex. The same check was run on the debug APK at this HEAD for the new `vault` package
+  and everything Phase 5 touched: all present.
 
-Also relevant: 16 KB support is a Play requirement for apps targeting Android 15+, and this
-targets 36.
-
-## Track 3 — Group state: forking fixed, one fork still live
+## Track 3 — Group state: forking fixed, one fork may still be live
 
 Any member may approve a join, so two members approving at the same moment each produced a
-state at the same version with different contents. The sync layer acknowledged a same-version
-message and dropped it — correct when the states agree, silently wrong when they differ. Both
-sides then reported themselves in sync while holding different rosters, permanently.
+state at the same version with different contents; the sync layer acknowledged the same-version
+message and dropped it. Both sides then reported themselves in sync while holding different
+rosters, permanently.
 
-Observed in the four-member family the first day two devices ran together: one device sat at
-v5 with three members while the rest ran v6 with four, receiving the fourth member's traffic
-and discarding it as an unknown sender.
+`90850ef` makes devices reconcile onto the smaller state hash and re-parent, ending at the
+union, with append-only tombstones so merging cannot readmit someone just removed. `89c5f74`
+stops rejecting updates from peers that predate tombstones, and `2d9bb9d` handles the harder
+case: two branches that diverged and *then both moved on*.
 
-`90850ef` makes devices reconcile: both independently pick the same state to build on (the
-smaller state hash — already deterministic across devices, so no coordinator is needed) and
-the other re-parents onto it, ending at the union. Removals now leave **append-only tombstones**
-covered by the state hash, because merging rosters would otherwise readmit anyone just removed.
+**A fork already formed does not self-heal.** That device needs to leave and rejoin, which the
+recreation in Track 1 handles.
 
-**The existing fork does not self-heal** — the new code prevents new forks, it cannot repair one
-already formed. That device needs to leave and rejoin, which the recreation in Track 1 handles.
+## Track 4 — Transport and onboarding reliability: closed
 
-## Track 4 — Transport and onboarding reliability
-
-- **MQTT self-eviction (`368bc9a`).** `initialize()` is called from four places that race at
-  startup; the only guard was "skip if already connected", which three concurrent callers pass
-  while the state still reads *connecting*. Each built a new client under the same deterministic
-  client ID, and MQTT requires the broker to evict the older session — so the app killed its own
-  connection in a loop. Paho compounded it by reporting "already connected" through `onFailure`,
-  so the retry counted a healthy connection as a failure and scheduled a reconnect that tore it
-  down. Verified on device: before, disconnect every few seconds; after, one connect and zero
-  disconnects over 45 s.
+- **MQTT self-eviction (`368bc9a`).** Four racing `initialize()` callers each built a client
+  under the same deterministic client ID, so the broker evicted the app's own session in a
+  loop; Paho reported "already connected" through `onFailure`, so the retry counted a healthy
+  connection as a failure. Verified on device: before, disconnect every few seconds; after,
+  one connect and zero disconnects over 45 s.
 - **Onboarding write durability (`7fa0488`).** Identity keys, the initialized flag and the
-  recovery phrase were written with `apply()`, then the process was hard-killed by
-  `restartProcess()`, which never flushes it. `saveOnboardingComplete` already used `commit()`,
-  and that asymmetry produced a relaunch where the flag was set but the keys were missing —
-  back to the welcome screen. The severe version is the lost write taking the **mnemonic** with
-  it, after the user was shown it and asked to confirm. All identity-critical writes now
-  `commit()`, and key init moved off the main thread.
+  recovery phrase were written with `apply()` and then lost to `restartProcess()`. All
+  identity-critical writes now `commit()`. `17ac806` adds a test that leaving the family
+  actually erases the identity.
 
-## Track 5 — Shared files: planned, Phase 0 landed
+## Track 5 — Shared files and the vault: complete
 
-A file was observed taking **half a day to sync**. It was not syncing slowly — it was stopped.
-Chunks are broadcast once with no gap detection and no retry; the only recovery is a user
-tapping an undownloaded file, and that recovery re-broadcasts *every chunk of every file* to
-the whole group.
+The subsystem that started as a fire-and-forget broadcast pipe — a file was once observed
+taking half a day to arrive, because it had *stopped* and finished only when someone tapped it
+— is now finished. All phases of `C:\Users\omarj\.claude\plans\greedy-doodling-wombat.md` are
+in `main`.
 
-A full redesign is planned at `C:\Users\omarj\.claude\plans\greedy-doodling-wombat.md`, scoped
-to the stated purpose — **emergency and safety documents**, where the property that matters is
-"is this on my family's phones, intact, and can I prove it?" Phases: streaming I/O and a sparse
-blob store (never OOM, explicit chunk accounting) → targeted repair and a durable outbox →
-essential pinning and availability tracking → status board with chips and a transfer log →
-signed manifests, working deletion and at-rest encryption → a shared family vault with decoy
-access.
+- **Phase 0 (`b19f5d7`)** — backup rules naming non-existent stores, a LAN oversized frame that
+  killed the whole socket, filenames wrong for every Storage Access Framework URI, and removal
+  of `fallbackToDestructiveMigration()` with schemas committed.
+- **Phase 1 (`2267af5`)** — streaming I/O and a sparse blob store of wire-format chunk
+  ciphertexts. Killed the `bytes.toList().chunked()` OOM; explicit per-index chunk accounting
+  via a bitmap, treated as a cache over the blob so the DB and filesystem self-reconcile.
+- **Phase 2 (`debaedb`)** — targeted repair: ask one peer for exactly the missing indices,
+  replacing a whole-library re-broadcast. Durable retry schedule drained by WorkManager.
+- **Phase 3 (`f1b819b`)** — `isEssential` pinning and per-peer availability, so the app can
+  answer "this document is on three of four phones".
+- **Phase 4 (`20d5193`, polished in `c5dcf52`)** — status chips, the status board and the
+  transfer log.
+- **Phase 5 (`218780e`)** — deletion that actually propagates, a signed manifest, and documents
+  encrypted at rest. Details below.
+- **Phase 6 (`4f3c1f0`)** — the family vault. Details below.
 
-Confirmed defects documented there, several serious:
+### Phase 5, in more detail
 
-- **Will OOM on a large file** — `bytes.toList().chunked()` costs ~8–9× transient on top of
-  holding the whole file in RAM several times.
-- **Deletion never propagates.** The manifest is built from a query filtering `isDeleted = 0`,
-  so tombstones never leave the device, while the dialog says "Delete for everyone in the
-  family?" For medical records and IDs that is a privacy failure, not a bug.
-- **Any manifest is accepted from anyone** — unsigned, with an unconditional plaintext fallback.
-- **Documents are stored in plaintext** while the database describing them is encrypted.
+Three things were wrong and are now not:
 
-**Phase 0 landed (`b19f5d7`)** — independent safety fixes, no transfer behaviour change:
-backup rules that named non-existent stores (plus a `device-transfer` section that was missing
-entirely, which `allowBackup` does not govern); a LAN oversized frame that closed the whole
-socket and discarded every later message on it; filenames taken from `uri.lastPathSegment`,
-wrong for every Storage Access Framework URI; and removal of `fallbackToDestructiveMigration()`
-with `exportSchema` enabled and `app/schemas/3.json` committed, so the coming v3→v4 migration
-can be tested rather than verified by shipping.
+- **Deletion never left the device.** The manifest was built from a query filtering
+  `isDeleted = 0`, so tombstones were dropped on the way out while the dialog promised "delete
+  for everyone in the family". The receive-side branch had existed since the feature shipped
+  and no sender ever reached it. Tombstones now ride the manifest for 90 days.
+- **Any manifest was accepted from anyone** — encrypted but unsigned, with an unconditional
+  plaintext fallback. Now signed with Ed25519 over the ciphertext, verified against our own
+  roster; unsigned is refused and the plaintext fallback is refused once the group has a key.
+- **Documents sat in plaintext on external storage** beside a SQLCipher-encrypted database
+  describing them. The encrypted blob is now the stored form; opening decrypts into a private
+  cache cleared on launch. A resumable startup pass migrates older plaintext copies one file
+  at a time, deleting the plaintext only after the encrypted copy verifies.
 
-**Known landmine for Phase 1:** Paho's `maxInflight` is never set (default 10) and `publishRaw`
-treats any publish exception as connection loss. Today's byte-boxing is accidentally slow
-enough to mask it; streaming will unmask it and start disconnecting the client mid-upload.
+**File key version 3** — the group key with purpose separation — is readable but deliberately
+**not written**. 1.12.10 maps an unrecognised version to the legacy key, so publishing v3 now
+would make new files undecryptable to peers that have not updated. *This is the one piece of
+deferred work in the file subsystem: flip the writer once every device is past 28.*
 
-## Track 6 — Relay-exposure security review
+Rollout note: **peers on 1.12.10 publish unsigned manifests and will stop updating a newer
+device's file list until they update.** That is the intended trade — the Family screen already
+names them.
 
-`SECURITY_REVIEW.md` is current. F1, F4, F5, F6, F7 fixed; F3 partially fixed (online/offline
-sealed, member IDs and timing remain); **F2 accepted risk** — the broker operator was ruled out
-of the threat model on 2026-08-10, with the conditions that would reopen it recorded. Do not
-"fix" F2 without revisiting that decision.
+### Phase 6, the vault, in more detail
+
+A 128 KiB container of 256 fixed-size slots, created full of `SecureRandom` bytes on first run
+on every device whether or not anyone ever sets a code, with no header or version byte. Opening
+means attempting AES-GCM on every slot and keeping what authenticates, so **every code is
+valid**: the family code opens the real slots, a decoy code opens the decoy slots, anything
+else opens an empty vault. There is no error path and no timing difference. Codes are never
+stored; a code is input to Argon2id (libsodium `crypto_pwhash`, INTERACTIVE limits, salted with
+the group id) and nothing else.
+
+Document bytes live under random ids encrypted with per-item keys that exist only inside a
+slot, synced on their own chunk path — deliberately not as shared files, since a `SharedFile`
+row would list them in the manifest that every member can read.
+
+Deletes are recoverable by decision: anyone with the code can delete anything, which no code
+can prevent with a shared key, so removal flips a slot's state and keeps the bytes.
+
+Four deviations from the plan, all recorded in the plan file: the container gets its own
+retained topic; document bytes get their own chunk path; slots are 256×512 rather than 64×256
+with two replicas per item; and entry is the search box's submit action. The third exists
+because **allocation is blind** — no device can tell filler from another vault's slot, so
+writing to one vault can overwrite another's. That is inherent: what makes the decoy credible
+is what makes allocation blind. Replication turns it from data loss into loss of redundancy.
+
+### Known landmine, still unaddressed
+
+Paho's `maxInflight` is never set (default 10) and `publishRaw` treats any publish exception as
+connection loss. The publish loop is paced at 15 ms per chunk, which is what currently keeps a
+large upload from knocking the app off its own broker. **`maxInflight` itself is still not
+raised.** Anything that speeds up publishing needs to revisit this first.
+
+## Track 6 — Security review
+
+`SECURITY_REVIEW.md` is current for the relay-exposure findings. F1, F4, F5, F6, F7 fixed; F3
+partially fixed (online/offline sealed, member IDs and timing remain); **F2 accepted risk** —
+the broker operator was ruled out of the threat model on 2026-08-10, with the conditions that
+would reopen it recorded. Do not "fix" F2 without revisiting that decision.
+
+It does **not** yet cover Phases 5 and 6, which changed the threat surface substantially
+(manifest authenticity, at-rest storage, and an entire deniable-storage feature). Worth a pass.
 
 Still open from the June audit: `androidx.security:security-crypto` remains at
 `1.1.0-alpha06` (`app/build.gradle.kts`). 8 stale retained `join_approval` messages remain on
@@ -168,45 +192,53 @@ that join.
 
 ## Track 7 — iOS port
 
-`ios/IOS_PORT_SPEC.md` is at **1.8** and current with the wire format. Its header still says
-"revised against 1.12.7 (25)" — cosmetic, since 26 changed no wire format. Worth documenting
-the new LAN oversized-frame behaviour (skip, do not close) when next touched.
+`ios/IOS_PORT_SPEC.md` is at **1.10** and current with the wire format as of `4f3c1f0`,
+including the previously undocumented Phase 2–4 additions and the vault (§6.8). The port phase
+plan gained a Phase 6.5 for the vault, which is worth its own session because every assertion
+in it is about something *not* being observable.
 
 Phase 0 of the port was scaffolded on Windows, which has no Swift toolchain. CI exists
 (`.github/workflows/ios-swift-tests.yml`) but **whether it is green is still unconfirmed** —
-`gh` is not authenticated on this machine. Unchanged for three snapshots now; it stays the
+`gh` is not authenticated on this machine. Unchanged for four snapshots now; it stays the
 correct next step for that track. Phases 1–7 not started.
 
 ## Track 8 — UI
 
 `UI_REDESIGN_PLAN.md`, `UI_SCREEN_BEFORE_AFTER.md` and `SESSION_CONTEXT.md` were untracked
 local files and are gone; they were never in git and cannot be recovered from it. Treat the
-redesign as **undocumented rather than done** — reconstructing the old plan from memory would
-invent a baseline.
+redesign as **undocumented rather than done**.
+
+New since the last snapshot: the Files screen has a search box (which is also the vault's
+entry point), a status board, per-file status chips and availability counts.
 
 ## Housekeeping
 
-- **Untracked**: `AGENTS.md` (a Codex-facing near-duplicate of `CLAUDE.md`), this file,
+- **Untracked**: `AGENTS.md` (a Codex-facing near-duplicate of `CLAUDE.md`),
   `.claude/settings.json`, `FamiliySafetyIcon.png` (note the typo), and `.idea/` noise that
   belongs in `.gitignore`.
+- `.claude/settings.local.json` is tracked but carries personal overrides, and has uncommitted
+  local modifications.
 - Local branches `ui-refactor` and `ui-checkpoint-current` are merged history;
   `origin/claude/family-safety-invite-bug-lsvy7p` is a leftover remote branch.
-- `.claude/settings.local.json` is tracked but carries personal overrides.
 
 ## Deliberately parked
 
 Chat message length is unpadded (F6 covered presence and location; chat was excluded by
-decision). AES-GCM is implemented twice — `crypto/GroupCipher.kt` and inside
-`files/SharedFileRepository.kt`. They agree today, which is exactly why the duplication is
-worth removing before they stop agreeing.
+decision). AES-GCM is now implemented in **three** places — `crypto/GroupCipher.kt`,
+`files/SharedFileRepository.kt` and `vault/VaultSlots.kt`. They agree today, which is exactly
+why the duplication is worth removing before they stop agreeing.
 
 ## Suggested next actions, in order
 
-1. **Run the family recreation on 26** (Track 1). The shipped protections do nothing for
-   existing families until someone recreates the group, and it also clears the live fork.
-2. **Phase 1 of the file redesign** — the largest remaining piece, with a storage migration over
-   real user data. Start it fresh, not at the end of a long session.
-3. Check the iOS CI run (needs `gh auth login`); if green, Phase 0 is done and Phase 1 is next.
-4. Refresh or delete `PLAY_STORE_CHECKLIST.md`.
-5. Replace `security-crypto:1.1.0-alpha06` — the last open item from the June audit.
-6. `.gitignore` for `.idea/`; decide whether `AGENTS.md` and this file belong in git.
+1. **Run the family recreation** (Track 1). Everything shipped in the last three releases —
+   file-name privacy, presence sealing, at-rest keys, the vault — does nothing for a family
+   created before 1.12.0 until someone recreates the group. It also clears the live fork.
+2. **Cut a release with Phases 5 and 6.** Build the bundle with `--rerun-tasks` and verify the
+   dex; the release notes need to say plainly that everyone must update, because unsigned
+   manifests from older peers are refused.
+3. Security-review pass over Phases 5 and 6 — `SECURITY_REVIEW.md` predates both.
+4. Check the iOS CI run (needs `gh auth login`); if green, Phase 0 is done and Phase 1 is next.
+5. Flip the file key writer to version 3 once every device is past 28.
+6. Raise Paho's `maxInflight` before anything else touches transfer throughput.
+7. Refresh or delete `PLAY_STORE_CHECKLIST.md`; `.gitignore` for `.idea/`; decide whether
+   `AGENTS.md` and this file belong in git.
