@@ -37,11 +37,22 @@ Privacy-first, end-to-end-encrypted family location/chat/file app.
 versionCode 26 was uploaded 2026-08-13 and **28 is now the shipped build** *(user-reported)*.
 28 carries the member-list fixes from Track 3.
 
-**Still outstanding — the family recreation.** Unchanged from the last two snapshots, and now
-more valuable than it was: the file-content, file-name, presence *and* vault protections all
-depend on a group key generated when a family is *created*. Families made before 1.12.0 carry
-no key and silently fall back to old behaviour. To switch them on: everyone updates → everyone
-leaves → **one person creates the family on the current build** → re-invite.
+**Still outstanding — the family recreation.** `GroupDefinition.fileEncryptionKey` is generated
+in exactly one place — `GroupStateManager.createGroup` — and there is no backfill anywhere, so
+a family created before 1.12.0 carries a null key permanently. Without it: shared documents
+fall back to file key version 1, `SHA-256(groupId + "familysafety-files-v1")`, whose inputs are
+both public; the manifest is published as **plaintext and unsigned**, since Phase 5's signing
+only applies on the encrypted path; and presence sealing and the repair/holdings control
+messages have no key either.
+
+**The vault does *not* depend on it** — it salts Argon2id with the groupId, signs the container
+with Ed25519 identity keys, and encrypts each document under its own random content key.
+Nothing in `vault/` references `fileEncryptionKey`. An earlier draft of this document claimed
+otherwise.
+
+To switch the rest on: everyone updates → everyone leaves → **one person creates the family on
+the current build** → re-invite → re-share the documents, which were encrypted under a key that
+no longer exists.
 
 Leaving destroys local group data *and identity keys*: new member IDs, new mnemonics, and
 **old recovery phrases stop working**. Tell people before they leave.

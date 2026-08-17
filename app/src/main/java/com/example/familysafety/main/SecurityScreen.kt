@@ -387,6 +387,17 @@ private fun buildDiagnosticsReport(
         appendLine("  Version: ${groupDef.version}")
         appendLine("  State hash: ${groupDef.computeStateHash()}")
         appendLine("  Members: ${groupDef.members.size}")
+        // Presence or absence only — never the key itself. This report is meant to be pasted
+        // into a message to somebody, and a report that leaks the family's document key would
+        // be a worse hole than the one it is here to diagnose.
+        appendLine(
+            "  Document key: " +
+                if (groupDef.fileEncryptionKey.isNullOrBlank()) {
+                    "ABSENT (family predates per-family keys; files use the derivable key)"
+                } else {
+                    "present"
+                }
+        )
     }
     appendLine()
 
@@ -478,6 +489,17 @@ private fun GroupIntegrityCard(
             IntegrityRow("Version", "${groupDef.version}")
             Spacer(Modifier.height(4.dp))
             IntegrityRow("State hash", groupDef.computeStateHash().take(8))
+            Spacer(Modifier.height(4.dp))
+            IntegrityRow(
+                "Document protection",
+                if (groupDef.fileEncryptionKey.isNullOrBlank()) "Not set up" else "On"
+            )
+
+            // A family only ever gets this key at the moment it is created, and there is no
+            // upgrade path — so a family that predates the key keeps sharing documents under
+            // one that anyone reaching the relay can work out. Nothing in the app said so, and
+            // it is not something a user could otherwise find out.
+            FamilyKeyStatus(hasKey = !groupDef.fileEncryptionKey.isNullOrBlank())
 
             Spacer(Modifier.height(14.dp))
             KeySyncStatus(keySyncRequestState)
@@ -504,6 +526,43 @@ private fun GroupIntegrityCard(
             }
         }
     }
+}
+
+/**
+ * Whether this family has its own document key, and what it means if it does not.
+ *
+ * Deliberately explicit about the cost of fixing it. The fix is for everyone to leave and one
+ * person to create the family again, and leaving destroys this device's identity keys — every
+ * member ends up with a new recovery phrase and the old ones stop working. Presenting that as
+ * a one-tap improvement would be a way to lose people their identities.
+ */
+@Composable
+private fun FamilyKeyStatus(hasKey: Boolean) {
+    Spacer(Modifier.height(10.dp))
+    if (hasKey) {
+        StatusRow(
+            color = ColorSuccess,
+            label = "This family has its own key. Documents you share, their names, and who is " +
+                "online can only be read by this family."
+        )
+        return
+    }
+
+    StatusRow(
+        color = AmberWarning,
+        label = "This family was started before per-family keys existed, so it never got one."
+    )
+    Spacer(Modifier.height(8.dp))
+    Text(
+        "Documents you share, and their file names, can be read by the server that passes " +
+            "them between your phones. Everything else — messages, locations — is unaffected, " +
+            "and so is the private vault.\n\n" +
+            "The only fix is for everyone to leave the family and one person to start it " +
+            "again. That gives everyone a new recovery phrase and makes the old ones stop " +
+            "working, and shared documents have to be added again afterwards.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 }
 
 @Composable
