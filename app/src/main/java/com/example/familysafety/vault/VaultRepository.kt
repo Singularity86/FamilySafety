@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -78,9 +79,26 @@ class VaultRepository @Inject constructor(
      */
     private val blobStore = ChunkedFileStore { File(vaultDir(), BLOBS_DIR) }
 
-    /** Highest container version seen, so an older one cannot roll the family back. */
+    /**
+     * Highest container version accepted, so an older one cannot roll the family back.
+     *
+     * -1 means "not yet read from disk". It is deliberately not defaulted to 0: a default of
+     * zero is indistinguishable from a genuine "no container has ever been accepted", and that
+     * is exactly the state in which every replayed container looks new.
+     */
     @Volatile
-    private var containerVersion: Long = 0
+    private var containerVersion: Long = -1
+
+    private val versionGate = kotlinx.coroutines.sync.Mutex()
+
+    /** The persisted high-water mark, loaded once per process. */
+    private suspend fun currentVersion(): Long {
+        containerVersion.let { if (it >= 0) return it }
+        return versionGate.withLock {
+            containerVersion.let { if (it >= 0) return@withLock it }
+            container.readVersion().also { containerVersion = it }
+        }
+    }
 
     companion object {
         private const val TAG = "VaultRepository"
@@ -100,6 +118,23 @@ class VaultRepository @Inject constructor(
         const val MAX_ITEM_BYTES = 25L * 1024 * 1024
 
         private const val MAX_CHUNKS_PER_REPAIR_RESPONSE = 64
+
+        /**
+         * Chunks one vault document may claim, derived from [MAX_ITEM_BYTES].
+         *
+         * `totalChunks` arrives from a peer and is used to size the blob and its bitmap, so
+         * an unchecked value lets one message declare a document of any size at all.
+         */
+        private const val MAX_ITEM_CHUNKS = (MAX_ITEM_BYTES / CHUNK_SIZE).toInt() + 1
+
+        /** Distinct vault documents this device will store bytes for. */
+        private const val MAX_VAULT_BLOBS = 256
+
+        /** Total vault bytes this device will hold, across every document. */
+        private const val MAX_VAULT_TOTAL_BYTES = 250L * 1024 * 1024
+
+        /** Free space kept in reserve rather than filling the volume. */
+        private const val VAULT_SPACE_HEADROOM_BYTES = 64L * 1024 * 1024
     }
 
     // =========================================================================
@@ -333,7 +368,8 @@ class VaultRepository @Inject constructor(
     // =========================================================================
 
     private suspend fun publishContainer(groupId: String, bytes: ByteArray) {
-        containerVersion = maxOf(containerVersion + 1, System.currentTimeMillis())
+        containerVersion = maxOf(currentVersion() + 1, System.currentTimeMillis())
+        container.writeVersion(containerVersion)
         val data = Base64.getEncoder().encodeToString(bytes)
         val message = VaultContainerMessage(
             version = containerVersion,
@@ -359,14 +395,15 @@ class VaultRepository @Inject constructor(
      * refused — accepting one would let anyone who can reach the broker replace a family's
      * vault with random bytes, which is indistinguishable from erasing it.
      *
-     * Older versions are ignored, so a replayed message cannot roll the family back to a
-     * container from before a document was added.
+     * Older versions are ignored, and the high-water mark is **persisted** — held in memory
+     * only, it reset to zero on every launch, so the first container to arrive after a restart
+     * was accepted whatever its version and a captured old one rolled the vault back.
      */
     fun handleIncomingContainer(payload: ByteArray) {
         scope.launch {
             try {
                 val message = json.decodeFromString<VaultContainerMessage>(String(payload))
-                if (message.version <= containerVersion) return@launch
+                if (message.version <= currentVersion()) return@launch
                 if (!verify(message)) return@launch
 
                 val bytes = runCatching { Base64.getDecoder().decode(message.data) }.getOrNull()
@@ -376,6 +413,7 @@ class VaultRepository @Inject constructor(
                 }
                 if (container.write(bytes)) {
                     containerVersion = message.version
+                    container.writeVersion(message.version)
                     Timber.d("$TAG: took container version ${message.version}")
                 }
             } catch (e: Exception) {
@@ -447,13 +485,24 @@ class VaultRepository @Inject constructor(
             try {
                 val message = json.decodeFromString<VaultChunkMessage>(String(payload))
                 if (message.fileId != fileId || message.chunkIndex != chunkIndex) return@launch
-                if (message.totalChunks <= 0) return@launch
+                if (message.totalChunks <= 0 || message.totalChunks > MAX_ITEM_CHUNKS) {
+                    Timber.w("$TAG: refusing a chunk claiming ${message.totalChunks} pieces")
+                    return@launch
+                }
 
                 val ciphertext = Base64.getDecoder().decode(message.data)
                 val existing = vaultBlobDao.get(fileId)
                 if (existing != null && ChunkBitmap.isComplete(existing.chunkBitmap, existing.chunkCount)) {
                     return@launch
                 }
+                // A peer that already holds a blob under this id cannot be allowed to redefine
+                // how big it is; the slot offset is chunkIndex * stride, so a changed count
+                // reinterprets everything already written.
+                if (existing != null && existing.chunkCount != message.totalChunks) {
+                    Timber.w("$TAG: chunk for $fileId disagrees about the piece count — dropping")
+                    return@launch
+                }
+                if (existing == null && !hasRoomForAnotherBlob(message.totalChunks)) return@launch
 
                 val bitmap = blobStore.writeChunk(
                     fileId = fileId,
@@ -481,6 +530,35 @@ class VaultRepository @Inject constructor(
                 Timber.e(e, "$TAG: could not store a vault chunk")
             }
         }
+    }
+
+    /**
+     * Whether this device will take on another vault document.
+     *
+     * Vault chunks are stored without authentication, deliberately — see [handleIncomingChunk].
+     * The cost of that decision is that any peer able to publish can hand this device data it
+     * cannot read and cannot attribute, so the only defence is a ceiling. Three of them: how
+     * many documents, how many bytes in total, and whether the volume can stand it.
+     */
+    private suspend fun hasRoomForAnotherBlob(chunkCount: Int): Boolean {
+        val blobs = runCatching { vaultBlobDao.count() }.getOrDefault(0)
+        if (blobs >= MAX_VAULT_BLOBS) {
+            Timber.w("$TAG: already holding $blobs vault blobs — refusing another")
+            return false
+        }
+        val held = runCatching { vaultBlobDao.totalChunks() }.getOrDefault(0L)
+        val projected = (held + chunkCount) * CHUNK_SIZE.toLong()
+        if (projected > MAX_VAULT_TOTAL_BYTES) {
+            Timber.w("$TAG: vault storage cap reached — refusing another blob")
+            return false
+        }
+        val usable = runCatching { blobStore.usableSpaceBytes() }.getOrDefault(0L)
+        val needed = chunkCount.toLong() * CHUNK_SIZE + VAULT_SPACE_HEADROOM_BYTES
+        if (usable in 1 until needed) {
+            Timber.w("$TAG: not enough free space for another vault blob")
+            return false
+        }
+        return true
     }
 
     /** Ask peers for the chunks of [item] this device is missing. */

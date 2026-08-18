@@ -1,6 +1,11 @@
 # Security Review — relay exposure
 
 Review date: 2026-08-08. Reviewed against `main` at `8abdad3` (1.11.4 / 17).
+**Second pass 2026-08-17** against `main` at `92e6d9f`, covering the shared-file
+correctness work and the family vault (F8–F12). Those two changes altered the
+threat surface more than anything since the original review: one added
+authenticity to the file index and moved documents out of plaintext at rest, the
+other added an entire deniable-storage feature with its own offline attack target.
 
 Scope: what an attacker learns and can do with (a) a copy of the published APK
 and (b) network access. It does not cover device compromise, Play account
@@ -296,6 +301,147 @@ manifest a single retained broadcast while making it unreadable off the broker.
 derivation, which anyone on the broker can compute, so encrypting with it would be
 theatre rather than protection. Recreating the family on 1.12.0+ remains the fix, exactly
 as for F1.
+
+## F8 — A replayed vault container rolls the vault back after a restart (high) — FIXED
+
+`VaultRepository` guarded container updates with a monotonic version:
+
+```kotlin
+if (message.version <= containerVersion) return@launch
+```
+
+`containerVersion` was `@Volatile private var containerVersion: Long = 0` - held
+in memory only. Every process start reset it to zero, so the guard silently
+stopped applying: the first container to arrive after a launch was accepted
+whatever its version, and versions are wall-clock milliseconds, so **every**
+previously published container qualifies.
+
+Anyone able to subscribe can capture a container message. Replaying one after a
+target device restarts overwrites that device's container wholesale, dropping
+every vault document added since - with a signature that verifies, because it is
+a genuine earlier message from a real member. The device may then publish the
+rolled-back state onward.
+
+The doc comment above the check claimed "a replayed message cannot roll the
+family back", which was false in exactly the case that matters. Found by reading
+the code back, not by a test: the whole subsystem was green.
+
+Fix: the high-water mark is persisted in a sidecar beside the container and read
+before the first comparison, with `-1` for "not yet loaded" so a genuine zero is
+distinguishable from an unread one. Regression tests in `VaultContainerTest` pin
+that it survives a restart, that an unreadable sidecar degrades to zero rather
+than throwing, and that it does not change the container's fixed size.
+
+## F9 — Vault chunks are stored unauthenticated and were unbounded (medium) — FIXED
+
+`handleIncomingChunk` on the vault path deliberately does no authentication. That
+is not an oversight: a device very likely holds no code that can read what is
+arriving, and refusing to store what it cannot verify would mean vault documents
+never left the phone that added them. Verification happens when someone opens the
+vault, under the item's content key.
+
+The cost of that decision was not paid. `totalChunks` arrives from the peer and
+sizes both the blob and its bitmap; nothing capped it, nothing capped how many
+distinct `fileId`s a device would take on, and nothing capped total bytes.
+`MAX_ITEM_BYTES` was enforced only on the local add path. Any peer able to
+publish could fill every family device's storage with data those devices can
+neither read nor attribute.
+
+Fix: `totalChunks` is bounded by `MAX_ITEM_CHUNKS`, derived from
+`MAX_ITEM_BYTES`; a blob whose chunk count disagrees with what is already stored
+is refused, since slot offsets are `chunkIndex * stride` and a changed count
+reinterprets everything already written; and a new blob is accepted only within a
+document-count cap, a total-bytes cap, and a free-space check.
+
+**Not fixed, and inherent:** a member who knows a code can still add documents
+that consume every other device's storage up to those caps. That is what "shared
+by all the family" means here, and it is the same trust the file library already
+extends.
+
+## F10 — The vault container is a permanent offline target for guessing the code (medium) — ACCEPTED, INHERENT
+
+The container is published retained and unencrypted on
+`familysafe/group/{groupId}/vault/container`. It is encrypted at slot level, so
+this leaks no contents - but it hands anyone who can subscribe a fixed, complete
+artifact against which codes can be guessed **offline, without limit, forever**.
+There is no rate limit to hit and no lockout to trigger, because there is
+deliberately no server-side notion of a correct code.
+
+Argon2id at libsodium's INTERACTIVE preset (64 MiB, 2 passes) is the only cost
+per guess. That is a real cost and the right preset for a phone, but it is not
+enough to protect a code a person picked casually. `MIN_CODE_LENGTH` is 6, which
+is a floor against triviality, not a strength requirement - and the app cannot
+enforce strength without admitting which codes are real.
+
+This interacts with F2: while the broker credential is shared, "anyone who can
+subscribe" is a much larger set than "the family". F2 was accepted on 2026-08-10
+on the reasoning that the operator sees only metadata. **The vault changes what
+is at stake in that decision** - it is no longer metadata, it is an offline
+attack on the family's most sensitive documents. This does not by itself reopen
+F2, but it is exactly the kind of change the F2 decision said should trigger a
+re-read.
+
+Mitigation is user-facing and not yet built: the vault should ask for a
+passphrase rather than a word, and should say plainly that its strength is the
+only thing protecting the contents. Filed rather than fixed.
+
+## F11 — The vault was eligible for device-to-device transfer (low) — FIXED
+
+`data_extraction_rules.xml` excluded identity keys, the SQLCipher store and the
+external file library from both channels, but the vault lives in internal storage
+under `familysafety_vault/` and matched no rule, so it was eligible for
+device-to-device copy.
+
+The container is opaque without a code, so this leaked nothing directly. It did
+put a permanent offline guessing target (F10) onto a device that may not be in
+the family and may not be the user's. A vault should follow the family, not the
+hardware: a new device receives the container over the retained topic once it
+joins.
+
+Fix: excluded from both `cloud-backup` and `device-transfer`.
+
+## F12 — The file manifest is not replay-protected (low)
+
+`FileManifest` carries a `version` (epoch ms of last change) and nothing compares
+it against anything. A signed manifest can therefore be replayed indefinitely by
+anyone who captured one.
+
+Impact is bounded by the receive logic rather than by design, which is worth
+stating honestly. Deletion is sticky - there is no branch that un-deletes, and a
+tombstone's `downloadState` is `COMPLETE`, so a replayed older manifest cannot
+resurrect a deleted document. What a replay can do is revert `isEssential`,
+changing which documents a device fetches automatically.
+
+The one case that is not bounded: once a tombstone passes the 90-day retention
+window and is purged, a replayed pre-deletion manifest re-lists the file and the
+device fetches it again. That window is documented in `SharedFileDao`, but as
+protection against a long-offline peer, not against a replay.
+
+Not fixed. The fix is a stored high-water mark per group, the same shape as F8's.
+
+## What Phase 5 closed
+
+Worth recording, because it was never written up as a numbered finding: before
+2026-08-16 the file manifest was accepted from anyone. It was encrypted but
+unsigned, and `decodeManifest` fell back to parsing plaintext unconditionally.
+Anyone able to publish to the broker could rewrite a family's entire file list,
+including marking every document deleted. It is now signed with Ed25519 over the
+ciphertext and verified against the local roster, unsigned manifests are refused,
+and the plaintext fallback is refused once a group has a key. Documents are also
+no longer stored in plaintext at rest.
+
+## A claim in the code that was too strong
+
+`VaultRepository.open` and its documentation state that a correct and an
+incorrect code are indistinguishable by timing. The dominant costs - Argon2id,
+then 256 GCM attempts - are identical either way, and no branch depends on the
+outcome. But `openAll` groups and sorts whatever it found, so a full vault does
+microseconds more work than an empty one.
+
+That is not remotely measurable across a network, or plausibly through an app's
+own UI, and it is not being treated as a finding. It is recorded because the
+comment said "no timing difference" without qualification, and a security comment
+that overstates its guarantee is how the next person stops checking.
 
 ## Remediation
 

@@ -79,6 +79,41 @@ class VaultContainer(
     }
 
     /**
+     * The highest container version this device has accepted.
+     *
+     * Persisted, because holding it in memory only meant it reset to zero on every launch and
+     * the "ignore anything older" rule silently stopped applying — the first container to
+     * arrive after a restart was taken whatever its version, so replaying a captured older one
+     * rolled the family's vault back and dropped whatever had been added since.
+     *
+     * Kept in a sidecar rather than inside the container: the container is a fixed size, and
+     * anything stored inside it would either cost a slot or change that size. The sidecar
+     * exists on every device from first run and holds a number that is meaningless without the
+     * container, so it reveals nothing the container does not.
+     */
+    suspend fun readVersion(): Long = withContext(Dispatchers.IO) {
+        lock.withLock {
+            runCatching { versionFile().readText().trim().toLong() }.getOrDefault(0L)
+        }
+    }
+
+    suspend fun writeVersion(version: Long) = withContext(Dispatchers.IO) {
+        lock.withLock {
+            runCatching {
+                val f = versionFile()
+                f.parentFile?.mkdirs()
+                f.writeText(version.toString())
+            }
+            Unit
+        }
+    }
+
+    private fun versionFile(): File {
+        val file = fileProvider()
+        return File(file.parentFile, "${file.name}.ver")
+    }
+
+    /**
      * Apply [mutate] to the container and store the result, under one lock.
      *
      * Read-modify-write has to be atomic here or two additions racing lose one of them, and

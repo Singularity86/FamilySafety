@@ -15,6 +15,14 @@
   two devices sharing one MQTT client ID — which the broker resolves by evicting one of them
   in a loop.
 
+  familysafety_vault/ holds the vault container and the vault's document blobs, in internal
+  storage. Excluded from both channels, and the reason is not the usual one: the container is
+  opaque without a code, so copying it leaks nothing directly — but it is a permanent offline
+  target for guessing that code, and putting it on a device that is not in the family is
+  handing that target to whoever holds the new phone. A vault follows the family, not the
+  hardware; the new device receives the container over the ordinary retained topic once it
+  joins.
+
   Store names verified against the code; see backup_rules.xml for what each one holds.
 -->
 <data-extraction-rules>
@@ -28,6 +36,7 @@
         <exclude domain="database" path="familysafety_encrypted.db"/>
         <exclude domain="file" path="datastore/"/>
         <exclude domain="external" path="familysafety_files/"/>
+        <exclude domain="file" path="familysafety_vault/"/>
     </cloud-backup>
 
     <device-transfer>
@@ -40,5 +49,6 @@
         <exclude domain="database" path="familysafety_encrypted.db"/>
         <exclude domain="file" path="datastore/"/>
         <exclude domain="external" path="familysafety_files/"/>
+        <exclude domain="file" path="familysafety_vault/"/>
     </device-transfer>
 </data-extraction-rules>

@@ -140,6 +140,41 @@ class VaultContainerTest {
     }
 
     @Test
+    fun theAcceptedVersionSurvivesARestart() = runTest {
+        // The bug this pins: the high-water mark used to live in memory only, so it reset to
+        // zero on every launch and "ignore anything older" quietly stopped applying. The first
+        // container to arrive after a restart was taken whatever its version, which meant a
+        // captured old one rolled the vault back and dropped everything added since.
+        assertEquals(0L, container.readVersion())
+
+        container.writeVersion(1_700_000_000_000)
+
+        val afterRestart = VaultContainer { file }
+        assertEquals(1_700_000_000_000, afterRestart.readVersion())
+    }
+
+    @Test
+    fun anUnreadableVersionSidecarReadsAsZeroRatherThanThrowing() = runTest {
+        container.read()
+        File(dir, "container.bin.ver").writeText("not a number")
+
+        // Falling back to zero re-opens the replay window for one message, which is bad;
+        // throwing would take out every container update from then on, which is worse.
+        assertEquals(0L, container.readVersion())
+    }
+
+    @Test
+    fun theVersionSidecarIsSeparateFromTheContainer() = runTest {
+        container.read()
+        container.writeVersion(42)
+
+        // Anything stored inside the container would either cost a slot or change its fixed
+        // size, and the size is the one thing an adversary can measure without a key.
+        assertEquals(VaultSlots.CONTAINER_BYTES.toLong(), file.length())
+        assertEquals(42L, container.readVersion())
+    }
+
+    @Test
     fun aWrittenContainerReadsBackExactly() = runTest {
         val payload = VaultSlots.randomContainer(SecureRandom())
 

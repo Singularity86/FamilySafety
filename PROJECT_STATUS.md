@@ -1,9 +1,10 @@
 # FamilySafety (Jibaro Family Safety) — Project Status
 
-Snapshot date: 2026-08-16. Branch: `main`, level with `origin/main`, HEAD `4f3c1f0`.
+Snapshot date: 2026-08-17. Branch: `main`, level with `origin/main`, HEAD `92e6d9f` plus the
+security pass committed alongside this update.
 
 Supersedes the 2026-08-13 snapshot, which was written when Phase 0 of the file redesign was
-the newest thing in the tree. Thirteen commits since. **The file redesign is finished — all
+the newest thing in the tree. Sixteen commits since. **The file redesign is finished — all
 six phases plus the vault are in `main`** — and versionCode 28 is uploaded to Play.
 
 ## Scope of this document
@@ -30,7 +31,7 @@ Privacy-first, end-to-end-encrypted family location/chat/file app.
 - Shared documents are stored encrypted at rest and never assembled in the clear.
 - A shared family vault, opened by a code that is never stored anywhere.
 
-**419 unit tests, 0 failures** at HEAD.
+**422 unit tests, 0 failures** at HEAD.
 
 ## Track 1 — Play: 28 shipped, family recreation still outstanding
 
@@ -193,8 +194,29 @@ partially fixed (online/offline sealed, member IDs and timing remain); **F2 acce
 the broker operator was ruled out of the threat model on 2026-08-10, with the conditions that
 would reopen it recorded. Do not "fix" F2 without revisiting that decision.
 
-It does **not** yet cover Phases 5 and 6, which changed the threat surface substantially
-(manifest authenticity, at-rest storage, and an entire deniable-storage feature). Worth a pass.
+A second pass on 2026-08-17 covers Phases 5 and 6 as **F8–F12**. Three defects introduced by
+that work were found by reading it back rather than by any test — the subsystem was green
+throughout — and all three are fixed:
+
+- **F8 (high)**: the vault container's monotonic-version guard lived in memory only, so it
+  reset to zero on every launch and stopped applying. Replaying a captured older container
+  after a restart rolled the vault back, with a signature that verifies because it is a
+  genuine earlier message. Now persisted, with regression tests.
+- **F9 (medium)**: vault chunks are stored without authentication by design, but nothing
+  bounded them — any peer could fill every family device's storage. Now capped by chunk
+  count, document count, total bytes and free space.
+- **F11 (low)**: the vault directory matched no backup rule and was eligible for
+  device-to-device transfer, putting an offline guessing target on a phone that may not be in
+  the family. Now excluded from both channels.
+
+Two are filed and not fixed. **F10 (medium, inherent)**: the retained container is a permanent
+offline target for guessing the code, with Argon2id INTERACTIVE as the only cost per guess and
+a 6-character minimum that is a floor against triviality rather than a strength requirement.
+It also raises what is at stake in the F2 decision — no longer metadata, but the family's most
+sensitive documents — which is exactly the kind of change that decision said should trigger a
+re-read. **F12 (low)**: the file manifest has a version field that nothing compares, so a
+signed manifest can be replayed; impact is bounded because deletion is sticky, except past the
+90-day tombstone window.
 
 Still open from the June audit: `androidx.security:security-crypto` remains at
 `1.1.0-alpha06` (`app/build.gradle.kts`). 8 stale retained `join_approval` messages remain on
@@ -247,7 +269,9 @@ why the duplication is worth removing before they stop agreeing.
 2. **Cut a release with Phases 5 and 6.** Build the bundle with `--rerun-tasks` and verify the
    dex; the release notes need to say plainly that everyone must update, because unsigned
    manifests from older peers are refused.
-3. Security-review pass over Phases 5 and 6 — `SECURITY_REVIEW.md` predates both.
+3. Decide on F10: the vault should ask for a passphrase rather than a word, and say plainly
+   that its strength is the only thing protecting the contents. Re-read the F2 decision while
+   doing it — the vault changed what is at stake in it.
 4. Check the iOS CI run (needs `gh auth login`); if green, Phase 0 is done and Phase 1 is next.
 5. Flip the file key writer to version 3 once every device is past 28.
 6. Raise Paho's `maxInflight` before anything else touches transfer throughput.

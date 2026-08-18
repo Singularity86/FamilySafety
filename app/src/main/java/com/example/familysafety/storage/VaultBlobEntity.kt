@@ -80,4 +80,16 @@ interface VaultBlobDao {
 
     @Query("SELECT COUNT(*) FROM vault_blobs")
     suspend fun count(): Int
+
+    /**
+     * Chunks committed across every vault blob, as a stand-in for bytes held.
+     *
+     * Vault chunks are accepted from any peer without authentication — a device very likely
+     * holds no code that can read what is arriving, so refusing what it cannot verify would
+     * mean vault documents never left the phone that added them. That makes an inbound cap the
+     * only thing standing between the feature and a peer filling every family device's disk,
+     * and this is the number the cap is enforced against.
+     */
+    @Query("SELECT COALESCE(SUM(chunkCount), 0) FROM vault_blobs")
+    suspend fun totalChunks(): Long
 }
