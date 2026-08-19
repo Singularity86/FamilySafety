@@ -206,6 +206,8 @@ fun VaultScreen(
                     }
                 }
             }
+
+            PassphraseFooter()
         }
     }
 
@@ -216,11 +218,18 @@ fun VaultScreen(
             // Cannot say "check your code is right", because that would imply the app knows
             // what right means. It says what is true: this place is empty, and putting
             // something here starts a new one.
+            //
+            // It is also the moment the passphrase stops being a guess and becomes the only
+            // way back, which is the one moment where saying so can still change what someone
+            // picks — the footer says it, but here it is actionable.
             text = {
                 Text(
                     "This is empty, so \"${pending.name}\" will start a new collection here. " +
                         "If you expected to see things already, go back and try again — what " +
-                        "you typed decides which collection you get."
+                        "you typed decides which collection you get.\n\n" +
+                        "If you go ahead, what you typed becomes the only way back to it. " +
+                        "Nothing can reset it, so make it something long that only your " +
+                        "family would say."
                 )
             },
             confirmButton = {
@@ -258,6 +267,36 @@ fun VaultScreen(
             }
         )
     }
+}
+
+/**
+ * The one place the app can say what protects a vault (F10).
+ *
+ * It cannot be said at the entry point: that is a search box, and any hint there — a minimum
+ * length, a strength meter, the word "passphrase" — is a prompt in disguise, which would prove
+ * a vault exists to anyone holding the phone. In here the reader has already submitted
+ * something, so the fact that vaults exist is not news to them.
+ *
+ * Shown always, with no "got it" to dismiss and no stored state behind it. A note that appears
+ * for some vaults and not others is an oracle, and remembering that this device has seen it is
+ * one more thing on disk that a full vault has and an empty one does not. Repetition is the
+ * cheaper price.
+ *
+ * The wording never distinguishes a full vault from an empty one, and never suggests that what
+ * was typed might have been wrong — "anything kept here", not "your documents".
+ */
+@Composable
+private fun PassphraseFooter() {
+    HorizontalDivider()
+    Text(
+        "What you typed is the only thing protecting anything kept here. It is not stored on " +
+            "any phone or any server, so it can never be reset or recovered — and anyone who " +
+            "guesses it sees exactly what you see. Several unrelated words are far harder to " +
+            "guess than one.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+    )
 }
 
 /** A document chosen but not yet committed, held while the first-write question is asked. */

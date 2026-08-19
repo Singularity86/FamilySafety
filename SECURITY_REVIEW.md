@@ -6,6 +6,8 @@ correctness work and the family vault (F8–F12). Those two changes altered the
 threat surface more than anything since the original review: one added
 authenticity to the file index and moved documents out of plaintext at rest, the
 other added an entire deniable-storage feature with its own offline attack target.
+**F10 mitigated 2026-08-18** — passphrase floor raised and the vault now says what
+protects it — which also produced a dated re-read of the F2 decision, below.
 
 Scope: what an attacker learns and can do with (a) a copy of the published APK
 and (b) network access. It does not cover device compromise, Play account
@@ -73,6 +75,44 @@ What would reopen this: running the broker for people who are not friends and fa
 a threat model that includes the broker operator or anyone who compromises it; or a user
 population where "the relay learns your household's daily rhythm" is not an acceptable
 answer.
+
+### Re-read on 2026-08-18, prompted by the vault
+
+F10 said the vault "is exactly the kind of change the F2 decision said should
+trigger a re-read". This is that re-read. **No decision is changed here** — the
+2026-08-10 call stands, and reversing it is not this document's to do. What
+follows is what the re-read found, so the next person deciding has it.
+
+None of the three named reopening conditions has occurred: the broker still
+serves friends and family, the threat model still excludes its operator, and the
+metadata answer is unchanged.
+
+**One of the four reasoning bullets has acquired an exception.** "Every message
+is now signed and encrypted at the application layer, so the broker credential is
+no longer a security boundary" is true of every message except one. Everywhere
+else, broker access yields ciphertext under keys derived from a 256-bit secret
+that nobody guesses. The retained vault container yields ciphertext under a key
+derived from something a person chose and can remember — and yields it as a
+fixed artifact that can be attacked forever at leisure. For that one object the
+credential *is* a boundary, and it is a shared one.
+
+**The fourth bullet has also changed.** It said ACLs would buy metadata
+reduction — "F3, not integrity" — and that with the operator out of scope, "that
+spend has no threat to answer". The vault is the first thing on the broker that
+gives per-topic ACLs a threat to answer which is neither metadata nor integrity:
+restricting who may fetch `familysafe/group/{groupId}/vault/container` is the
+only structural fix for F10, and it needs per-device credentials, which is F2's
+fix. The container cannot simply stop being retained — retention is how a device
+that joins later receives a vault it was never online for.
+
+So the honest statement of the position is narrower than before: F2 is accepted,
+and one consequence of accepting it is that the family's vault passphrase is
+subject to unlimited offline guessing by anyone holding the shared credential.
+The 2026-08-18 mitigation raises what that guessing costs. It does not remove
+the exposure, and no change inside the app can.
+
+Worth deciding explicitly before Phase 6 ships, since shipping it is what turns
+this from a property of the code into a property of real families' documents.
 
 Prior analysis of the issuer problem is kept below for that day.
 
@@ -358,7 +398,7 @@ that consume every other device's storage up to those caps. That is what "shared
 by all the family" means here, and it is the same trust the file library already
 extends.
 
-## F10 — The vault container is a permanent offline target for guessing the code (medium) — ACCEPTED, INHERENT
+## F10 — The vault container is a permanent offline target for guessing the code (medium) — INHERENT; MITIGATED 2026-08-18
 
 The container is published retained and unencrypted on
 `familysafe/group/{groupId}/vault/container`. It is encrypted at slot level, so
@@ -381,9 +421,51 @@ attack on the family's most sensitive documents. This does not by itself reopen
 F2, but it is exactly the kind of change the F2 decision said should trigger a
 re-read.
 
-Mitigation is user-facing and not yet built: the vault should ask for a
-passphrase rather than a word, and should say plainly that its strength is the
-only thing protecting the contents. Filed rather than fixed.
+### Mitigation, 2026-08-18
+
+The attack is inherent and remains. What was buildable was the input to it and
+the user's understanding of it, and both are now built.
+
+**The floor is a passphrase, not a word.** `MIN_CODE_LENGTH` 6 became
+`MIN_PASSPHRASE_LENGTH` 16 — long enough that a single word, or a name and a
+year, does not reach it, and short enough to admit a three-word phrase. Length
+is a blunt instrument (`aaaaaaaaaaaaaaaa` passes) and it is the only one
+available: rejecting a *weak* passphrase means judging a specific one, and the
+app cannot judge one without admitting which ones are real.
+
+This cost nothing to change because **no shipped build has ever had a vault** —
+versionCode 28 predates Phase 6. Had one shipped, there would have been no
+migration to write: a passphrase that is not stored cannot be re-asked for by a
+device that has already forgotten it, so raising the floor after release would
+have stranded every vault below it. The window for this change closes when
+Phase 6 ships.
+
+**The app now says what protects a vault**, in the only place it can. Not at the
+entry point — that is the file search box, and a minimum length, a strength
+meter or even the word "passphrase" there is a prompt in disguise, which is
+exactly what the design refuses to show. Inside the vault the reader has already
+submitted something, so it is not news to them:
+
+- A footer on every vault screen: what was typed is the only thing protecting
+  anything kept there, it is stored nowhere and can never be reset, anyone who
+  guesses it sees the same view, and several unrelated words beat one.
+- A sentence in the first-write dialog, which is the moment a passphrase stops
+  being a guess and becomes the only way back — the last moment saying so can
+  still change what someone picks.
+
+Both are shown unconditionally, with no dismissal and no stored state. A note
+that appears for some vaults and not others is an oracle, and a "seen it" flag
+on disk is one more thing a used vault has that an empty one does not. The
+wording never distinguishes a full vault from an empty one and never suggests
+that what was typed might have been wrong.
+
+**What is not fixed, and cannot be by this route:** the container is still
+published retained, still a fixed artifact, still guessable offline without
+limit by anyone who can subscribe. Argon2id at INTERACTIVE is still the only
+cost per guess. A 16-character floor raises the cost of the cheapest attack; it
+does not bound the best one, and a family that picks sixteen predictable
+characters is no better off. The only structural fix is to stop handing the
+artifact to everyone — see the F2 re-read below, which this change triggered.
 
 ## F11 — The vault was eligible for device-to-device transfer (low) — FIXED
 

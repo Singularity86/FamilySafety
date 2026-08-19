@@ -106,10 +106,15 @@ fun FilesScreen(
             // Search, and the way into the vault.
             //
             // Typing filters the grid. Submitting from the keyboard tries the text as a vault
-            // code instead — which is why there is no "enter code" prompt anywhere in this
-            // app: a prompt would prove a vault exists, and the whole design rests on that
-            // being unknowable. Any text of at least the minimum length opens a vault, so
-            // submitting never distinguishes a real code from anything else.
+            // passphrase instead — which is why there is no "enter passphrase" prompt anywhere
+            // in this app: a prompt would prove a vault exists, and the whole design rests on
+            // that being unknowable. Any text of at least the minimum length opens a vault, so
+            // submitting never distinguishes a real passphrase from anything else.
+            //
+            // Nothing here hints at the minimum, or at what makes a passphrase good. A hint
+            // is a prompt wearing a different hat, and this box has to look like search to
+            // someone reading over a shoulder. The one place that guidance can be given is
+            // inside the vault, which is only reached by having submitted something.
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -120,7 +125,7 @@ fun FilesScreen(
                 keyboardActions = KeyboardActions(
                     onGo = {
                         val typed = query.trim()
-                        if (typed.length >= VaultKeyDerivation.MIN_CODE_LENGTH) {
+                        if (typed.length >= VaultKeyDerivation.MIN_PASSPHRASE_LENGTH) {
                             query = ""
                             keyboard?.hide()
                             onOpenVault(typed)

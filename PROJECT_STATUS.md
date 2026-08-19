@@ -1,7 +1,7 @@
 # FamilySafety (Jibaro Family Safety) — Project Status
 
-Snapshot date: 2026-08-17. Branch: `main`, level with `origin/main`, HEAD `92e6d9f` plus the
-security pass committed alongside this update.
+Snapshot date: 2026-08-18. Branch: `main`, HEAD `37dd105`. Covers the F10 vault mitigation,
+which lands with this snapshot. Supersedes the 2026-08-17 snapshot, written at `92e6d9f`.
 
 Supersedes the 2026-08-13 snapshot, which was written when Phase 0 of the file redesign was
 the newest thing in the tree. Sixteen commits since. **The file redesign is finished — all
@@ -209,14 +209,34 @@ throughout — and all three are fixed:
   device-to-device transfer, putting an offline guessing target on a phone that may not be in
   the family. Now excluded from both channels.
 
-Two are filed and not fixed. **F10 (medium, inherent)**: the retained container is a permanent
-offline target for guessing the code, with Argon2id INTERACTIVE as the only cost per guess and
-a 6-character minimum that is a floor against triviality rather than a strength requirement.
-It also raises what is at stake in the F2 decision — no longer metadata, but the family's most
-sensitive documents — which is exactly the kind of change that decision said should trigger a
-re-read. **F12 (low)**: the file manifest has a version field that nothing compares, so a
-signed manifest can be replayed; impact is bounded because deletion is sticky, except past the
-90-day tombstone window.
+**F10 (medium, inherent) — mitigated 2026-08-18.** The retained container is a permanent
+offline target for guessing the code, with Argon2id INTERACTIVE as the only cost per guess.
+The 6-character minimum was a floor against triviality rather than a strength requirement; it
+is now 16, which a single word does not reach. That change was free only because **no shipped
+build has ever carried a vault** — 28 predates Phase 6 — and it could not have been made after
+release, since a passphrase that is nothing but a key-derivation input cannot be re-asked for
+by a device that has already forgotten it. **The window closes when Phase 6 ships.** The vault
+also now states what protects it: a footer on every vault screen and a sentence in the
+first-write dialog, both shown unconditionally, because a note that appears for some vaults and
+not others is an oracle. Nothing is said at the entry point — that is the file search box, and
+a hint there is a prompt in disguise.
+
+The attack itself is untouched and cannot be fixed in the app. The only structural fix is to
+restrict who can fetch the retained container, which needs per-topic ACLs, which needs F2.
+
+**The F2 re-read is done and recorded** in `SECURITY_REVIEW.md`, and **changes no decision** —
+that call is the user's. What it found: none of the three named reopening conditions has
+occurred, but two of F2's four reasoning bullets have acquired exceptions. "The broker
+credential is no longer a security boundary" is true of every message except the vault
+container, which is the one object encrypted under something a person chose rather than a
+256-bit secret. And "ACLs have no threat to answer" is no longer true — the vault is the first
+thing on the broker giving them one that is neither metadata nor integrity. **Worth deciding
+explicitly before Phase 6 ships**, since shipping is what turns this from a property of the
+code into a property of real families' documents.
+
+**F12 (low)** is filed and not fixed: the file manifest has a version field that nothing
+compares, so a signed manifest can be replayed; impact is bounded because deletion is sticky,
+except past the 90-day tombstone window.
 
 Still open from the June audit: `androidx.security:security-crypto` remains at
 `1.1.0-alpha06` (`app/build.gradle.kts`). 8 stale retained `join_approval` messages remain on
@@ -268,10 +288,16 @@ why the duplication is worth removing before they stop agreeing.
    created before 1.12.0 until someone recreates the group. It also clears the live fork.
 2. **Cut a release with Phases 5 and 6.** Build the bundle with `--rerun-tasks` and verify the
    dex; the release notes need to say plainly that everyone must update, because unsigned
-   manifests from older peers are refused.
-3. Decide on F10: the vault should ask for a passphrase rather than a word, and say plainly
-   that its strength is the only thing protecting the contents. Re-read the F2 decision while
-   doing it — the vault changed what is at stake in it.
+   manifests from older peers are refused. Settle item 3 *before* this, not after: shipping a
+   vault is what makes the F2 exposure real, and the passphrase floor could not have been
+   raised at all after the first vault existed.
+3. **Decide on F2 in light of the vault** — the re-read is written up in `SECURITY_REVIEW.md`
+   and deliberately changes nothing. The question to answer is whether "the family's vault
+   passphrase can be guessed offline, forever, by anyone holding the shared broker credential"
+   is an acceptable consequence of the 2026-08-10 call. If it is not, the fix is per-device
+   credentials plus an ACL on the vault container topic, and it belongs before Phase 6 ships.
+   The F10 mitigation that prompted this — a 16-character floor and the vault stating what
+   protects it — is done.
 4. Check the iOS CI run (needs `gh auth login`); if green, Phase 0 is done and Phase 1 is next.
 5. Flip the file key writer to version 3 once every device is past 28.
 6. Raise Paho's `maxInflight` before anything else touches transfer throughput.

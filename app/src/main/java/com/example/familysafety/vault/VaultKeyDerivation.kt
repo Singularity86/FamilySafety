@@ -86,12 +86,24 @@ class VaultKeyDerivation @Inject constructor() {
         const val KEY_BYTES = 32
 
         /**
-         * Shortest code accepted.
+         * Shortest passphrase accepted.
          *
-         * Not a strength check on a specific code — there is no way to reject a code without
-         * admitting which ones are real. It only stops a code so short that Argon2id's cost
-         * cannot make up the difference.
+         * Not a strength check on a specific passphrase — there is no way to reject one
+         * without admitting which ones are real. Length is the only lever that can be pulled
+         * without becoming an oracle, and it is a blunt one: `aaaaaaaaaaaaaaaa` passes.
+         *
+         * It is set at a length a single word does not reach (F10). The container is
+         * published retained, so it is a fixed artifact anyone who can subscribe may guess
+         * against offline, without limit and forever — there is no rate limit to hit and no
+         * lockout to trigger, because there is deliberately no server-side notion of a
+         * correct passphrase. Argon2id at INTERACTIVE is the only cost per guess. That is a
+         * real cost and the right preset for a phone; it is not enough for a word.
+         *
+         * Sixteen admits a three-word phrase and rejects a name and a year. It was raised
+         * from six before any build carrying the vault shipped, so nothing had to migrate —
+         * and nothing could have, since a passphrase that is not stored cannot be re-asked
+         * for by a device that has already forgotten it.
          */
-        const val MIN_CODE_LENGTH = 6
+        const val MIN_PASSPHRASE_LENGTH = 16
     }
 }
