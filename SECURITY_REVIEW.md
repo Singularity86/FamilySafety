@@ -8,6 +8,8 @@ authenticity to the file index and moved documents out of plaintext at rest, the
 other added an entire deniable-storage feature with its own offline attack target.
 **F10 mitigated 2026-08-18** — passphrase floor raised and the vault now says what
 protects it — which also produced a dated re-read of the F2 decision, below.
+**F2 decided again on 2026-08-21**, with the vault's consequence in front of the
+decider: still accepted. See "Decision, 2026-08-21" below.
 
 Scope: what an attacker learns and can do with (a) a copy of the published APK
 and (b) network access. It does not cover device compromise, Play account
@@ -43,7 +45,9 @@ The per-recipient envelope is sound. Everything below is about what sits
 
 Status at time of writing: F1, F4, F5, F6 and F7 are fixed. **F3 is partially fixed** —
 online/offline is no longer readable, but member IDs and movement timing still are.
-**F2 remains open** and is the only finding that cannot be advanced in the app at all.
+**F2 remains open** and is the only finding that cannot be advanced in the app at all;
+it is open in the sense that the exposure is real, not in the sense that it is queued —
+it was accepted on 2026-08-10 and re-affirmed on 2026-08-21.
 
 The F1, F3 and F7 fixes only take effect for families created on 1.12.0 or later, because
 all three depend on the group key generated at group creation — see Phase 0. For a legacy
@@ -114,6 +118,33 @@ the exposure, and no change inside the app can.
 Worth deciding explicitly before Phase 6 ships, since shipping it is what turns
 this from a property of the code into a property of real families' documents.
 
+### Decision, 2026-08-21 — accepted, with the vault in view
+
+The explicit decision the re-read asked for was made on 2026-08-21, before
+Phase 6 shipped, by the person who owns the call. **F2 stays accepted, and so
+does its vault consequence**: the family's vault passphrase is subject to
+unlimited offline guessing by anyone holding the shared broker credential, for
+as long as the credential is shared and the container is retained. That is now a
+knowing trade, not an oversight — Phase 6 may ship on it.
+
+What this decision is not: it is not a claim that the exposure shrank, that the
+F10 mitigation removed it, or that the two exceptions the re-read found were
+wrong. Both stand. A 16-character floor and an unconditional footer raise the
+cost of the cheapest attack and tell the family what they are relying on; the
+artifact is still handed to everyone who can subscribe, and Argon2id at
+INTERACTIVE is still the only cost per guess.
+
+The reopening conditions from 2026-08-10 are unchanged and still live — running
+the broker for people who are not friends and family, a threat model that
+includes the operator or anyone who compromises them, or a user population for
+whom this is not an acceptable answer. **One is added by this decision:** a
+family that keeps something in the vault whose disclosure would matter more than
+the cost of recreating the group on per-device credentials. The fix, if any of
+those fire, is unchanged and known — per-device broker credentials (Phase 1)
+plus an ACL on `familysafe/group/{groupId}/vault/container` (Phase 2).
+
+Do not re-litigate this without one of those conditions having occurred.
+
 Prior analysis of the issuer problem is kept below for that day.
 
 F4's fix changes the conclusion of Phase 1/2 below. Broker ACLs were the proposed answer
@@ -147,7 +178,12 @@ hold.
 
 Fix: see Phase 0.
 
-## F2 — One shared broker credential for every install (high)
+## F2 — One shared broker credential for every install (high) — ACCEPTED RISK
+
+Accepted 2026-08-10, re-affirmed 2026-08-21 with the vault's offline-guessing
+consequence explicitly in scope. The reasoning and the conditions that would
+reopen it are under "Threat model decision" above; this section describes the
+exposure itself, which is unchanged.
 
 `BuildConfig.MQTT_USERNAME` / `MQTT_PASSWORD` are baked into every APK and are
 identical for all users. Consequences:
@@ -465,7 +501,9 @@ limit by anyone who can subscribe. Argon2id at INTERACTIVE is still the only
 cost per guess. A 16-character floor raises the cost of the cheapest attack; it
 does not bound the best one, and a family that picks sixteen predictable
 characters is no better off. The only structural fix is to stop handing the
-artifact to everyone — see the F2 re-read below, which this change triggered.
+artifact to everyone — see the F2 re-read above, which this change triggered, and
+the 2026-08-21 decision that followed it: that exposure is accepted, knowingly,
+and Phase 6 ships on it.
 
 ## F11 — The vault was eligible for device-to-device transfer (low) — FIXED
 

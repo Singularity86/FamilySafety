@@ -1,6 +1,7 @@
 # FamilySafety (Jibaro Family Safety) — Project Status
 
-Snapshot date: 2026-08-18. Branch: `main`, HEAD `37dd105`. Covers the F10 vault mitigation,
+Snapshot date: 2026-08-18, with the F2 decision of 2026-08-21 folded in.
+Branch: `main`, HEAD `37dd105`. Covers the F10 vault mitigation,
 which lands with this snapshot. Supersedes the 2026-08-17 snapshot, written at `92e6d9f`.
 
 Supersedes the 2026-08-13 snapshot, which was written when Phase 0 of the file redesign was
@@ -224,15 +225,20 @@ a hint there is a prompt in disguise.
 The attack itself is untouched and cannot be fixed in the app. The only structural fix is to
 restrict who can fetch the retained container, which needs per-topic ACLs, which needs F2.
 
-**The F2 re-read is done and recorded** in `SECURITY_REVIEW.md`, and **changes no decision** —
-that call is the user's. What it found: none of the three named reopening conditions has
-occurred, but two of F2's four reasoning bullets have acquired exceptions. "The broker
-credential is no longer a security boundary" is true of every message except the vault
-container, which is the one object encrypted under something a person chose rather than a
-256-bit secret. And "ACLs have no threat to answer" is no longer true — the vault is the first
-thing on the broker giving them one that is neither metadata nor integrity. **Worth deciding
-explicitly before Phase 6 ships**, since shipping is what turns this from a property of the
-code into a property of real families' documents.
+**The F2 re-read is done and recorded** in `SECURITY_REVIEW.md`, and changed no decision by
+itself. What it found: none of the three named reopening conditions has occurred, but two of
+F2's four reasoning bullets have acquired exceptions. "The broker credential is no longer a
+security boundary" is true of every message except the vault container, which is the one object
+encrypted under something a person chose rather than a 256-bit secret. And "ACLs have no threat
+to answer" is no longer true — the vault is the first thing on the broker giving them one that
+is neither metadata nor integrity.
+
+**Decided 2026-08-21: accepted.** F2 stays accepted with the vault's consequence explicitly in
+scope — the family's vault passphrase can be guessed offline, without limit, by anyone holding
+the shared broker credential, and Phase 6 ships on that. The exposure did not shrink; the trade
+is now a knowing one. The 2026-08-10 reopening conditions still stand, plus one added by this
+decision: a family keeping something in the vault whose disclosure would matter more than the
+cost of recreating the group on per-device credentials. **This no longer gates the release.**
 
 **F12 (low)** is filed and not fixed: the file manifest has a version field that nothing
 compares, so a signed manifest can be replayed; impact is bounded because deletion is sticky,
@@ -286,18 +292,15 @@ why the duplication is worth removing before they stop agreeing.
 1. **Run the family recreation** (Track 1). Everything shipped in the last three releases —
    file-name privacy, presence sealing, at-rest keys, the vault — does nothing for a family
    created before 1.12.0 until someone recreates the group. It also clears the live fork.
-2. **Cut a release with Phases 5 and 6.** Build the bundle with `--rerun-tasks` and verify the
-   dex; the release notes need to say plainly that everyone must update, because unsigned
-   manifests from older peers are refused. Settle item 3 *before* this, not after: shipping a
-   vault is what makes the F2 exposure real, and the passphrase floor could not have been
-   raised at all after the first vault existed.
-3. **Decide on F2 in light of the vault** — the re-read is written up in `SECURITY_REVIEW.md`
-   and deliberately changes nothing. The question to answer is whether "the family's vault
-   passphrase can be guessed offline, forever, by anyone holding the shared broker credential"
-   is an acceptable consequence of the 2026-08-10 call. If it is not, the fix is per-device
-   credentials plus an ACL on the vault container topic, and it belongs before Phase 6 ships.
-   The F10 mitigation that prompted this — a 16-character floor and the vault stating what
-   protects it — is done.
+2. **Cut a release with Phases 5 and 6.** Nothing gates this any more — F2 was decided on
+   2026-08-21 (accepted), which was the one thing that had to be settled before a vault
+   reached real families. Build the bundle with `--rerun-tasks` and verify the dex, not the
+   build log; the release notes need to say plainly that everyone must update, because
+   unsigned manifests from older peers are refused. Note that shipping closes the window on
+   the passphrase floor: it cannot be raised again once a vault exists in the wild.
+3. ~~Decide on F2 in light of the vault.~~ **Done 2026-08-21 — accepted**, recorded in
+   `SECURITY_REVIEW.md` under "Decision, 2026-08-21". Do not re-litigate without one of the
+   recorded reopening conditions having occurred.
 4. Check the iOS CI run (needs `gh auth login`); if green, Phase 0 is done and Phase 1 is next.
 5. Flip the file key writer to version 3 once every device is past 28.
 6. Raise Paho's `maxInflight` before anything else touches transfer throughput.
