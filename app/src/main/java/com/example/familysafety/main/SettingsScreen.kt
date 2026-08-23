@@ -10,6 +10,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import com.example.familysafety.BuildConfig
 import com.example.familysafety.crash.CrashDetectionMonitor
+import com.example.familysafety.crash.ImpactDecider
 import com.example.familysafety.location.LocationService
 import com.example.familysafety.location.LocationPermissionHelper
 import com.example.familysafety.onboarding.PermissionCopy
@@ -728,7 +729,7 @@ fun SettingsScreen(
                     mutableStateOf(
                         crashPrefs.getFloat(
                             CrashDetectionMonitor.PREF_SENSITIVITY,
-                            CrashDetectionMonitor.SENSITIVITY_MEDIUM
+                            ImpactDecider.SENSITIVITY_MEDIUM
                         )
                     )
                 }
@@ -763,9 +764,9 @@ fun SettingsScreen(
                         modifier = Modifier.padding(bottom = 4.dp)
                     )
                     val sensitivityOptions = listOf(
-                        "Low (severe crashes only)" to 40f,
-                        "Medium (recommended)" to 30f,
-                        "High (more sensitive)" to 20f
+                        "Low (severe crashes only)" to ImpactDecider.SENSITIVITY_LOW,
+                        "Medium (recommended)" to ImpactDecider.SENSITIVITY_MEDIUM,
+                        "High (more sensitive)" to ImpactDecider.SENSITIVITY_HIGH
                     )
                     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                         sensitivityOptions.forEachIndexed { index, (label, value) ->

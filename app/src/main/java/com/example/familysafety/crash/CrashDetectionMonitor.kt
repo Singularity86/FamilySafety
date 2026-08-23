@@ -18,6 +18,11 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.sqrt
 
+/**
+ * Sensor plumbing for crash detection. The rule that decides whether a sample is a crash lives
+ * in [ImpactDecider]; this class registers and unregisters the listener, and turns a
+ * [ImpactDecider.Decision.FIRE] into the full-screen alert.
+ */
 @Singleton
 class CrashDetectionMonitor @Inject constructor(
     @ApplicationContext private val context: Context
@@ -26,30 +31,21 @@ class CrashDetectionMonitor @Inject constructor(
     private val linearAccelSensor: Sensor? =
         sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
 
-    private var isEnabled = false
-    private var isArmed = false
-
-    @Volatile private var lastSpeedMs = 0f
-    private val lastAlertTime = java.util.concurrent.atomic.AtomicLong(0L)
-
-    private var thresholdMs2 = SENSITIVITY_MEDIUM
+    private val decider = ImpactDecider()
 
     private val sensorListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
-            if (!isEnabled || !isArmed) return
             val x = event.values[0]
             val y = event.values[1]
             val z = event.values[2]
             val magnitude = sqrt(x * x + y * y + z * z)
-            if (magnitude >= thresholdMs2) {
-                val now = System.currentTimeMillis()
-                val last = lastAlertTime.get()
-                if (lastSpeedMs >= SPEED_GUARD_MS &&
-                    (now - last) > ALERT_COOLDOWN_MS &&
-                    lastAlertTime.compareAndSet(last, now)) {
-                    Timber.w("CrashDetection: impact detected! accel=${magnitude}m/s², speed=${lastSpeedMs}m/s")
+            when (val decision = decider.onSample(magnitude, System.currentTimeMillis())) {
+                ImpactDecider.Decision.FIRE -> {
+                    Timber.w("CrashDetection: impact detected! accel=${magnitude}m/s²")
                     triggerCrashAlert()
                 }
+                ImpactDecider.Decision.BELOW_THRESHOLD -> Unit // the overwhelming majority
+                else -> Timber.d("CrashDetection: ${magnitude}m/s² sample rejected — $decision")
             }
         }
 
@@ -57,29 +53,27 @@ class CrashDetectionMonitor @Inject constructor(
     }
 
     fun setEnabled(enabled: Boolean) {
-        isEnabled = enabled
-        if (!enabled) {
-            sensorManager.unregisterListener(sensorListener)
-        } else if (isArmed) {
-            startListening()
-        }
+        decider.setEnabled(enabled)
+        syncListener()
     }
 
     /** Called by LocationService when ActivityRecognition reports IN_VEHICLE state changes. */
     fun setArmed(inVehicle: Boolean) {
-        isArmed = inVehicle
-        if (isEnabled) {
-            if (inVehicle) startListening() else stopListening()
-        }
+        decider.setArmed(inVehicle)
+        syncListener()
     }
 
     /** Called from LocationService on every GPS fix so the speed guard is always current. */
     fun feedSpeed(speedMs: Float) {
-        lastSpeedMs = speedMs
+        decider.feedSpeed(speedMs, System.currentTimeMillis())
     }
 
     fun setThreshold(thresholdMs2: Float) {
-        this.thresholdMs2 = thresholdMs2
+        decider.setThreshold(thresholdMs2)
+    }
+
+    private fun syncListener() {
+        if (decider.shouldListen) startListening() else stopListening()
     }
 
     private fun startListening() {
@@ -138,17 +132,6 @@ class CrashDetectionMonitor @Inject constructor(
     companion object {
         const val CHANNEL_ID = "crash_detection_channel"
         const val NOTIFICATION_ID = 9999
-
-        /** Minimum GPS speed in m/s before impact before arming the alert (25 mph = 11.2 m/s). */
-        private const val SPEED_GUARD_MS = 11.2f
-
-        /** Don't fire again within 10 minutes of a previous alert. */
-        private const val ALERT_COOLDOWN_MS = 10 * 60 * 1000L
-
-        /** Linear acceleration thresholds in m/s² (gravity already removed by sensor type). */
-        const val SENSITIVITY_LOW = 40f     // ~4g — severe crashes only
-        const val SENSITIVITY_MEDIUM = 30f  // ~3g — default
-        const val SENSITIVITY_HIGH = 20f    // ~2g — catches moderate impacts
 
         // Dedicated prefs file for crash detection. Previously this was set to
         // "geofence_prefs" (copy-paste bug) — those keys cohabited the geofence
