@@ -72,6 +72,16 @@ class CrashDetectionMonitor @Inject constructor(
         decider.setThreshold(thresholdMs2)
     }
 
+    /**
+     * Raises the alert as though a crash had been detected, bypassing every guard. For the debug
+     * settings screen: it exercises the notification, the full-screen intent and
+     * [CrashAlertActivity] without needing motion. Never call this from a release path.
+     */
+    fun simulateAlert() {
+        Timber.w("CrashDetection: simulated alert requested")
+        triggerCrashAlert()
+    }
+
     private fun syncListener() {
         if (decider.shouldListen) startListening() else stopListening()
     }

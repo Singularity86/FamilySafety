@@ -10,6 +10,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import com.example.familysafety.BuildConfig
 import com.example.familysafety.crash.CrashDetectionMonitor
+import com.example.familysafety.crash.CrashTraceRecorder
 import com.example.familysafety.crash.ImpactDecider
 import com.example.familysafety.location.LocationService
 import com.example.familysafety.location.LocationPermissionHelper
@@ -789,6 +790,11 @@ fun SettingsScreen(
             }
         }
 
+        if (BuildConfig.DEBUG) {
+            Spacer(modifier = Modifier.height(16.dp))
+            CrashTraceDebugCard(viewModel)
+        }
+
         Spacer(modifier = Modifier.height(16.dp))
 
         // Backup card
@@ -1410,4 +1416,100 @@ private fun MemberAvatarClickable(
             .clip(CircleShape)
             .clickable(onClick = onClick)
     )
+}
+
+
+/**
+ * Debug-only tooling for crash detection: record accelerometer traces to replay against
+ * [ImpactDecider], and fire the alert by hand to check the notification path.
+ *
+ * Recording exists because thresholds cannot be chosen from first principles — you have to know
+ * what a pothole, a speed bump and a dropped handset actually look like. Drive with this running,
+ * pull the CSV off the device, and drop it into `src/test/resources/crash-traces` as a fixture.
+ */
+@Composable
+private fun CrashTraceDebugCard(viewModel: MainViewModel) {
+    val recorder = viewModel.crashTraceRecorder
+    val state by recorder.state.collectAsState()
+    // Keyed on start/stop only — re-listing the directory every sample batch is pointless I/O.
+    val traceCount = remember(state.isRecording, state.fileName) { recorder.listTraces().size }
+
+    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Crash Detection (debug)",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+
+            if (!recorder.isSupported) {
+                Text(
+                    text = "This device has no linear acceleration sensor, so traces cannot be " +
+                        "recorded here. Use a physical device.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+                return@Column
+            }
+
+            Text(
+                text = "Records raw motion and GPS speed to a CSV under " +
+                    "Android/data/\u2026/files/${CrashTraceRecorder.TRACE_DIR}/, ready to replay " +
+                    "against the detection rule in the unit tests.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            if (state.isRecording) {
+                Text(
+                    text = "Recording ${state.fileName} \u2014 ${state.sampleCount} samples",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            } else if (state.fileName != null) {
+                Text(
+                    text = "Last trace: ${state.fileName} (${state.sampleCount} samples)",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+            state.message?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = { if (state.isRecording) recorder.stop() else recorder.start() },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(if (state.isRecording) "Stop recording" else "Record trace")
+                }
+                OutlinedButton(
+                    onClick = { viewModel.crashDetectionMonitor.simulateAlert() },
+                    enabled = !state.isRecording,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Fire alert")
+                }
+            }
+
+            if (traceCount > 0) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "$traceCount trace(s) on device. Pull with: adb pull " +
+                        "/sdcard/Android/data/${BuildConfig.APPLICATION_ID}/files/" +
+                        CrashTraceRecorder.TRACE_DIR,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
 }

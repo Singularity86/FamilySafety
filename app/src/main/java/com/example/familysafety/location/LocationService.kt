@@ -16,6 +16,7 @@ import com.example.familysafety.core.RateLimiters
 import com.example.familysafety.core.DataValidator
 import com.example.familysafety.core.ValidationResult
 import com.example.familysafety.crash.CrashDetectionMonitor
+import com.example.familysafety.crash.CrashTraceRecorder
 import com.example.familysafety.crash.ImpactDecider
 import com.example.familysafety.storage.LocationPublishOutboxRepository
 import com.example.familysafety.transport.MqttConfig
@@ -56,6 +57,9 @@ class LocationService : Service() {
 
     @Inject
     lateinit var crashDetectionMonitor: CrashDetectionMonitor
+
+    @Inject
+    lateinit var crashTraceRecorder: CrashTraceRecorder
 
     @Inject
     lateinit var appInitializer: AppInitializer
@@ -596,6 +600,7 @@ class LocationService : Service() {
                 locationRepository.updateMyLocation(memberLocation)
                 locationPublishOutboxRepository.enqueue(memberLocation)
                 crashDetectionMonitor.feedSpeed(speedMs)
+                crashTraceRecorder.feedSpeed(speedMs)
 
                 if (!RateLimiters.locationUpdates.allowRequest(id)) {
                     val retryAfter = RateLimiters.locationUpdates.getRetryAfterMs(id)

@@ -89,6 +89,28 @@ myFlow.test {
 
 `Bip39` requires initialization before use in tests — it reads the wordlist from an Android resource file; in unit tests you must supply the wordlist manually via `Bip39.initialize(wordlist)`.
 
+## Crash Detection Testing
+
+The detection rule lives in `crash/ImpactDecider.kt`, deliberately free of Android dependencies so
+it runs in the normal JUnit suite — sensor plumbing and the alert notification stay in
+`crash/CrashDetectionMonitor.kt`.
+
+Thresholds cannot be chosen from first principles, so they are tuned against recorded motion:
+
+1. Run a debug build, open **Settings → Crash Detection (debug)**, tap **Record trace**, and drive.
+2. Pull the CSV: `adb pull /sdcard/Android/data/com.example.familysafety/files/crash-traces`
+3. Drop it into `app/src/test/resources/crash-traces/` and assert on it in `CrashTraceTest`.
+
+`CrashTrace.replay()` runs a trace back through the rule and returns every point it would have
+alerted. A trace that must stay quiet (rough road, dropped handset) asserts an empty list; a
+collision asserts exactly one hit. Traces record motion, not arming — replay assumes the vehicle
+gate is open and answers only "given this motion and speed, would the rule fire?"
+
+**Fire alert** in the same debug card raises the notification directly, bypassing every guard, to
+exercise the full-screen intent and `CrashAlertActivity` without needing motion.
+
+Never test crash detection by driving while handling the phone.
+
 ## Known Deprecation Warnings (non-blocking)
 
 - `Icons.Filled.ArrowBack` → use `Icons.AutoMirrored.Filled.ArrowBack`
