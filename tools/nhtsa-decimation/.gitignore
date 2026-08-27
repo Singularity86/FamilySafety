@@ -1,0 +1,4 @@
+# Downloaded NHTSA data. Regenerate with fetch_nhtsa.py — 29 MB of curves and an 82 MB
+# response cache have no business in git.
+cache/
+crash_pulses.json

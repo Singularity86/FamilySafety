@@ -1,0 +1,2104 @@
+{
+ "threshold_ms2": 30.0,
+ "n_pulses": 122,
+ "dropped": [
+  {
+   "testNo": 2189,
+   "reason": "implausible peak (624 g)"
+  },
+  {
+   "testNo": 2179,
+   "reason": "implausible peak (617 g)"
+  },
+  {
+   "testNo": 2278,
+   "reason": "implausible peak (36116 g)"
+  },
+  {
+   "testNo": 2178,
+   "reason": "implausible peak (548 g)"
+  },
+  {
+   "testNo": 1224,
+   "reason": "constant offset, not a transient (rms/peak 0.62)"
+  },
+  {
+   "testNo": 6239,
+   "reason": "dead channel (peak 0.42 g)"
+  },
+  {
+   "testNo": 14492,
+   "reason": "dead channel (peak 0.00 g)"
+  },
+  {
+   "testNo": 14486,
+   "reason": "implausible peak (848 g)"
+  },
+  {
+   "testNo": 14426,
+   "reason": "implausible peak (753 g)"
+  },
+  {
+   "testNo": 14399,
+   "reason": "implausible peak (564 g)"
+  },
+  {
+   "testNo": 14329,
+   "reason": "implausible peak (1107 g)"
+  },
+  {
+   "testNo": 3430,
+   "reason": "constant offset, not a transient (rms/peak 0.58)"
+  },
+  {
+   "testNo": 3429,
+   "reason": "constant offset, not a transient (rms/peak 1.00)"
+  },
+  {
+   "testNo": 3428,
+   "reason": "constant offset, not a transient (rms/peak 1.00)"
+  },
+  {
+   "testNo": 3427,
+   "reason": "constant offset, not a transient (rms/peak 1.00)"
+  },
+  {
+   "testNo": 531,
+   "reason": "constant offset, not a transient (rms/peak 0.87)"
+  }
+ ],
+ "sweep": [
+  {
+   "bandwidth_hz": null,
+   "attenuation": 1.0,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.9967213114754098,
+   "tests_detected_always": 121,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 0
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 1.0,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.9967213114754098,
+   "tests_detected_always": 121,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 0
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 1.0,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.9967213114754098,
+   "tests_detected_always": 121,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 0
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 0.5,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.9813954918032787,
+   "tests_detected_always": 108,
+   "tests_detected_sometimes": 14,
+   "tests_never_detected": 0
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 0.5,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.9813954918032787,
+   "tests_detected_always": 108,
+   "tests_detected_sometimes": 14,
+   "tests_never_detected": 0
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 0.5,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.9813954918032787,
+   "tests_detected_always": 108,
+   "tests_detected_sometimes": 14,
+   "tests_never_detected": 0
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 0.25,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.8992889344262295,
+   "tests_detected_always": 80,
+   "tests_detected_sometimes": 41,
+   "tests_never_detected": 1
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 0.25,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.8992889344262295,
+   "tests_detected_always": 80,
+   "tests_detected_sometimes": 41,
+   "tests_never_detected": 1
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 0.25,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.8992889344262295,
+   "tests_detected_always": 80,
+   "tests_detected_sometimes": 41,
+   "tests_never_detected": 1
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 0.1,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.5857950819672131,
+   "tests_detected_always": 16,
+   "tests_detected_sometimes": 87,
+   "tests_never_detected": 19
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 0.1,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.5857950819672131,
+   "tests_detected_always": 16,
+   "tests_detected_sometimes": 87,
+   "tests_never_detected": 19
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 0.1,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.5857950819672131,
+   "tests_detected_always": 16,
+   "tests_detected_sometimes": 87,
+   "tests_never_detected": 19
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 0.05,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.24751844262295083,
+   "tests_detected_always": 1,
+   "tests_detected_sometimes": 75,
+   "tests_never_detected": 46
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 0.05,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.24751844262295083,
+   "tests_detected_always": 1,
+   "tests_detected_sometimes": 75,
+   "tests_never_detected": 46
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 0.05,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.24751844262295083,
+   "tests_detected_always": 1,
+   "tests_detected_sometimes": 75,
+   "tests_never_detected": 46
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 0.02,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.042954918032786886,
+   "tests_detected_always": 1,
+   "tests_detected_sometimes": 30,
+   "tests_never_detected": 91
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 0.02,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.042954918032786886,
+   "tests_detected_always": 1,
+   "tests_detected_sometimes": 30,
+   "tests_never_detected": 91
+  },
+  {
+   "bandwidth_hz": null,
+   "attenuation": 0.02,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.042954918032786886,
+   "tests_detected_always": 1,
+   "tests_detected_sometimes": 30,
+   "tests_never_detected": 91
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 1.0,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.9971311475409836,
+   "tests_detected_always": 121,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 0
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 1.0,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.9971311475409836,
+   "tests_detected_always": 121,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 0
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 1.0,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.9971311475409836,
+   "tests_detected_always": 121,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 0
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 0.5,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.972717213114754,
+   "tests_detected_always": 111,
+   "tests_detected_sometimes": 10,
+   "tests_never_detected": 1
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 0.5,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.972717213114754,
+   "tests_detected_always": 111,
+   "tests_detected_sometimes": 10,
+   "tests_never_detected": 1
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 0.5,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.972717213114754,
+   "tests_detected_always": 111,
+   "tests_detected_sometimes": 10,
+   "tests_never_detected": 1
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 0.25,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.8943545081967212,
+   "tests_detected_always": 92,
+   "tests_detected_sometimes": 26,
+   "tests_never_detected": 4
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 0.25,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.8943545081967212,
+   "tests_detected_always": 92,
+   "tests_detected_sometimes": 26,
+   "tests_never_detected": 4
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 0.25,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.8943545081967212,
+   "tests_detected_always": 92,
+   "tests_detected_sometimes": 26,
+   "tests_never_detected": 4
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 0.1,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.5781639344262294,
+   "tests_detected_always": 35,
+   "tests_detected_sometimes": 58,
+   "tests_never_detected": 29
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 0.1,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.5781639344262294,
+   "tests_detected_always": 35,
+   "tests_detected_sometimes": 58,
+   "tests_never_detected": 29
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 0.1,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.5781639344262294,
+   "tests_detected_always": 35,
+   "tests_detected_sometimes": 58,
+   "tests_never_detected": 29
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 0.05,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.2359590163934426,
+   "tests_detected_always": 8,
+   "tests_detected_sometimes": 47,
+   "tests_never_detected": 67
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 0.05,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.2359590163934426,
+   "tests_detected_always": 8,
+   "tests_detected_sometimes": 47,
+   "tests_never_detected": 67
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 0.05,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.2359590163934426,
+   "tests_detected_always": 8,
+   "tests_detected_sometimes": 47,
+   "tests_never_detected": 67
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 0.02,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.031983606557377045,
+   "tests_detected_always": 1,
+   "tests_detected_sometimes": 16,
+   "tests_never_detected": 105
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 0.02,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.031983606557377045,
+   "tests_detected_always": 1,
+   "tests_detected_sometimes": 16,
+   "tests_never_detected": 105
+  },
+  {
+   "bandwidth_hz": 300,
+   "attenuation": 0.02,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.031983606557377045,
+   "tests_detected_always": 1,
+   "tests_detected_sometimes": 16,
+   "tests_never_detected": 105
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 1.0,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.9983606557377049,
+   "tests_detected_always": 121,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 0
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 1.0,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.9983606557377049,
+   "tests_detected_always": 121,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 0
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 1.0,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.9983606557377049,
+   "tests_detected_always": 121,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 0
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 0.5,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.9729836065573771,
+   "tests_detected_always": 117,
+   "tests_detected_sometimes": 3,
+   "tests_never_detected": 2
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 0.5,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.9729836065573771,
+   "tests_detected_always": 117,
+   "tests_detected_sometimes": 3,
+   "tests_never_detected": 2
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 0.5,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.9729836065573771,
+   "tests_detected_always": 117,
+   "tests_detected_sometimes": 3,
+   "tests_never_detected": 2
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 0.25,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.8913729508196722,
+   "tests_detected_always": 96,
+   "tests_detected_sometimes": 21,
+   "tests_never_detected": 5
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 0.25,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.8913729508196722,
+   "tests_detected_always": 96,
+   "tests_detected_sometimes": 21,
+   "tests_never_detected": 5
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 0.25,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.8913729508196722,
+   "tests_detected_always": 96,
+   "tests_detected_sometimes": 21,
+   "tests_never_detected": 5
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 0.1,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.5760860655737705,
+   "tests_detected_always": 47,
+   "tests_detected_sometimes": 39,
+   "tests_never_detected": 36
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 0.1,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.5760860655737705,
+   "tests_detected_always": 47,
+   "tests_detected_sometimes": 39,
+   "tests_never_detected": 36
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 0.1,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.5760860655737705,
+   "tests_detected_always": 47,
+   "tests_detected_sometimes": 39,
+   "tests_never_detected": 36
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 0.05,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.22651434426229508,
+   "tests_detected_always": 12,
+   "tests_detected_sometimes": 29,
+   "tests_never_detected": 81
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 0.05,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.22651434426229508,
+   "tests_detected_always": 12,
+   "tests_detected_sometimes": 29,
+   "tests_never_detected": 81
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 0.05,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.22651434426229508,
+   "tests_detected_always": 12,
+   "tests_detected_sometimes": 29,
+   "tests_never_detected": 81
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 0.02,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.02466598360655738,
+   "tests_detected_always": 1,
+   "tests_detected_sometimes": 8,
+   "tests_never_detected": 113
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 0.02,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.02466598360655738,
+   "tests_detected_always": 1,
+   "tests_detected_sometimes": 8,
+   "tests_never_detected": 113
+  },
+  {
+   "bandwidth_hz": 100,
+   "attenuation": 0.02,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.02466598360655738,
+   "tests_detected_always": 1,
+   "tests_detected_sometimes": 8,
+   "tests_never_detected": 113
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 1.0,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.9991803278688525,
+   "tests_detected_always": 121,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 0
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 1.0,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.9991803278688525,
+   "tests_detected_always": 121,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 0
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 1.0,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.9991803278688525,
+   "tests_detected_always": 121,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 0
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 0.5,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.9672131147540983,
+   "tests_detected_always": 118,
+   "tests_detected_sometimes": 0,
+   "tests_never_detected": 4
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 0.5,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.9672131147540983,
+   "tests_detected_always": 118,
+   "tests_detected_sometimes": 0,
+   "tests_never_detected": 4
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 0.5,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.9672131147540983,
+   "tests_detected_always": 118,
+   "tests_detected_sometimes": 0,
+   "tests_never_detected": 4
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 0.25,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.8737827868852459,
+   "tests_detected_always": 101,
+   "tests_detected_sometimes": 8,
+   "tests_never_detected": 13
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 0.25,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.8737827868852459,
+   "tests_detected_always": 101,
+   "tests_detected_sometimes": 8,
+   "tests_never_detected": 13
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 0.25,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.8737827868852459,
+   "tests_detected_always": 101,
+   "tests_detected_sometimes": 8,
+   "tests_never_detected": 13
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 0.1,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.5647028688524591,
+   "tests_detected_always": 61,
+   "tests_detected_sometimes": 12,
+   "tests_never_detected": 49
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 0.1,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.5647028688524591,
+   "tests_detected_always": 61,
+   "tests_detected_sometimes": 12,
+   "tests_never_detected": 49
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 0.1,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.5647028688524591,
+   "tests_detected_always": 61,
+   "tests_detected_sometimes": 12,
+   "tests_never_detected": 49
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 0.05,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.17017213114754098,
+   "tests_detected_always": 16,
+   "tests_detected_sometimes": 8,
+   "tests_never_detected": 98
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 0.05,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.17017213114754098,
+   "tests_detected_always": 16,
+   "tests_detected_sometimes": 8,
+   "tests_never_detected": 98
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 0.05,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.17017213114754098,
+   "tests_detected_always": 16,
+   "tests_detected_sometimes": 8,
+   "tests_never_detected": 98
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 0.02,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.00819672131147541,
+   "tests_detected_always": 1,
+   "tests_detected_sometimes": 0,
+   "tests_never_detected": 121
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 0.02,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.00819672131147541,
+   "tests_detected_always": 1,
+   "tests_detected_sometimes": 0,
+   "tests_never_detected": 121
+  },
+  {
+   "bandwidth_hz": 25,
+   "attenuation": 0.02,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.00819672131147541,
+   "tests_detected_always": 1,
+   "tests_detected_sometimes": 0,
+   "tests_never_detected": 121
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 1.0,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.9895491803278688,
+   "tests_detected_always": 120,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 1
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 1.0,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.9895491803278688,
+   "tests_detected_always": 120,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 1
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 1.0,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.9895491803278688,
+   "tests_detected_always": 120,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 1
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 0.5,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.9590163934426229,
+   "tests_detected_always": 117,
+   "tests_detected_sometimes": 0,
+   "tests_never_detected": 5
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 0.5,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.9590163934426229,
+   "tests_detected_always": 117,
+   "tests_detected_sometimes": 0,
+   "tests_never_detected": 5
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 0.5,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.9590163934426229,
+   "tests_detected_always": 117,
+   "tests_detected_sometimes": 0,
+   "tests_never_detected": 5
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 0.25,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.7860655737704918,
+   "tests_detected_always": 95,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 26
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 0.25,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.7860655737704918,
+   "tests_detected_always": 95,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 26
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 0.25,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.7860655737704918,
+   "tests_detected_always": 95,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 26
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 0.1,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.34918032786885245,
+   "tests_detected_always": 42,
+   "tests_detected_sometimes": 2,
+   "tests_never_detected": 78
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 0.1,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.34918032786885245,
+   "tests_detected_always": 42,
+   "tests_detected_sometimes": 2,
+   "tests_never_detected": 78
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 0.1,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.34918032786885245,
+   "tests_detected_always": 42,
+   "tests_detected_sometimes": 2,
+   "tests_never_detected": 78
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 0.05,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.08536885245901639,
+   "tests_detected_always": 10,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 111
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 0.05,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.08536885245901639,
+   "tests_detected_always": 10,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 111
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 0.05,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.08536885245901639,
+   "tests_detected_always": 10,
+   "tests_detected_sometimes": 1,
+   "tests_never_detected": 111
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 0.02,
+   "full_scale_g": 16,
+   "mean_phase_detect_rate": 0.0,
+   "tests_detected_always": 0,
+   "tests_detected_sometimes": 0,
+   "tests_never_detected": 122
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 0.02,
+   "full_scale_g": 8,
+   "mean_phase_detect_rate": 0.0,
+   "tests_detected_always": 0,
+   "tests_detected_sometimes": 0,
+   "tests_never_detected": 122
+  },
+  {
+   "bandwidth_hz": 10,
+   "attenuation": 0.02,
+   "full_scale_g": 4,
+   "mean_phase_detect_rate": 0.0,
+   "tests_detected_always": 0,
+   "tests_detected_sometimes": 0,
+   "tests_never_detected": 122
+  }
+ ],
+ "per_test": [
+  {
+   "testNo": 2184,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "1991 CHEVROLET SILVERADO PICKUP INTO 50% LEFT OFFSET FLAT FRONTAL BARR",
+   "closingSpeedKph": 55.8,
+   "peak_g_raw": 396.6081426792571,
+   "peak_g_cfc100": 176.2762582463029,
+   "max_survivable_attenuation": 0.03712648792153239,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 2174,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "1987 FORD TAURUS INTO 30.5 CM POLE BARRIER-CRASH3 DAMAGE ALGORITHM",
+   "closingSpeedKph": 56.2,
+   "peak_g_raw": 68.68258179808036,
+   "peak_g_cfc100": 41.36537544675889,
+   "max_survivable_attenuation": 0.09135406569462685,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 1955,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "1993 HONDA CIVIC CX INTO 50% LEFT OFFSET BARRIER FOR CRASH3 DAMAGE ALG",
+   "closingSpeedKph": 56.3,
+   "peak_g_raw": 159.17115065865423,
+   "peak_g_cfc100": 56.241617920564046,
+   "max_survivable_attenuation": 0.10843662063626167,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1951,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "1987 FORD ESCORT INTO 50% LEFT OFFSET BARRIER IN SUPPORT OF CRASH3 ALG",
+   "closingSpeedKph": 56.5,
+   "peak_g_raw": 303.3954781765872,
+   "peak_g_cfc100": 214.00675717698087,
+   "max_survivable_attenuation": 0.036700657377853045,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1947,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "1993 HONDA CIVIC CX INTO RIGID HEAVY TRUCK REAR UNDERRIDE GUARD",
+   "closingSpeedKph": 56.3,
+   "peak_g_raw": 99.49147974786585,
+   "peak_g_cfc100": 44.717995711190184,
+   "max_survivable_attenuation": 0.0994404361183017,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1942,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "1990 FORD TAURUS INTO RIGID HEAVY TRUCK REAR UNDERRIDE GUARD",
+   "closingSpeedKph": 55.8,
+   "peak_g_raw": 67.36026476803666,
+   "peak_g_cfc100": 42.34803377322693,
+   "max_survivable_attenuation": 0.09092164994611203,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1938,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "1988 FORD TAURUS INTO 50% LEFT OFFSET BARRIER IN SUPPORT OF CRASH3 ALG",
+   "closingSpeedKph": 56.3,
+   "peak_g_raw": 120.64698327011745,
+   "peak_g_cfc100": 53.8125147365767,
+   "max_survivable_attenuation": 0.07519493053089979,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1850,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "1985 FORD TEMPO INTO POLE BARRIER",
+   "closingSpeedKph": 56.5,
+   "peak_g_raw": 91.49495058078344,
+   "peak_g_cfc100": 52.68727770803493,
+   "max_survivable_attenuation": 0.06658679308663729,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1845,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "1985 NISSAN SENTRA INTO POLE BARRIER",
+   "closingSpeedKph": 56.3,
+   "peak_g_raw": 135.84539500358485,
+   "peak_g_cfc100": 57.5945291277202,
+   "max_survivable_attenuation": 0.08390140569599722,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1840,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "1985 FORD ESCORT INTO POLE BARRIER",
+   "closingSpeedKph": 53.9,
+   "peak_g_raw": 76.23035365259693,
+   "peak_g_cfc100": 59.84283828960852,
+   "max_survivable_attenuation": 0.07517041594409707,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 465,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "NEW CAR ASSESSMENT PROGRAM",
+   "closingSpeedKph": 55.7,
+   "peak_g_raw": 59.07,
+   "peak_g_cfc100": 54.889593716742226,
+   "max_survivable_attenuation": 0.08198026193290504,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 464,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "NEW CAR ASSESSMENT PROGRAM",
+   "closingSpeedKph": 56.7,
+   "peak_g_raw": 43.645,
+   "peak_g_cfc100": 40.52504743348045,
+   "max_survivable_attenuation": 0.10292442523079133,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 463,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "NEW CAR ASSESSMENT PROGRAM",
+   "closingSpeedKph": 56.3,
+   "peak_g_raw": 48.615,
+   "peak_g_cfc100": 40.884443978856034,
+   "max_survivable_attenuation": 0.10406435613888666,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 455,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "NEW CAR ASSESSMENT PROGRAM",
+   "closingSpeedKph": 56.0,
+   "peak_g_raw": 55.111,
+   "peak_g_cfc100": 48.691715059470454,
+   "max_survivable_attenuation": 0.11480923407586029,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 451,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "NEW CAR ASSESSMENT PROGRAM",
+   "closingSpeedKph": 56.3,
+   "peak_g_raw": 36.084,
+   "peak_g_cfc100": 31.80612498116625,
+   "max_survivable_attenuation": 0.16009448401860668,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 450,
+   "stratum": "frontal NCAP (50-70 kph)",
+   "title": "NEW CAR ASSESSMENT PROGRAM",
+   "closingSpeedKph": 57.0,
+   "peak_g_raw": 42.552,
+   "peak_g_cfc100": 39.72789466852255,
+   "max_survivable_attenuation": 0.12081639824621455,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 2357,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1992 CHEVROLET CAPRICE INTO FLAT FRONTAL BARRIER",
+   "closingSpeedKph": 31.5,
+   "peak_g_raw": 150.09818821518132,
+   "peak_g_cfc100": 50.343558134461446,
+   "max_survivable_attenuation": 0.10935205307235697,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 2352,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1992 PLYMOUTH VOYAGER INTO 50% LT OFFSET BARR CRASH3 REFORM 5 IMPACTS",
+   "closingSpeedKph": 32.0,
+   "peak_g_raw": 48.264460054152686,
+   "peak_g_cfc100": 27.108527609017298,
+   "max_survivable_attenuation": 0.16718342379332948,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 2266,
+   "stratum": "frontal moderate (30-50)",
+   "title": "THE SIDE IMPACT TEST OF 93 TOYOTA COROLLA WITH A NARROW OBJECT",
+   "closingSpeedKph": 38.9,
+   "peak_g_raw": 7.276345442596853,
+   "peak_g_cfc100": 5.944811947786653,
+   "max_survivable_attenuation": 0.6692801929557434,
+   "native_rate_hz": 2000
+  },
+  {
+   "testNo": 2188,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1992 CHEVROLET CAPRICE INTO 305MM POLE CRASH3 IMPACT 4 OF 5",
+   "closingSpeedKph": 31.9,
+   "peak_g_raw": 124.26761066508843,
+   "peak_g_cfc100": 57.97314997702653,
+   "max_survivable_attenuation": 0.09152005358035688,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 2173,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1987 FORD TAURUS INTO 30.5 CM POLE BARRIER-CRASH3 DAMAGE ALGORITHM",
+   "closingSpeedKph": 32.0,
+   "peak_g_raw": 44.9190000873795,
+   "peak_g_cfc100": 27.991652776183834,
+   "max_survivable_attenuation": 0.13177916384871102,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 2150,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1991 FORD F150 INTO FLAT FRONTAL BARRIER",
+   "closingSpeedKph": 48.3,
+   "peak_g_raw": 351.31157282674303,
+   "peak_g_cfc100": 153.67958784369458,
+   "max_survivable_attenuation": 0.03742044382439801,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 2026,
+   "stratum": "frontal moderate (30-50)",
+   "title": "SIDE IMPACT OF A MINI-SIZE VEHICLE INTO A BREAKAWAY LUMINAIRE SUPPORT",
+   "closingSpeedKph": 49.6,
+   "peak_g_raw": 33.01955026949943,
+   "peak_g_cfc100": 27.53688321742705,
+   "max_survivable_attenuation": 0.19433294695708642,
+   "native_rate_hz": 2000
+  },
+  {
+   "testNo": 1954,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1993 HONDA CIVIC CX INTO 50% LEFT OFFSET BARRIER FOR CRASH3 DAMAGE ALG",
+   "closingSpeedKph": 32.0,
+   "peak_g_raw": 55.93752040339293,
+   "peak_g_cfc100": 35.717937518217184,
+   "max_survivable_attenuation": 0.09713289909809543,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1953,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1993 HONDA CIVIC CX INTO 50% LEFT OFFSET BARRIER FOR CRASH3 DAMAGE ALG",
+   "closingSpeedKph": 32.2,
+   "peak_g_raw": 126.63193506608039,
+   "peak_g_cfc100": 39.03173426487276,
+   "max_survivable_attenuation": 0.11566099615874703,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1950,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1987 FORD ESCORT INTO 50% LEFT OFFSET BARRIER IN SUPPORT OF CRASH3 ALG",
+   "closingSpeedKph": 32.2,
+   "peak_g_raw": 131.2347759475361,
+   "peak_g_cfc100": 43.46037572637268,
+   "max_survivable_attenuation": 0.11606025470795982,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1949,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1987 FORD ESCORT INTO 50% LEFT OFFSET BARRIER IN SUPPORT OF CRASH3 ALG",
+   "closingSpeedKph": 32.0,
+   "peak_g_raw": 44.281713643670116,
+   "peak_g_cfc100": 24.516041078193815,
+   "max_survivable_attenuation": 0.1699731539159717,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1946,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1993 HONDA CIVIC CX INTO RIGID HEAVY TRUCK REAR UNDERRIDE GUARD",
+   "closingSpeedKph": 32.0,
+   "peak_g_raw": 80.72274445483131,
+   "peak_g_cfc100": 42.20099550668978,
+   "max_survivable_attenuation": 0.11350424212950971,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1937,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1988 FORD TAURUS INTO 50% LEFT OFFSET BARRIER IN SUPPORT OF CRASH3 ALG",
+   "closingSpeedKph": 32.2,
+   "peak_g_raw": 66.60592325386683,
+   "peak_g_cfc100": 39.627262461369455,
+   "max_survivable_attenuation": 0.10736802616075543,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1936,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1988 FORD TAURUS INTO 50% LEFT OFFSET BARRIER IN SUPPORT OF CRASH3 ALG",
+   "closingSpeedKph": 31.9,
+   "peak_g_raw": 44.29034034640059,
+   "peak_g_cfc100": 24.612474428968426,
+   "max_survivable_attenuation": 0.14547674340188194,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1849,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1985 FORD TEMPO INTO POLE BARRIER",
+   "closingSpeedKph": 32.2,
+   "peak_g_raw": 66.87999784225475,
+   "peak_g_cfc100": 41.42761904684907,
+   "max_survivable_attenuation": 0.08832272227243827,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1844,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1985 NISSAN SENTRA INTO POLE BARRIER",
+   "closingSpeedKph": 32.0,
+   "peak_g_raw": 74.67811284653624,
+   "peak_g_cfc100": 44.35948869745785,
+   "max_survivable_attenuation": 0.08383413447268805,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1839,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1985 FORD ESCORT INTO POLE BARRIER",
+   "closingSpeedKph": 32.2,
+   "peak_g_raw": 72.32783132722838,
+   "peak_g_cfc100": 50.52750333846636,
+   "max_survivable_attenuation": 0.09116911991580526,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1226,
+   "stratum": "frontal moderate (30-50)",
+   "title": "FOIL SIDE IMPACT TEST",
+   "closingSpeedKph": 47.6,
+   "peak_g_raw": 170.8369983346699,
+   "peak_g_cfc100": 90.3290922431944,
+   "max_survivable_attenuation": 0.11884496988697338,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1225,
+   "stratum": "frontal moderate (30-50)",
+   "title": "FOIL SIDE IMPACT TEST",
+   "closingSpeedKph": 46.5,
+   "peak_g_raw": 25.973446286544263,
+   "peak_g_cfc100": 18.86969685330152,
+   "max_survivable_attenuation": 0.4308635592647367,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1205,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1986 FORD TAURUS INTO FLAT FRONTAL BARRIER FIFTH TEST",
+   "closingSpeedKph": 48.3,
+   "peak_g_raw": 139.3803801511174,
+   "peak_g_cfc100": 83.8425002154838,
+   "max_survivable_attenuation": 0.08387459497989252,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1203,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1986 FORD TAURUS INTO FLAT FRONTAL BARRIER THIRD TEST",
+   "closingSpeedKph": 32.4,
+   "peak_g_raw": 316.2586210556165,
+   "peak_g_cfc100": 85.37003281785576,
+   "max_survivable_attenuation": 0.07443453789590325,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 1202,
+   "stratum": "frontal moderate (30-50)",
+   "title": "1986 FORD TAURUS INTO FLAT FRONTAL BARRIER SECOND TEST",
+   "closingSpeedKph": 31.9,
+   "peak_g_raw": 71.47498183021806,
+   "peak_g_cfc100": 45.661181779444696,
+   "max_survivable_attenuation": 0.126822762940595,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 6606,
+   "stratum": "frontal low speed (<30)",
+   "title": "FMVSS 201 POLE TEST - 2008 SUBARU IMPREZA 4-DOOR",
+   "closingSpeedKph": 28.5,
+   "peak_g_raw": 225.947866864018,
+   "peak_g_cfc100": 80.90041193286991,
+   "max_survivable_attenuation": 0.0795568758191467,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 6605,
+   "stratum": "frontal low speed (<30)",
+   "title": "FMVSS 201 POLE TEST - 2008 HONDA CR-V 5-DR 2WD LX",
+   "closingSpeedKph": 28.2,
+   "peak_g_raw": 80.19002000587417,
+   "peak_g_cfc100": 37.938949538266066,
+   "max_survivable_attenuation": 0.1826647921147484,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 6604,
+   "stratum": "frontal low speed (<30)",
+   "title": "FMVSS 201 POLE TEST - 2008 FORD FOCUS 4-DOOR",
+   "closingSpeedKph": 28.3,
+   "peak_g_raw": 96.44507638678141,
+   "peak_g_cfc100": 44.67944955334214,
+   "max_survivable_attenuation": 0.14342591120351716,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 3743,
+   "stratum": "frontal low speed (<30)",
+   "title": "FMVSS 201P - 2001 MERCEDES C240",
+   "closingSpeedKph": 28.3,
+   "peak_g_raw": 405.8962814074551,
+   "peak_g_cfc100": 131.23091613602872,
+   "max_survivable_attenuation": 0.11001421335930306,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 3685,
+   "stratum": "frontal low speed (<30)",
+   "title": "FMVSS 201P - 2002 FORD EXPLORER",
+   "closingSpeedKph": 28.0,
+   "peak_g_raw": 441.2631597867649,
+   "peak_g_cfc100": 193.23514998937787,
+   "max_survivable_attenuation": 0.03972054842673454,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 3684,
+   "stratum": "frontal low speed (<30)",
+   "title": "FMVSS 201P - 2001 LEXUS GS 300",
+   "closingSpeedKph": 28.3,
+   "peak_g_raw": 158.5028925736742,
+   "peak_g_cfc100": 93.2554718183685,
+   "max_survivable_attenuation": 0.05110909687202943,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 3683,
+   "stratum": "frontal low speed (<30)",
+   "title": "FMVSS 201P - 2001 VOLKSWAGEN JETTA",
+   "closingSpeedKph": 28.6,
+   "peak_g_raw": 394.5552079097423,
+   "peak_g_cfc100": 99.00341546472518,
+   "max_survivable_attenuation": 0.05559422366921505,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 3439,
+   "stratum": "frontal low speed (<30)",
+   "title": "FMVSS 201 COMPLIANCE TEST - 2000 VOLVO S80 4 DOOR (CY5901)",
+   "closingSpeedKph": 27.5,
+   "peak_g_raw": 106.139232360141,
+   "peak_g_cfc100": 50.55759833641317,
+   "max_survivable_attenuation": 0.11992435652127152,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 3438,
+   "stratum": "frontal low speed (<30)",
+   "title": "FMVSS 201 COMPLIANCE TEST - 2000 BMW 328I 4 DOOR (CY0504)",
+   "closingSpeedKph": 27.8,
+   "peak_g_raw": 196.12301476369367,
+   "peak_g_cfc100": 85.40372546864944,
+   "max_survivable_attenuation": 0.12246357991036692,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 3258,
+   "stratum": "frontal low speed (<30)",
+   "title": "CRASH 3 DAMAGE ALGORITHM REFORMULATION",
+   "closingSpeedKph": 24.2,
+   "peak_g_raw": 403.35536668998293,
+   "peak_g_cfc100": 258.30538049765545,
+   "max_survivable_attenuation": 0.1299218180118099,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 3257,
+   "stratum": "frontal low speed (<30)",
+   "title": "CRASH 3 DAMAGE ALGORITHM REFORMULATION",
+   "closingSpeedKph": 16.0,
+   "peak_g_raw": 12.497760897544808,
+   "peak_g_cfc100": 8.869038045741403,
+   "max_survivable_attenuation": 0.5736383842665653,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 3254,
+   "stratum": "frontal low speed (<30)",
+   "title": "CRASH 3 DAMAGE ALGORITHM REFORMULATION ON 1991 DODGE CARAVAN",
+   "closingSpeedKph": 24.2,
+   "peak_g_raw": 39.7278080976147,
+   "peak_g_cfc100": 20.244287084022098,
+   "max_survivable_attenuation": 0.18202628291329248,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 3253,
+   "stratum": "frontal low speed (<30)",
+   "title": "CRASH 3 DAMAGE ALGORITHM REFORMULATION ON 1991 DODGE CARAVAN",
+   "closingSpeedKph": 16.1,
+   "peak_g_raw": 31.989850763279595,
+   "peak_g_cfc100": 17.24516685994259,
+   "max_survivable_attenuation": 0.2762076312987163,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 2356,
+   "stratum": "frontal low speed (<30)",
+   "title": "1992 CHEVROLET CAPRICE INTO FLAT FRONTAL BARRIER",
+   "closingSpeedKph": 15.0,
+   "peak_g_raw": 198.2019197829577,
+   "peak_g_cfc100": 84.06115071724142,
+   "max_survivable_attenuation": 0.1645907611899863,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 2354,
+   "stratum": "frontal low speed (<30)",
+   "title": "1992 CHEVROLET CAPRICE INTO FLAT FRONTAL BARRIER",
+   "closingSpeedKph": 8.5,
+   "peak_g_raw": 12.673615905987527,
+   "peak_g_cfc100": 5.551812266268051,
+   "max_survivable_attenuation": 0.6735974756044862,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 2351,
+   "stratum": "frontal low speed (<30)",
+   "title": "1992 PLYMOUTH VOYAGER INTO 50% LT OFFSET BARR CRASH3 REFORM 5 IMPACTS",
+   "closingSpeedKph": 15.8,
+   "peak_g_raw": 23.090401273527057,
+   "peak_g_cfc100": 14.0225524016078,
+   "max_survivable_attenuation": 0.3318355797750408,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 2350,
+   "stratum": "frontal low speed (<30)",
+   "title": "1992 PLYMOUTH VOYAGER INTO 50% LT OFFSET BARR CRASH3 REFORM 5 IMPACTS",
+   "closingSpeedKph": 15.8,
+   "peak_g_raw": 36.77439577442301,
+   "peak_g_cfc100": 21.51109536455175,
+   "max_survivable_attenuation": 0.2771985664425566,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 2349,
+   "stratum": "frontal low speed (<30)",
+   "title": "1992 PLYMOUTH VOYAGER INTO 50% LT OFFSET BARR CRASH3 REFORM 5 IMPACTS",
+   "closingSpeedKph": 7.7,
+   "peak_g_raw": 17.537247791557828,
+   "peak_g_cfc100": 9.439969235893482,
+   "max_survivable_attenuation": 0.6104586687429585,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 2187,
+   "stratum": "frontal low speed (<30)",
+   "title": "1992 CHEVROLET CAPRICE INTO 305MM POLE CRASH3 IMPACT 3 OF 5",
+   "closingSpeedKph": 16.3,
+   "peak_g_raw": 46.625336966106744,
+   "peak_g_cfc100": 27.086224478663297,
+   "max_survivable_attenuation": 0.3306591988936619,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 6557,
+   "stratum": "frontal high speed (>70)",
+   "title": "GUARDRAIL TEST",
+   "closingSpeedKph": 99.9,
+   "peak_g_raw": 58.455675524965066,
+   "peak_g_cfc100": 21.491362199753368,
+   "max_survivable_attenuation": 0.29617942341356546,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 6506,
+   "stratum": "frontal high speed (>70)",
+   "title": "GUARDRAIL TEST",
+   "closingSpeedKph": 99.9,
+   "peak_g_raw": 58.455675524965066,
+   "peak_g_cfc100": 21.491362199753368,
+   "max_survivable_attenuation": 0.29617942341356546,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 2395,
+   "stratum": "frontal high speed (>70)",
+   "title": "1989 FORD TAURUS INTO MODIFIED HEAVY TRUCK BUMPER BARRIER",
+   "closingSpeedKph": 88.7,
+   "peak_g_raw": 108.38321239229384,
+   "peak_g_cfc100": 56.50026186701941,
+   "max_survivable_attenuation": 0.08171048527404806,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 838,
+   "stratum": "frontal high speed (>70)",
+   "title": "FROZEN IMPACT ATTENUATOR",
+   "closingSpeedKph": 96.6,
+   "peak_g_raw": 67.07886367552749,
+   "peak_g_cfc100": 65.28410201577105,
+   "max_survivable_attenuation": 0.09127946913324181,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 837,
+   "stratum": "frontal high speed (>70)",
+   "title": "IMPACT ATTENUATOR TESTING",
+   "closingSpeedKph": 96.6,
+   "peak_g_raw": 104.74750463853542,
+   "peak_g_cfc100": 77.22317443224804,
+   "max_survivable_attenuation": 0.07881640814539764,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 836,
+   "stratum": "frontal high speed (>70)",
+   "title": "INERTIAL IMPACT ATTENUATOR",
+   "closingSpeedKph": 96.6,
+   "peak_g_raw": 116.8476115802116,
+   "peak_g_cfc100": 112.73393367613048,
+   "max_survivable_attenuation": 0.05882547995244834,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 835,
+   "stratum": "frontal high speed (>70)",
+   "title": "ENERGITE3 IMPACT ATENUATOR",
+   "closingSpeedKph": 96.6,
+   "peak_g_raw": 143.19730051575692,
+   "peak_g_cfc100": 112.42298486744703,
+   "max_survivable_attenuation": 0.05021007822679438,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 834,
+   "stratum": "frontal high speed (>70)",
+   "title": "INERTIAL IMPACT ATTENUATOR",
+   "closingSpeedKph": 96.6,
+   "peak_g_raw": 87.94141565269462,
+   "peak_g_cfc100": 72.80856402406766,
+   "max_survivable_attenuation": 0.10571016473067438,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 833,
+   "stratum": "frontal high speed (>70)",
+   "title": "IMPACT INERTIAL ATTENUATOR",
+   "closingSpeedKph": 93.3,
+   "peak_g_raw": 91.91127610364246,
+   "peak_g_cfc100": 86.66286503939942,
+   "max_survivable_attenuation": 0.17286559803600743,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 832,
+   "stratum": "frontal high speed (>70)",
+   "title": "IMPACT INERTIAL ATTENUTORS",
+   "closingSpeedKph": 93.7,
+   "peak_g_raw": 144.7855911062976,
+   "peak_g_cfc100": 120.96561893780263,
+   "max_survivable_attenuation": 0.1166091417686654,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 831,
+   "stratum": "frontal high speed (>70)",
+   "title": "IMPACT ATTENUATORS GREAT",
+   "closingSpeedKph": 96.2,
+   "peak_g_raw": 149.85357176924413,
+   "peak_g_cfc100": 87.80174576685708,
+   "max_survivable_attenuation": 0.07679658013279177,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 830,
+   "stratum": "frontal high speed (>70)",
+   "title": "IMPACT ATTENUATORS GREAT",
+   "closingSpeedKph": 96.6,
+   "peak_g_raw": 75.62999851249502,
+   "peak_g_cfc100": 61.05546267621463,
+   "max_survivable_attenuation": 0.12672370553211423,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 829,
+   "stratum": "frontal high speed (>70)",
+   "title": "IMPACT ATTENUATORS GREAT",
+   "closingSpeedKph": 96.9,
+   "peak_g_raw": 154.1525218736301,
+   "peak_g_cfc100": 99.53313839088993,
+   "max_survivable_attenuation": 0.04660471903665019,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 805,
+   "stratum": "frontal high speed (>70)",
+   "title": "SMSNP1 TEST 8 VEHICLE 1A",
+   "closingSpeedKph": 98.0,
+   "peak_g_raw": 269.9574388676852,
+   "peak_g_cfc100": 281.0221259936369,
+   "max_survivable_attenuation": 0.012330939571960476,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 767,
+   "stratum": "frontal high speed (>70)",
+   "title": "MODIFIED GR1 CABLE BARRIER",
+   "closingSpeedKph": 98.5,
+   "peak_g_raw": 40.81924138197573,
+   "peak_g_cfc100": 31.777140314529774,
+   "max_survivable_attenuation": 0.15451467332881505,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 14507,
+   "stratum": "side pole",
+   "title": "NEW CAR ASSESSMENT PROGRAM SIDE POLE BARRIER IMPACT TEST",
+   "closingSpeedKph": 32.08,
+   "peak_g_raw": 25.072821080205554,
+   "peak_g_cfc100": 23.853117046093562,
+   "max_survivable_attenuation": 0.24044773359123134,
+   "native_rate_hz": 20000
+  },
+  {
+   "testNo": 14505,
+   "stratum": "side pole",
+   "title": "NEW CAR ASSESSMENT PROGRAM SIDE POLE BARRIER IMPACT TEST",
+   "closingSpeedKph": 32.33,
+   "peak_g_raw": 418.17171877555404,
+   "peak_g_cfc100": 179.66433208597726,
+   "max_survivable_attenuation": 0.04420711443436605,
+   "native_rate_hz": 20000
+  },
+  {
+   "testNo": 14498,
+   "stratum": "side pole",
+   "title": "75 DEGREE OBLIQUE RIGID POLE SIDE NCAP IMPACT",
+   "closingSpeedKph": 32.09,
+   "peak_g_raw": 226.34744671581785,
+   "peak_g_cfc100": 114.74060934863925,
+   "max_survivable_attenuation": 0.045100180317204565,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 14494,
+   "stratum": "side pole",
+   "title": "OPTIONAL NCAP SIDE POLE - 2024 HYUNDAI SONATA SEL 4-DOOR SEDAN",
+   "closingSpeedKph": 32.17,
+   "peak_g_raw": 26.179081930999793,
+   "peak_g_cfc100": 24.544502921795708,
+   "max_survivable_attenuation": 0.1472903753233614,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 14493,
+   "stratum": "side pole",
+   "title": "OPTIONAL NCAP SIDE POLE - 2024 KIA SORENTO LX 5-DOOR SUV",
+   "closingSpeedKph": 32.17,
+   "peak_g_raw": 192.5617199166283,
+   "peak_g_cfc100": 87.80350845488206,
+   "max_survivable_attenuation": 0.05361529461037501,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 14489,
+   "stratum": "side pole",
+   "title": "OPTIONAL NCAP SIDE POLE - 2024 HYUNDAI ELANTRA SEL 4-DOOR SEDAN",
+   "closingSpeedKph": 32.14,
+   "peak_g_raw": 328.17769287972635,
+   "peak_g_cfc100": 115.29114263130164,
+   "max_survivable_attenuation": 0.05634342421273034,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 14481,
+   "stratum": "side pole",
+   "title": "OPTIONAL NCAP SIDE POLE - 2023 HYUNDAI PALISADE CALLIGRAPHY 5-DOOR SUV",
+   "closingSpeedKph": 32.28,
+   "peak_g_raw": 20.144270507268313,
+   "peak_g_cfc100": 19.2877173474795,
+   "max_survivable_attenuation": 0.2785144691061346,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 14473,
+   "stratum": "side pole",
+   "title": "OPTIONAL NCAP SIDE POLE - 2024 MAZDA CX-90 PHEV 5-DOOR SUV",
+   "closingSpeedKph": 32.22,
+   "peak_g_raw": 35.03852181171461,
+   "peak_g_cfc100": 27.60223431630167,
+   "max_survivable_attenuation": 0.4122082922199736,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 14469,
+   "stratum": "side pole",
+   "title": "NCAP SIDE POLE - 2023 JEEP WAGONEER SERIES III 4X2 5-DOOR SUV",
+   "closingSpeedKph": 32.17,
+   "peak_g_raw": 337.99315692960414,
+   "peak_g_cfc100": 93.58823824256727,
+   "max_survivable_attenuation": 0.08272922271088474,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 14468,
+   "stratum": "side pole",
+   "title": "NCAP SIDE IMPACT POLE BARRIER - 2024 GENESIS G80 4-DOOR SEDAN",
+   "closingSpeedKph": 32.43,
+   "peak_g_raw": 87.08562741704283,
+   "peak_g_cfc100": 36.04741660759347,
+   "max_survivable_attenuation": 0.12053543392764408,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 14460,
+   "stratum": "side pole",
+   "title": "NEW CAR ASSESSMENT PROGRAM SIDE POLE BARRIER IMPACT TEST",
+   "closingSpeedKph": 32.04,
+   "peak_g_raw": 35.85847466401771,
+   "peak_g_cfc100": 33.02910651820622,
+   "max_survivable_attenuation": 0.11455434976169232,
+   "native_rate_hz": 20000
+  },
+  {
+   "testNo": 14450,
+   "stratum": "side pole",
+   "title": "OPTIONAL NEW CAR ASSESSMENT PROGRAM SIDE POLE BARRIER IMPACT TEST",
+   "closingSpeedKph": 32.21,
+   "peak_g_raw": 21.889138490813203,
+   "peak_g_cfc100": 20.851449321207273,
+   "max_survivable_attenuation": 0.2496277345488502,
+   "native_rate_hz": 20000
+  },
+  {
+   "testNo": 14443,
+   "stratum": "side pole",
+   "title": "OPTIONAL NCAP SIDE POLE - 2023 HONDA CR-V EX 5-DOOR SUV",
+   "closingSpeedKph": 32.18,
+   "peak_g_raw": 463.0936258880703,
+   "peak_g_cfc100": 159.9201346216909,
+   "max_survivable_attenuation": 0.04275947835600717,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 14437,
+   "stratum": "side pole",
+   "title": "OPTIONAL NEW CAR ASSESSMENT PROGRAM SIDE POLE BARRIER IMPACT TEST",
+   "closingSpeedKph": 31.91,
+   "peak_g_raw": 18.87450406023957,
+   "peak_g_cfc100": 17.32862978034461,
+   "max_survivable_attenuation": 0.315217881273868,
+   "native_rate_hz": 20000
+  },
+  {
+   "testNo": 14434,
+   "stratum": "side pole",
+   "title": "NEW CAR ASSESSMENT PROGRAM SIDE POLE BARRIER IMPACT TEST",
+   "closingSpeedKph": 32.07,
+   "peak_g_raw": 23.452833959886384,
+   "peak_g_cfc100": 21.33823192626978,
+   "max_survivable_attenuation": 0.2774425649926096,
+   "native_rate_hz": 20000
+  },
+  {
+   "testNo": 14432,
+   "stratum": "side pole",
+   "title": "NCAP SIDE IMPACT POLE BARRIER - 2024 SUBARU CROSSTREK 5-DOOR MPV",
+   "closingSpeedKph": 32.32,
+   "peak_g_raw": 283.6811204607208,
+   "peak_g_cfc100": 86.62318869370199,
+   "max_survivable_attenuation": 0.049343835162531095,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 14429,
+   "stratum": "side pole",
+   "title": "NEW CAR ASSESSMENT PROGRAM SIDE POLE BARRIER IMPACT TEST",
+   "closingSpeedKph": 32.23,
+   "peak_g_raw": 37.34526707723484,
+   "peak_g_cfc100": 37.18832469162598,
+   "max_survivable_attenuation": 0.1413642716620193,
+   "native_rate_hz": 20000
+  },
+  {
+   "testNo": 14397,
+   "stratum": "side pole",
+   "title": "75 DEGREE OBLIQUE RIGID POLE SIDE NCAP IMPACT",
+   "closingSpeedKph": 32.29,
+   "peak_g_raw": 279.8278147673315,
+   "peak_g_cfc100": 107.87148564137604,
+   "max_survivable_attenuation": 0.05736146086513351,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 14389,
+   "stratum": "side pole",
+   "title": "NCAP SIDE POLE - 2023 MAZDA CX-50 S AWD 5-DOOR SUV",
+   "closingSpeedKph": 32.21,
+   "peak_g_raw": 402.74771006643846,
+   "peak_g_cfc100": 103.25825914715287,
+   "max_survivable_attenuation": 0.06945163662966805,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 14387,
+   "stratum": "side pole",
+   "title": "OPTIONAL NCAP SIDE POLE - 2022 LEXUS NX 250 5-DOOR SUV",
+   "closingSpeedKph": 32.15,
+   "peak_g_raw": 190.42539517795413,
+   "peak_g_cfc100": 99.93716829545143,
+   "max_survivable_attenuation": 0.0559956120549731,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 14382,
+   "stratum": "side pole",
+   "title": "NCAP SIDE IMPACT POLE BARRIER - 2023 BMW X1 XDRIVE28I 5-DOOR SUV",
+   "closingSpeedKph": 32.45,
+   "peak_g_raw": 258.3058908040039,
+   "peak_g_cfc100": 116.1069833224009,
+   "max_survivable_attenuation": 0.05967373380987074,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 14380,
+   "stratum": "side pole",
+   "title": "NEW CAR ASSESSMENT PROGRAM SIDE POLE BARRIER IMPACT TEST",
+   "closingSpeedKph": 32.19,
+   "peak_g_raw": 26.036880559698393,
+   "peak_g_cfc100": 19.895772078386308,
+   "max_survivable_attenuation": 0.242281557896086,
+   "native_rate_hz": 20000
+  },
+  {
+   "testNo": 14364,
+   "stratum": "side pole",
+   "title": "NCAP SIDE POLE - 2023 KIA NIRO EX TOURING 5-DOOR SUV",
+   "closingSpeedKph": 32.13,
+   "peak_g_raw": 23.112832386360612,
+   "peak_g_cfc100": 21.597541912893007,
+   "max_survivable_attenuation": 0.25641145149068295,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 14320,
+   "stratum": "side pole",
+   "title": "NCAP SIDE POLE - 2022 FORD F-150 LIGHTNING 4X4 TRUCK",
+   "closingSpeedKph": 32.26,
+   "peak_g_raw": 184.68559627109525,
+   "peak_g_cfc100": 79.0654685879605,
+   "max_survivable_attenuation": 0.2869713880134852,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 14308,
+   "stratum": "side pole",
+   "title": "NCAP SIDE POLE - 2023 KIA TELLURIDE EX 5-DOOR SUV",
+   "closingSpeedKph": 32.18,
+   "peak_g_raw": 353.78757132529404,
+   "peak_g_cfc100": 129.2421136715018,
+   "max_survivable_attenuation": 0.04338450411995299,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 718,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.3,
+   "peak_g_raw": 28.341,
+   "peak_g_cfc100": 16.124001288716837,
+   "max_survivable_attenuation": 0.26495585232343594,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 717,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.3,
+   "peak_g_raw": 89.873,
+   "peak_g_cfc100": 41.153812697598156,
+   "max_survivable_attenuation": 0.141110415620196,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 716,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 49.1,
+   "peak_g_raw": 51.948,
+   "peak_g_cfc100": 35.64875736974218,
+   "max_survivable_attenuation": 0.2364447997911646,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 715,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.3,
+   "peak_g_raw": 40.342,
+   "peak_g_cfc100": 25.36525691657524,
+   "max_survivable_attenuation": 0.3242674002445017,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 714,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.3,
+   "peak_g_raw": 28.169,
+   "peak_g_cfc100": 12.471115505949584,
+   "max_survivable_attenuation": 0.42065305111952295,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 713,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.0,
+   "peak_g_raw": 37.339,
+   "peak_g_cfc100": 18.899431017023097,
+   "max_survivable_attenuation": 0.2765427197754781,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 712,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.3,
+   "peak_g_raw": 64.309,
+   "peak_g_cfc100": 29.641585881853132,
+   "max_survivable_attenuation": 0.38532971392117277,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 562,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.5,
+   "peak_g_raw": 21.644,
+   "peak_g_cfc100": 13.457845039188404,
+   "max_survivable_attenuation": 0.405223078509872,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 561,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.5,
+   "peak_g_raw": 27.922,
+   "peak_g_cfc100": 12.379903996800193,
+   "max_survivable_attenuation": 0.3349075291767821,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 560,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.6,
+   "peak_g_raw": 31.244,
+   "peak_g_cfc100": 15.607209309015387,
+   "max_survivable_attenuation": 0.33915207614687304,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 559,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.6,
+   "peak_g_raw": 98.177,
+   "peak_g_cfc100": 62.77396247888593,
+   "max_survivable_attenuation": 0.13051151498649174,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 558,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.2,
+   "peak_g_raw": 13.125,
+   "peak_g_cfc100": 7.585731887513836,
+   "max_survivable_attenuation": 0.0,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 557,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.5,
+   "peak_g_raw": 114.79,
+   "peak_g_cfc100": 55.63240969368835,
+   "max_survivable_attenuation": 0.09536390457679114,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 556,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.6,
+   "peak_g_raw": 65.927,
+   "peak_g_cfc100": 32.691253756585326,
+   "max_survivable_attenuation": 0.1945652477576448,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 555,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.5,
+   "peak_g_raw": 61.577,
+   "peak_g_cfc100": 39.23954732197569,
+   "max_survivable_attenuation": 0.14525035879152473,
+   "native_rate_hz": 1000
+  },
+  {
+   "testNo": 554,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.5,
+   "peak_g_raw": 61.68872156237313,
+   "peak_g_cfc100": 39.77587812118864,
+   "max_survivable_attenuation": 0.15979213294854508,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 524,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.3,
+   "peak_g_raw": 113.56191119825344,
+   "peak_g_cfc100": 36.6836468215657,
+   "max_survivable_attenuation": 0.20980935550689664,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 519,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.3,
+   "peak_g_raw": 32.42572316849695,
+   "peak_g_cfc100": 21.860216318540765,
+   "max_survivable_attenuation": 0.21832888099219375,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 371,
+   "stratum": "side moving barrier",
+   "title": "SIDE IMPACT SEAT EFFECTS",
+   "closingSpeedKph": 40.1,
+   "peak_g_raw": 437.5160339918984,
+   "peak_g_cfc100": 197.970086068799,
+   "max_survivable_attenuation": 0.041926910976176665,
+   "native_rate_hz": 5000
+  },
+  {
+   "testNo": 265,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.5,
+   "peak_g_raw": 63.980224780786756,
+   "peak_g_cfc100": 38.133803828194175,
+   "max_survivable_attenuation": 0.1697432331223048,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 260,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 46.8,
+   "peak_g_raw": 80.87118425619845,
+   "peak_g_cfc100": 43.737272141556744,
+   "max_survivable_attenuation": 0.14203888566801431,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 258,
+   "stratum": "side moving barrier",
+   "title": "VEHICLE SAFETY COMPLIANCE",
+   "closingSpeedKph": 47.5,
+   "peak_g_raw": 74.07461688729819,
+   "peak_g_cfc100": 41.838923955092966,
+   "max_survivable_attenuation": 0.13408670252493612,
+   "native_rate_hz": 8000
+  },
+  {
+   "testNo": 3424,
+   "stratum": "vehicle to vehicle",
+   "title": "GM FIRE TESTING C11647",
+   "closingSpeedKph": 104.3,
+   "peak_g_raw": 229.60065505133036,
+   "peak_g_cfc100": 89.89866492224027,
+   "max_survivable_attenuation": 0.09160802070307647,
+   "native_rate_hz": 10000
+  },
+  {
+   "testNo": 2394,
+   "stratum": "vehicle to vehicle",
+   "title": "HEAVY TRUCK W/CAB & BASELINE BUMPER INTO 1987 FORD TAURUS",
+   "closingSpeedKph": 92.1,
+   "peak_g_raw": 98.31762369412718,
+   "peak_g_cfc100": 65.68821006759232,
+   "max_survivable_attenuation": 0.07628007190641667,
+   "native_rate_hz": 12500
+  },
+  {
+   "testNo": 2393,
+   "stratum": "vehicle to vehicle",
+   "title": "HEAVY TRUCK W/CAB & MODIFIED BUMPER INTO 1988 FORD TAURUS",
+   "closingSpeedKph": 89.2,
+   "peak_g_raw": 69.13509575837732,
+   "peak_g_cfc100": 43.18727273339479,
+   "max_survivable_attenuation": 0.0953593975281854,
+   "native_rate_hz": 12500
+  }
+ ]
+}
