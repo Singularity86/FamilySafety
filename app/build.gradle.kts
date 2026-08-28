@@ -131,6 +131,11 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            // The JUnit 5 jars on the androidTest classpath each carry their own copy of
+            // these, and six identical licence files are a packaging conflict that stops
+            // the instrumented APK being built at all.
+            excludes += "/META-INF/LICENSE*.md"
+            excludes += "/META-INF/NOTICE*.md"
         }
     }
 }

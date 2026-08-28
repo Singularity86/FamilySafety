@@ -17,7 +17,10 @@ import android.view.MotionEvent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clipToBounds
@@ -41,6 +44,7 @@ import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.runtime.saveable.rememberSaveable
 import com.example.familysafety.BuildConfig
 import com.example.familysafety.geofence.GeofenceZone
+import com.example.familysafety.location.MemberLocation
 import com.example.familysafety.ui.theme.AmberWarning
 import kotlin.math.ceil
 import kotlin.math.log2
@@ -190,6 +194,11 @@ fun MapScreen(
     var savedMapLongitude by rememberSaveable { mutableStateOf(0.0) }
     var savedMapZoom by rememberSaveable { mutableStateOf(2.0) }
     var hasSavedMapViewport by rememberSaveable { mutableStateOf(false) }
+    // Which pins cover each other up is a question about the screen, so it changes with
+    // zoom and not with panning — two pins a pixel apart stay a pixel apart however far
+    // the map scrolls. Held apart from savedMapZoom so the marker rebuild can key on zoom
+    // alone and stay still through a scroll.
+    var mapZoom by remember { mutableStateOf(savedMapZoom) }
 
     // Cancel any in-progress download if the composable is removed from composition.
     DisposableEffect(Unit) {
@@ -212,6 +221,7 @@ fun MapScreen(
         savedMapLatitude = center.latitude
         savedMapLongitude = center.longitude
         savedMapZoom = mapView.zoomLevelDouble
+        mapZoom = mapView.zoomLevelDouble
         hasSavedMapViewport = true
     }
 
@@ -320,9 +330,24 @@ fun MapScreen(
         mapView.invalidate()
     }
 
+    // How close two pins have to be, in pixels, before one hides the other. A pin is
+    // markerSizePx across, so centres nearer than about a pin-width overlap; 0.9 leaves a
+    // sliver of daylight rather than waiting for a total eclipse.
+    val clusterThresholdPx = markerSizePx * 0.9
+
+    // The people currently sharing a patch of screen, and which of those groups is open.
+    var pinClusters by remember { mutableStateOf<List<PinCluster>>(emptyList()) }
+    var expandedClusterKey by remember { mutableStateOf<String?>(null) }
+    // Which raised member a group was already opened for. Without this, closing the card
+    // while that member is still raised would reopen it on the very next rebuild.
+    var autoExpandedFor by remember { mutableStateOf<String?>(null) }
+
     // Rebuild member markers whenever locations, members, or avatars change — or when a
-    // different member is raised, since draw order is decided here.
-    LaunchedEffect(memberLocations, familyMembers, memberAvatars, raisedMemberId) {
+    // different member is raised, since draw order is decided here — or when the zoom
+    // changes, since that is what decides who is covering whom.
+    LaunchedEffect(
+        memberLocations, familyMembers, memberAvatars, raisedMemberId, mapZoom, expandedClusterKey
+    ) {
         mapView.overlays.removeAll { it is Marker }
         // osmdroid draws overlays in list order, so whatever is added last ends up on top.
         // Sorting the raised member to the end is what puts their pin above pins that
@@ -334,35 +359,100 @@ fun MapScreen(
         val drawOrder = memberLocations.entries
             .filter { entry -> familyMembers.any { it.memberId == entry.key } }
             .sortedBy { it.key == raisedMemberId }
-        drawOrder.forEach { (memberId, location) ->
-            val member = familyMembers.find { it.memberId == memberId }
-            val avatar = memberAvatars[memberId]
-            val bmp = memberMarkerBitmap(
-                displayName = member?.displayName ?: "?",
-                memberId = memberId,
-                avatar = avatar,
-                sizePx = markerSizePx,
-                colorHue = member?.colorHue
-            )
-            // Dim (not alarm-color) a marker once its location is old enough that it's
-            // no longer a good stand-in for "live" — well past the ~5 min stationary
-            // heartbeat interval, so a few missed cycles are still shown as fresh.
-            val isStale = System.currentTimeMillis() - location.timestamp > STALE_LOCATION_THRESHOLD_MS
-            val marker = Marker(mapView).apply {
-                position = GeoPoint(location.latitude, location.longitude)
-                title = member?.displayName ?: memberId
-                snippet = "Updated ${getTimeAgo(location.timestamp)} · ±${location.accuracy.toInt()}m"
-                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                icon = BitmapDrawable(context.resources, bmp).apply {
-                    alpha = if (isStale) 140 else 255
-                }
-                setOnMarkerClickListener { _, _ ->
-                    viewModel.requestDriveEstimate(memberId)
-                    true
+
+        val clusters = clusterPins(
+            points = drawOrder.map { (memberId, location) ->
+                PinPoint(memberId, location.latitude, location.longitude)
+            },
+            zoom = mapZoom,
+            thresholdPx = clusterThresholdPx.toDouble()
+        )
+        pinClusters = clusters
+
+        // A group that no longer exists cannot stay open: zooming in until people separate
+        // has to put the card away, or it outlives the thing it was describing.
+        if (expandedClusterKey != null && clusters.none { it.key == expandedClusterKey }) {
+            expandedClusterKey = null
+        }
+        // Asking to see someone who turns out to be in a huddle should say who they are
+        // huddled with, rather than drop a bubble on the map and leave them to guess.
+        if (raisedMemberId != null && raisedMemberId != autoExpandedFor) {
+            autoExpandedFor = raisedMemberId
+            clusters.find { raisedMemberId in it.memberIds && !it.isSingle }?.let {
+                expandedClusterKey = it.key
+            }
+        }
+
+        // Dim (not alarm-color) a marker once its location is old enough that it's no
+        // longer a good stand-in for "live" — well past the ~5 min stationary heartbeat
+        // interval, so a few missed cycles are still shown as fresh.
+        fun isStale(location: MemberLocation) =
+            System.currentTimeMillis() - location.timestamp > STALE_LOCATION_THRESHOLD_MS
+
+        clusters
+            .sortedBy { raisedMemberId != null && raisedMemberId in it.memberIds }
+            .forEach { cluster ->
+                if (cluster.isSingle) {
+                    val memberId = cluster.memberIds.first()
+                    val location = memberLocations[memberId] ?: return@forEach
+                    val member = familyMembers.find { it.memberId == memberId }
+                    val bmp = memberMarkerBitmap(
+                        displayName = member?.displayName ?: "?",
+                        memberId = memberId,
+                        avatar = memberAvatars[memberId],
+                        sizePx = markerSizePx,
+                        colorHue = member?.colorHue
+                    )
+                    val marker = Marker(mapView).apply {
+                        position = GeoPoint(location.latitude, location.longitude)
+                        title = member?.displayName ?: memberId
+                        snippet = "Updated ${getTimeAgo(location.timestamp)} · ±${location.accuracy.toInt()}m"
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        icon = BitmapDrawable(context.resources, bmp).apply {
+                            alpha = if (isStale(location)) 140 else 255
+                        }
+                        setOnMarkerClickListener { _, _ ->
+                            viewModel.requestDriveEstimate(memberId)
+                            true
+                        }
+                    }
+                    mapView.overlays.add(marker)
+                } else {
+                    // The raised member leads the row and keeps their place in it however
+                    // many people are here — being asked for is exactly the case where
+                    // being the face trimmed off the end would be wrong.
+                    val ordered = cluster.memberIds.sortedByDescending { it == raisedMemberId }
+                    val faces = ordered.take(CLUSTER_FACES_SHOWN).map { memberId ->
+                        val member = familyMembers.find { it.memberId == memberId }
+                        ClusterFace(
+                            memberId = memberId,
+                            displayName = member?.displayName ?: "?",
+                            avatar = memberAvatars[memberId],
+                            colorHue = member?.colorHue,
+                            isStale = memberLocations[memberId]?.let { isStale(it) } ?: true
+                        )
+                    }
+                    val bmp = clusterMarkerBitmap(
+                        faces = faces,
+                        totalCount = cluster.size,
+                        sizePx = markerSizePx,
+                        highlightMemberId = raisedMemberId,
+                        isOpen = cluster.key == expandedClusterKey
+                    )
+                    val marker = Marker(mapView).apply {
+                        position = GeoPoint(cluster.latitude, cluster.longitude)
+                        title = "${cluster.size} people here"
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        icon = BitmapDrawable(context.resources, bmp)
+                        setOnMarkerClickListener { _, _ ->
+                            expandedClusterKey =
+                                if (expandedClusterKey == cluster.key) null else cluster.key
+                            true
+                        }
+                    }
+                    mapView.overlays.add(marker)
                 }
             }
-            mapView.overlays.add(marker)
-        }
         mapView.invalidate()
     }
 
@@ -586,6 +676,90 @@ fun MapScreen(
             Icon(Icons.Default.LocationCity, contentDescription = "Manage zones")
         }
 
+        // The opened group. The bubble on the map says how many people are standing
+        // together and shows the first few faces; this is where they get their names back,
+        // which is the part the map cannot show at pin size.
+        val openCluster = pinClusters.find { it.key == expandedClusterKey }
+        if (openCluster != null && !openCluster.isSingle) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 80.dp, start = 16.dp, end = 16.dp)
+                    .widthIn(max = 320.dp),
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                tonalElevation = 3.dp
+            ) {
+                Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 14.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "${openCluster.size} people here",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                        IconButton(
+                            onClick = { expandedClusterKey = null },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Close",
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 220.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        openCluster.memberIds.forEach { memberId ->
+                            val member = familyMembers.find { it.memberId == memberId }
+                            val location = memberLocations[memberId]
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        viewModel.requestDriveEstimate(memberId)
+                                        expandedClusterKey = null
+                                    }
+                                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                MemberAvatar(
+                                    displayName = member?.displayName ?: "?",
+                                    memberId = memberId,
+                                    bitmap = memberAvatars[memberId],
+                                    colorHue = member?.colorHue,
+                                    size = 28.dp
+                                )
+                                Column {
+                                    Text(
+                                        text = member?.displayName ?: memberId,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    if (location != null) {
+                                        Text(
+                                            text = "Updated ${getTimeAgo(location.timestamp)} · ±${location.accuracy.toInt()}m",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Brief error banner shown when some tiles fail to download
         if (downloadErrorMessage != null) {
             Surface(
@@ -652,7 +826,7 @@ private fun blueDotBitmap(sizePx: Int): Bitmap {
  * The bitmap is (sizePx) wide and (sizePx + tailHeight) tall.
  * The geographical anchor point is the very bottom tip of the tail.
  */
-private fun memberMarkerBitmap(
+internal fun memberMarkerBitmap(
     displayName: String,
     memberId: String,
     avatar: Bitmap?,
@@ -704,12 +878,55 @@ private fun memberMarkerBitmap(
     paint.color = accentColor
     canvas.drawPath(pinPath(r, tipY), paint)
 
-    // 3 — White inner circle (creates the border ring effect)
-    paint.color = Color.WHITE
-    canvas.drawCircle(cx, cy, r - border, paint)
+    // 3 & 4 — The face: white ring, then the avatar photo or coloured initials.
+    // Shared with the cluster bubble, so the small faces in a bubble are literally the
+    // same drawing at a smaller radius rather than a lookalike that can drift from it.
+    drawMemberDisc(
+        canvas = canvas,
+        cx = cx,
+        cy = cy,
+        radius = r,
+        ringWidth = border,
+        displayName = displayName,
+        hue = hue,
+        avatar = avatar,
+        drawRing = false
+    )
 
-    // 4 — Avatar photo or coloured initials
-    val innerR = r - border
+    return bmp
+}
+
+/**
+ * Draws one member's circular face: an accent ring with their photo or initials inside.
+ *
+ * [drawRing] is false when the caller has already painted the accent shape underneath —
+ * the single pin's balloon body is that ring, so drawing it again would only cost fill.
+ */
+private fun drawMemberDisc(
+    canvas: Canvas,
+    cx: Float,
+    cy: Float,
+    radius: Float,
+    ringWidth: Float,
+    displayName: String,
+    hue: Float,
+    avatar: Bitmap?,
+    drawRing: Boolean = true,
+    highlight: Boolean = false
+) {
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    val accentColor = ColorUtils.HSLToColor(floatArrayOf(hue, 0.70f, 0.50f))
+
+    if (drawRing) {
+        paint.color = accentColor
+        canvas.drawCircle(cx, cy, radius, paint)
+    }
+
+    // White under the photo, so a transparent avatar reads as a face and not as a hole.
+    paint.color = Color.WHITE
+    canvas.drawCircle(cx, cy, radius - ringWidth, paint)
+
+    val innerR = radius - ringWidth
     if (avatar != null) {
         val sz     = (innerR * 2).toInt().coerceAtLeast(1)
         val scaled = Bitmap.createScaledBitmap(avatar, sz, sz, true)
@@ -742,6 +959,155 @@ private fun memberMarkerBitmap(
         paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         val textY = cy - (paint.descent() + paint.ascent()) / 2f
         canvas.drawText(initials, cx, textY, paint)
+    }
+
+    if (highlight) {
+        // The member someone just asked to see, ringed so they can be picked out of the
+        // row without reading names off a bubble that is 20 dp tall.
+        paint.shader = null
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = ringWidth * 0.9f
+        paint.color = ColorUtils.HSLToColor(floatArrayOf(hue, 0.85f, 0.28f))
+        canvas.drawCircle(cx, cy, radius - ringWidth * 0.45f, paint)
+        paint.style = Paint.Style.FILL
+    }
+}
+
+/** How many faces a bubble shows before the rest become a count. */
+internal const val CLUSTER_FACES_SHOWN = 3
+
+/** One face in a cluster bubble. */
+internal data class ClusterFace(
+    val memberId: String,
+    val displayName: String,
+    val avatar: Bitmap?,
+    val colorHue: Float?,
+    val isStale: Boolean
+)
+
+/**
+ * Draws the bubble shown where several people are standing close enough to cover each
+ * other up: a rounded capsule of small faces in a row, with a tail pointing at the spot
+ * they share, and a "+N" when there are more of them than fit.
+ *
+ * The faces are the same drawing as a full pin at a smaller radius — [drawMemberDisc] is
+ * shared with [memberMarkerBitmap] — so a bubble reads as the pins it stands in for.
+ */
+internal fun clusterMarkerBitmap(
+    faces: List<ClusterFace>,
+    totalCount: Int,
+    sizePx: Int,
+    highlightMemberId: String?,
+    isOpen: Boolean
+): Bitmap {
+    val discD  = sizePx * 0.60f
+    val discR  = discD / 2f
+    val pad    = sizePx * 0.11f
+    val gap    = sizePx * 0.05f
+    val tailH  = sizePx * 0.20f
+    val bleed  = sizePx * 0.08f          // room for the shadow to spill into
+
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    paint.textSize = discD * 0.44f
+    paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    val overflow = totalCount - faces.size
+    val overflowLabel = if (overflow > 0) "+$overflow" else null
+    val overflowW = overflowLabel?.let { paint.measureText(it) } ?: 0f
+
+    val capsuleH = discD + pad * 2
+    // The count needs more room at the end than a face does: the cap is a half-circle, so
+    // the white behind text at mid-height runs out sooner than the outline suggests.
+    val capsuleW = pad * 2 +
+        faces.size * discD +
+        (faces.size - 1).coerceAtLeast(0) * gap +
+        (if (overflowLabel != null) gap + overflowW + pad * 0.5f else 0f)
+
+    val bmp = Bitmap.createBitmap(
+        ceil(capsuleW + bleed * 2).toInt(),
+        ceil(capsuleH + tailH + bleed * 2).toInt(),
+        Bitmap.Config.ARGB_8888
+    )
+    val canvas = Canvas(bmp)
+
+    val left   = bleed
+    val top    = bleed
+    val right  = left + capsuleW
+    val bottom = top + capsuleH
+    val tipX   = left + capsuleW / 2f
+    val tipY   = bottom + tailH
+
+    // Capsule and tail as one path, so the shadow behind them is a single shape rather
+    // than two overlapping ones with a seam where they meet.
+    fun bubblePath(inset: Float, tip: Float) = android.graphics.Path().apply {
+        val rect = android.graphics.RectF(
+            left + inset, top + inset, right - inset, bottom - inset
+        )
+        val radius = rect.height() / 2f
+        addRoundRect(rect, radius, radius, android.graphics.Path.Direction.CW)
+        val half = sizePx * 0.085f
+        moveTo(tipX - half, bottom - inset - 1f)
+        lineTo(tipX + half, bottom - inset - 1f)
+        lineTo(tipX, tip)
+        close()
+    }
+
+    // 1 — Soft drop shadow, matching the single pin's
+    paint.color = Color.argb(55, 0, 0, 0)
+    paint.maskFilter = android.graphics.BlurMaskFilter(
+        sizePx * 0.09f, android.graphics.BlurMaskFilter.Blur.NORMAL
+    )
+    canvas.save()
+    canvas.translate(2f, 3f)
+    canvas.drawPath(bubblePath(1f, tipY - 2f), paint)
+    canvas.restore()
+    paint.maskFilter = null
+
+    // 2 — The bubble itself: white, so the faces inside carry the colour
+    paint.color = Color.WHITE
+    canvas.drawPath(bubblePath(0f, tipY), paint)
+
+    // 3 — Outline. Darker while the group is open, which is the only feedback a tap on a
+    // bitmap marker can give.
+    paint.style = Paint.Style.STROKE
+    paint.strokeWidth = if (isOpen) sizePx * 0.035f else sizePx * 0.018f
+    paint.color = if (isOpen) Color.argb(210, 40, 40, 40) else Color.argb(70, 0, 0, 0)
+    canvas.drawPath(bubblePath(paint.strokeWidth / 2f, tipY - paint.strokeWidth / 2f), paint)
+    paint.style = Paint.Style.FILL
+
+    // 4 — The faces, left to right
+    var cx = left + pad + discR
+    val cy = top + pad + discR
+    for (face in faces) {
+        val hue = face.colorHue
+            ?: ((face.memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
+        // A stale face fades on its own; the bubble around it stays solid, since the
+        // group is still there even when one person's fix is old.
+        val restore = canvas.saveLayerAlpha(
+            0f, 0f, bmp.width.toFloat(), bmp.height.toFloat(),
+            if (face.isStale) 140 else 255
+        )
+        drawMemberDisc(
+            canvas = canvas,
+            cx = cx,
+            cy = cy,
+            radius = discR,
+            ringWidth = (discR * 0.22f).coerceAtLeast(2f),
+            displayName = face.displayName,
+            hue = hue,
+            avatar = face.avatar,
+            drawRing = true,
+            highlight = face.memberId == highlightMemberId
+        )
+        canvas.restoreToCount(restore)
+        cx += discD + gap
+    }
+
+    // 5 — "+N" for whoever did not fit
+    if (overflowLabel != null) {
+        paint.color = Color.argb(190, 30, 30, 30)
+        paint.textAlign = Paint.Align.LEFT
+        val textY = cy - (paint.descent() + paint.ascent()) / 2f
+        canvas.drawText(overflowLabel, cx - discR, textY, paint)
     }
 
     return bmp
