@@ -83,5 +83,5 @@ password=...
 
 ## Contact
 
-Questions, issues, or security reports: **omar@courageonpurpose.org** or open
+Questions, issues, or security reports: **coloredhatsociety@gmail.com** or open
 an issue.
