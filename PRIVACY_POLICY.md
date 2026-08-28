@@ -90,4 +90,4 @@ retention windows expire.
 ## Changes and contact
 
 If this policy changes, the updated version will be posted at this address
-with a new date. Questions: **omar@courageonpurpose.org**
+with a new date. Questions: **coloredhatsociety@gmail.com**

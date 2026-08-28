@@ -21,7 +21,7 @@ accounts/infrastructure only you can create.
    create a username/password in the EMQX console (Access Control →
    Authentication), put it in `keystore/mqtt.properties`, rebuild, reinstall on
    all family devices together.
-2. **Host the privacy policy** at a public URL (e.g. courageonpurpose.org/familysafety/privacy).
+2. **Host the privacy policy** at a public URL (currently https://singularity86.github.io/FamilySafety/privacy.html).
    Required field; app is rejected without it.
 3. **Play developer account** (play.google.com/console, $25 one-time + ID verification).
    ⚠ New *personal* accounts must run a closed test with **12+ testers for 14
