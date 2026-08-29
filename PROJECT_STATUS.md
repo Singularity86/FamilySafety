@@ -270,6 +270,36 @@ redesign as **undocumented rather than done**.
 New since the last snapshot: the Files screen has a search box (which is also the vault's
 entry point), a status board, per-file status chips and availability counts.
 
+### Map: overlapping pins, and the four questions left open
+
+People standing close enough to overlap are now drawn as one bubble of small faces with a
+count, instead of as pins hiding each other — grouped by pixel distance at the current
+zoom, so it is a fact about the screen rather than about the ground. Tapping a bubble opens
+a card that names them. Committed at `38d3d3f`; the arithmetic has 15 tests, and the
+drawing was checked on device with `MarkerRenderHarness`, which writes a sheet of every
+marker state to `getExternalFilesDir` for a person to look at.
+
+**Tabled by decision on 2026-08-29, in priority order:**
+
+1. **The card collides with both map FABs — a real defect, not a preference.** The card is
+   at `BottomCenter`, ≤320 dp wide, 80 dp up; the offline-download and zones FABs are at
+   `BottomStart`/`BottomEnd` at the same 80 dp. They clear each other only above 432 dp of
+   width, which is no phone in use. Fix by hiding the FABs while a card is open (preferred)
+   or lifting the card to ~140 dp.
+2. **Tapping the map does not dismiss the card.** Only the X, picking a name, or the group
+   dissolving closes it. `LongPressOverlay` already handles touches, so a single-tap
+   dismissal belongs there.
+3. **What tapping a name should do.** Today it asks for a drive estimate — the same thing
+   tapping that person's pin did — and closes. Alternatives were panning to them, or
+   zooming until the group splits.
+4. **Zoom-to-separate as a card action.** `clusterPins` can say exactly which zoom level
+   breaks a group apart, so "show them apart" is cheap and deterministic. Open question is
+   whether it earns its place, since the card already answers "who is here".
+
+Deferred deliberately: anchoring the card to the bubble instead of the bottom of the
+screen. It reads better and costs re-projection on every pan plus edge handling, and
+Life360 — the app this was modelled on — uses a bottom sheet anyway.
+
 ## Housekeeping
 
 - **Untracked**: `AGENTS.md` (a Codex-facing near-duplicate of `CLAUDE.md`),
