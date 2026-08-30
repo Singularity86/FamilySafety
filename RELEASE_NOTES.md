@@ -9,6 +9,53 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.13.3 (32) — shared documents get their own key
+
+Built from `5f3cbae` + the version bump. Supersedes 1.13.2 (31).
+
+**This one changes the wire format for new file uploads**, and unlike most such changes it
+is one-way. Everyone must be on 29 or later — confirmed for this family on 2026-08-30
+before the flip was made.
+
+### Play copy
+
+```
+Shared documents are now encrypted with their own key rather than the family key directly.
+Nothing changes in how you use the app, and documents you already shared stay readable.
+
+Everyone should be on the latest version — a device more than a few versions behind will
+stop receiving newly shared documents.
+```
+
+### What changed, and why it is worth a release
+
+Until now, shared documents were encrypted with the family key *itself*. That same key is
+the parent of every other key the app derives — presence has always used its own subkey
+rather than the raw secret. So the file key was effectively the master: anything that
+recovered it also yielded everything derived from it.
+
+Files now use `deriveSubkey(familyKey, "files")`. Identical secret underneath, but files
+become a leaf instead of the root, so a flaw in the file path costs the files and nothing
+else.
+
+### Why this took three releases to land
+
+The code that *reads* version 3 shipped in **29**; only the code that *writes* it lands
+here. That gap is the point. If both had shipped together, every device still on the
+previous release would have stopped being able to decrypt new files — and stopped
+silently, because a device on 28 does not recognise the new version and reject it. It falls
+through to the legacy key, fails authentication, and drops the chunk. Files would simply
+never arrive, with nothing to explain why.
+
+**Not reversible for anything published under it.** A device that stayed on 28 could never
+read those files, even after updating, unless they were shared again.
+
+Families created before 1.12.0 have no family key to derive from and are unaffected — they
+remain on the legacy key, which is the condition that makes recreating such a family worth
+doing in the first place.
+
+---
+
 ## 1.13.2 (31) — a mistyped recovery phrase no longer restores a stranger
 
 Built from the working tree at `339243e` + the version bump. Supersedes 1.13.1 (30).
