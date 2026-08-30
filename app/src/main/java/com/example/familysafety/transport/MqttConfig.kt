@@ -13,7 +13,48 @@ object MqttConfig {
     const val KEEP_ALIVE_SECONDS = 30 // short enough to survive typical NAT idle timeouts
     const val CONNECTION_TIMEOUT = 30
     const val RECONNECT_DELAY_MS = 5000L
-    
+
+    /**
+     * How many QoS-1 publishes may be awaiting acknowledgement at once.
+     *
+     * Paho's default is 10, and everything here is QoS 1 published once per recipient — so a
+     * five-member family turns one event into four slots and a single file share fills the
+     * window by itself. Ten is reachable in ordinary use, and Paho's response to a full
+     * window is to throw immediately.
+     *
+     * Raised modestly rather than generously on purpose. The client is built with
+     * MemoryPersistence, so every unacknowledged message is held in RAM until its PUBACK,
+     * and chunks are 32 KB: a deep window is megabytes of retained buffers on a phone. The
+     * ceiling being low was never the defect — mistaking it for a dead connection was.
+     */
+    const val MAX_INFLIGHT = 32
+
+    /**
+     * Bounds for the two offline queues. They are separate because the messages are not
+     * interchangeable: losing a location update costs one stale pin until the next fix,
+     * while losing a group-state update leaves a device holding the wrong family roster
+     * with nothing to tell it so. A single queue drops by age, which means a flood of
+     * location updates during an outage evicts exactly the message that must not be lost.
+     */
+    const val MAX_PENDING_CONTROL = 64
+    const val MAX_PENDING_BULK = 200
+
+    /**
+     * Whether a topic carries group membership or identity rather than ordinary traffic.
+     *
+     * Deliberately narrow: this is the set whose loss is *permanent*, not merely
+     * inconvenient. Chat and files are not here — both are replicated between devices and
+     * backfilled, so a dropped one is recoverable. A missed group-state update is not: the
+     * device simply believes something false about who is in the family, indefinitely.
+     */
+    fun isControlPlaneTopic(topic: String): Boolean =
+        topic.endsWith("/group_sync") ||
+            topic.endsWith("/sync_request") ||
+            topic.endsWith("/join_request") ||
+            topic.endsWith("/join_approval") ||
+            (topic.contains("/group/") && topic.endsWith("/ack"))
+
+
     fun generateClientId(memberId: String): String {
         return "familysafe_${memberId}"
     }

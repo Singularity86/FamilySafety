@@ -646,7 +646,15 @@ class LocationService : Service() {
                         recipientId = peer.memberId,
                         topic = MqttConfig.getLocationInboxTopic(peer.memberId),
                         payload = encryptedPayload.toByteArray(),
-                        qos = MqttConfig.QOS_AT_LEAST_ONCE,
+                        // At-most-once. A position supersedes itself: LocationRepository
+                        // discards anything older than what it already holds, so a
+                        // retransmitted stale fix is guaranteed to be thrown away on
+                        // arrival. At QoS 1 the cost is paid three times over — an
+                        // in-flight slot per recipient here, a broker session queue for
+                        // every offline peer, and a burst of positions on their reconnect
+                        // that the replay guard then drops. Delivery of the *current*
+                        // position is covered by the outbox retry and the heartbeat.
+                        qos = MqttConfig.QOS_AT_MOST_ONCE,
                         retained = false
                     ).also { delivered ->
                         anySucceeded = anySucceeded || delivered

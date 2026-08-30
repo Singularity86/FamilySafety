@@ -101,6 +101,24 @@ fun SyncIndicator(
                 icon = Icons.Default.WarningAmber
             )
         }
+        is GroupSyncManager.SyncState.Deferred -> SyncInfoSlot(
+            title = "Family list queued",
+            message = "Waiting. The latest family-list update is queued until a family device is reachable.",
+            details = "No family device could be reached just now — not on the local network and not through " +
+                "the relay. The update is held in a queue reserved for family-list changes, separate from " +
+                "everyday traffic like locations, so it cannot be crowded out while it waits. It will be sent " +
+                "automatically as soon as a connection is available, and your local copy of the family list " +
+                "is correct in the meantime.",
+            modifier = modifier
+        ) {
+            SyncChip(
+                text = "Queued",
+                iconTint = AmberWarning,
+                containerColor = AmberWarning.copy(alpha = 0.10f),
+                borderColor = AmberWarning.copy(alpha = 0.28f),
+                icon = Icons.Default.WarningAmber
+            )
+        }
         is GroupSyncManager.SyncState.Error -> SyncInfoSlot(
             title = "Sync error",
             message = "Needs attention. Jibaro Family Safety could not complete the latest family-list sync.",

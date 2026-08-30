@@ -54,7 +54,11 @@ class MqttTransport @Inject constructor(
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    private val pendingMessages = ConcurrentLinkedQueue<PendingMessage>()
+    // Two queues, not one. See MqttConfig.isControlPlaneTopic: a shared queue drops by age,
+    // so an outage full of location updates evicts the group-state message that must not be
+    // lost, and keeps the pin positions that the next fix would have replaced anyway.
+    private val pendingControlMessages = ConcurrentLinkedQueue<PendingMessage>()
+    private val pendingBulkMessages = ConcurrentLinkedQueue<PendingMessage>()
     private var familyMemberKeys = mutableMapOf<String, RecipientKeys>()
     private var networkObserverJob: Job? = null
 
@@ -174,6 +178,9 @@ class MqttTransport @Inject constructor(
                     isAutomaticReconnect = false  // we handle reconnect via scheduleReconnect()
                     connectionTimeout = MqttConfig.CONNECTION_TIMEOUT
                     keepAliveInterval = MqttConfig.KEEP_ALIVE_SECONDS
+                    // Paho defaults this to 10; see MqttConfig.MAX_INFLIGHT for why that is
+                    // reachable here and why the replacement is only modestly larger.
+                    maxInflight = MqttConfig.MAX_INFLIGHT
 
                     // Broker authentication (absent = anonymous, e.g. public dev broker)
                     val broker = BrokerConfig.getCurrentBroker()
@@ -428,22 +435,58 @@ class MqttTransport @Inject constructor(
                             continuation.resume(true)
                         }
                         override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
-                            Timber.w(exception, "$TAG: Failed to publish to $topic")
-                            queueMessage(topic, payload, qos, retained)
-                            _connectionState.value = ConnectionState.Disconnected
-                            scheduleReconnect()
+                            handlePublishFailure(topic, payload, qos, retained, exception)
                             continuation.resume(false)
                         }
                     })
                 }
             } catch (e: Exception) {
-                Timber.e(e, "$TAG: Error publishing to $topic")
-                queueMessage(topic, payload, qos, retained)
-                _connectionState.value = ConnectionState.Disconnected
-                scheduleReconnect()
+                handlePublishFailure(topic, payload, qos, retained, e)
                 false
             }
         }
+    }
+
+    /**
+     * Queue a failed publish, and decide whether the failure means the connection is gone.
+     *
+     * It usually does not. The common failure is the in-flight window filling up, which
+     * Paho reports by throwing immediately — the socket is fine, the broker is fine, the
+     * client is simply refusing to hold another unacknowledged message. Treating that as a
+     * disconnect had three consequences, all of them observed in the field:
+     *
+     *  - the app showed itself as disconnected with no network event behind it, then
+     *    recovered a few seconds later when the reconnect found the client still connected;
+     *  - each false alarm incremented the reconnect backoff (5 s, 10 s, 20 s … capped at
+     *    five minutes) without ever resetting it, so the phantom outages grew;
+     *  - every later send in the same loop hit the not-connected guard at the top of
+     *    [publishRaw] and never even attempted, so one failed recipient silently became all
+     *    of them. That is what turned a group-state broadcast into "Failed to broadcast
+     *    update" while every peer was reachable.
+     *
+     * So ask the client, which knows. A publish failure on a live connection is
+     * backpressure: the message is queued and the next drain will carry it.
+     */
+    private fun handlePublishFailure(
+        topic: String,
+        payload: ByteArray,
+        qos: Int,
+        retained: Boolean,
+        cause: Throwable?
+    ) {
+        queueMessage(topic, payload, qos, retained)
+
+        if (mqttClient?.isConnected == true) {
+            Timber.w(
+                cause,
+                "$TAG: publish to $topic failed while still connected — queued as backpressure"
+            )
+            return
+        }
+
+        Timber.w(cause, "$TAG: publish to $topic failed and the client is not connected")
+        _connectionState.value = ConnectionState.Disconnected
+        scheduleReconnect()
     }
 
     private suspend fun publishPresence(isOnline: Boolean) {
@@ -454,7 +497,11 @@ class MqttTransport @Inject constructor(
             isOnline,
             sign = { cryptoProvider.signMessage(it) }
         )
-        publishRaw(topic, sealPresence(presenceJson), MqttConfig.DEFAULT_QOS, true)
+        // At-most-once, because retained does the work here. The broker keeps the last
+        // presence message whatever its QoS and hands it to every new subscriber, and the
+        // next update supersedes this one entirely — so an acknowledged redelivery buys
+        // nothing and costs an in-flight slot on every publish.
+        publishRaw(topic, sealPresence(presenceJson), MqttConfig.QOS_AT_MOST_ONCE, true)
     }
 
     /** The group's presence subkey, or null for a group predating the shared key. */
@@ -506,21 +553,43 @@ class MqttTransport @Inject constructor(
     }
 
     private fun queueMessage(topic: String, payload: ByteArray, qos: Int, retained: Boolean) {
-        val msg = PendingMessage(topic, payload, qos, retained)
-        pendingMessages.offer(msg)
+        val control = MqttConfig.isControlPlaneTopic(topic)
+        val queue = if (control) pendingControlMessages else pendingBulkMessages
+        val bound = if (control) MqttConfig.MAX_PENDING_CONTROL else MqttConfig.MAX_PENDING_BULK
+
+        queue.offer(PendingMessage(topic, payload, qos, retained))
         val now = System.currentTimeMillis()
-        pendingMessages.removeIf { now - it.timestamp > 3600_000 }
-        while (pendingMessages.size > 200) pendingMessages.poll()
-        Timber.d("$TAG: Queued message for $topic (pending: ${pendingMessages.size})")
+        queue.removeIf { now - it.timestamp > 3600_000 }
+        while (queue.size > bound) queue.poll()
+
+        Timber.d(
+            "$TAG: Queued ${if (control) "control" else "bulk"} message for $topic " +
+                "(control: ${pendingControlMessages.size}, bulk: ${pendingBulkMessages.size})"
+        )
     }
 
+    /**
+     * Drain what was queued while sending was failing, control plane first.
+     *
+     * The two queues are drained independently so a bulk send that fails cannot strand a
+     * membership update behind it — with one queue and one `break`, the first failure ended
+     * the drain for everything after it, and what came after was whatever happened to be
+     * newest.
+     */
     private suspend fun processPendingMessages() {
-        while (pendingMessages.isNotEmpty()) {
-            if (_connectionState.value != ConnectionState.Connected) break
-            val msg = pendingMessages.poll() ?: break
+        drainQueue(pendingControlMessages)
+        drainQueue(pendingBulkMessages)
+    }
+
+    private suspend fun drainQueue(queue: ConcurrentLinkedQueue<PendingMessage>) {
+        while (queue.isNotEmpty()) {
+            if (_connectionState.value != ConnectionState.Connected) return
+            val msg = queue.poll() ?: return
             if (System.currentTimeMillis() - msg.timestamp > 3600_000) continue
             val sent = publishRaw(msg.topic, msg.payload, msg.qos, msg.retained)
-            if (!sent) break  // connection dropped mid-drain; remaining stay queued
+            // publishRaw re-queues on failure, so a message is never dropped by giving up
+            // here — stopping only avoids hammering a connection that is refusing work.
+            if (!sent) return
             delay(50)
         }
     }

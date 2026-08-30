@@ -242,6 +242,7 @@ private fun NetworkStatusCard(
                 is GroupSyncManager.SyncState.Synced   -> ColorSuccess to "Synced v${s.version}"
                 is GroupSyncManager.SyncState.Syncing  -> AmberWarning to "Syncing…"
                 is GroupSyncManager.SyncState.Conflict -> MaterialTheme.colorScheme.error to "Conflict detected"
+                is GroupSyncManager.SyncState.Deferred -> AmberWarning to "Queued for v${s.version}"
                 is GroupSyncManager.SyncState.Error    -> MaterialTheme.colorScheme.error to "Error: ${s.message}"
                 else                                   -> MaterialTheme.colorScheme.onSurfaceVariant to "Idle"
             }
@@ -374,6 +375,7 @@ private fun buildDiagnosticsReport(
         is GroupSyncManager.SyncState.Synced   -> "synced v${s.version}"
         is GroupSyncManager.SyncState.Syncing  -> "syncing"
         is GroupSyncManager.SyncState.Conflict -> "conflict"
+        is GroupSyncManager.SyncState.Deferred -> "queued for v${s.version} (${s.peerCount} peers)"
         is GroupSyncManager.SyncState.Error    -> "error: ${s.message}"
         else                                    -> "idle"
     })

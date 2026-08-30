@@ -97,6 +97,12 @@ class LocationRepository @Inject constructor(
             ?: location.memberId.take(8)
         geofenceMonitor.checkLocation(location, displayName)
 
+        // Stamp when we last heard a position from this member. This is what the
+        // diagnostics report's "last location" line reads, and until now nothing called
+        // it — so that line said "never" for every member on every device whether
+        // locations were flowing or not, which is worse than not printing it at all.
+        scope.launch { groupStateManager.recordLocationUpdate(location.memberId) }
+
         // Persist to database asynchronously
         scope.launch {
             try {

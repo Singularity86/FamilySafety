@@ -44,6 +44,16 @@ class GroupSyncManager @Inject constructor(
         data object Syncing : SyncState()
         data class Synced(val version: Long) : SyncState()
         data class Conflict(val localVersion: Long, val remoteVersion: Long) : SyncState()
+
+        /**
+         * The update could not go out yet and is queued for retry.
+         *
+         * Distinct from [Error] because nothing has gone wrong and nothing is lost — the
+         * transport holds control-plane messages in their own queue and drains them on
+         * reconnect. Reporting it as an error made an ordinary offline moment look like a
+         * defect, and made a real defect harder to spot among the noise.
+         */
+        data class Deferred(val version: Long, val peerCount: Int) : SyncState()
         data class Error(val message: String) : SyncState()
     }
 
@@ -124,8 +134,12 @@ class GroupSyncManager @Inject constructor(
                     waitForAcknowledgments(groupDefinition.version, groupDefinition.members.size)
                     _syncState.value = SyncState.Synced(groupDefinition.version)
                 } else {
-                    Timber.w("Failed to send encrypted sync to any peers")
-                    _syncState.value = SyncState.Error("Failed to broadcast update")
+                    // Not a failure. Group sync is a control-plane topic, so the transport
+                    // has queued every one of these and will drain them when it can. Calling
+                    // it an error put "Failed to broadcast update" on screen for a message
+                    // that was sitting in a queue waiting for a connection.
+                    Timber.w("No peer reachable for group update v${groupDefinition.version} — queued for retry")
+                    _syncState.value = SyncState.Deferred(groupDefinition.version, peers.size)
                 }
 
             } catch (e: Exception) {

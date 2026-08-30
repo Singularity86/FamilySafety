@@ -3,6 +3,7 @@ package com.example.familysafety.location
 import com.example.familysafety.geofence.GeofenceMonitor
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.storage.LocationHistoryRepository
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -244,5 +245,31 @@ class LocationRepositoryTest {
 
         assertNull(locationRepo.memberLocations.value["alice"])
         assertNotNull(locationRepo.memberLocations.value["bob"])
+    }
+
+    // ── recordLocationUpdate ──────────────────────────────────────────────────
+    // The diagnostics report's "last location" line reads a timestamp that only
+    // GroupStateManager.recordLocationUpdate writes, and for a long time nothing called
+    // it — so the line read "never" for everybody, on every device, whether or not
+    // locations were arriving. These two say when it is stamped and when it is not.
+    // The stamping runs on Dispatchers.IO, hence the verification timeout.
+
+    @Test
+    fun `accepting a location stamps when we last heard from that member`() {
+        locationRepo.updateMemberLocation(makeLocation("alice"))
+
+        coVerify(timeout = 2_000) { mockGroupStateManager.recordLocationUpdate("alice") }
+    }
+
+    @Test
+    fun `a location older than the one held does not stamp`() {
+        locationRepo.updateMemberLocation(makeLocation("alice", timestamp = 2_000L))
+        locationRepo.updateMemberLocation(makeLocation("alice", timestamp = 1_000L))
+
+        // Exactly once — from the first, accepted update. The replayed older one is
+        // dropped before it reaches the stamp, so it cannot make a member look present.
+        coVerify(exactly = 1, timeout = 2_000) {
+            mockGroupStateManager.recordLocationUpdate("alice")
+        }
     }
 }
