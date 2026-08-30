@@ -359,6 +359,81 @@ Deferred deliberately: anchoring the card to the bubble instead of the bottom of
 screen. It reads better and costs re-projection on every pan plus edge handling, and
 Life360 — the app this was modelled on — uses a bottom sheet anyway.
 
+## Track 10 — 16 KB page sizes, second round
+
+The Pixel outage (Track 2) was about **alignment**. Play's warning on release 29 is about
+the **toolchain**: a library can be perfectly aligned and still be built by an NDK old
+enough to carry the bug. The verification written after Track 2 checks alignment, and only
+on arm64 — so it would pass a library that trips this, and it did.
+
+Play named `base/lib/arm64-v8a/libjnidispatch.so` and `base/lib/x86_64/libjnidispatch.so`
+— JNA, the layer lazysodium reaches libsodium through.
+
+**What was measured** (by reading `.note.android.ident` out of every `.so`, not from
+release notes):
+
+| library | from | NDK | newest available | after upgrade |
+|---|---|---|---|---|
+| `libjnidispatch.so` | JNA 5.13.0 | **none — GCC 4.9.x, 2015** | 5.19.1 | still none |
+| `libsqlcipher.so` | sqlcipher-android 4.9.0 | r25c | 4.18.0 | **still r25c** |
+| `libandroidx.graphics.path.so` | graphics-path 1.0.1 (transitive) | r25c | 1.1.0 | r27 |
+| `libimage_processing_util_jni.so` | CameraX 1.4.2 | r25c | 1.6.2 | r27 |
+| `libsurface_util_jni.so` | CameraX 1.4.2 | r25c | 1.6.2 | r27 |
+| `libbarhopper_v3.so` | ML Kit 17.3.0 | r27 | — | — |
+| `libsodium.so` | lazysodium 5.2.0 | **r29-beta1** | — | — |
+
+Two findings worth keeping. **SQLCipher's newest release is still r25c**, so upgrading it
+is not a fix for anything here. And **lazysodium is not the problem** — its `libsodium.so`
+is the most modern binary in the bundle; only the JNA plumbing is old.
+
+**Done in 30:**
+
+- **JNA 5.13.0 → 5.19.1.** x86_64 was aligned to 4 KB and nobody had noticed, because the
+  alignment check only ever ran on arm64. Every ABI is 16 KB now, and it carries the fix
+  for the Android 15 SIGSEGV (java-native-access/jna#1618, #1647). Verified
+  behaviour-neutral on device: 45 of 49 instrumented tests pass identically before and
+  after, and the four that fail are pre-existing (below).
+- **x86_64 dropped from release.** A trap here: `defaultConfig.ndk.abiFilters` and a build
+  type's are **unioned, not overridden**, so listing x86_64 in `defaultConfig` and
+  "filtering" it in `release` ships it anyway. `defaultConfig` is ARM-only now and `debug`
+  adds x86_64 back, since an emulator is where a second test family member comes from.
+
+**Still open.** The warning is expected to survive both changes: JNA 5.19.1 has the same
+GCC 4.9 marker and no NDK note, and its AAR still ships `mips`/`mips64` — ABIs deleted from
+the NDK in 2018 — so no version bump will modernise it. The routes that would actually
+clear it:
+
+1. Build `jnidispatch` from source against NDK r28+. Turns a pure-JVM build into a native
+   one (`dispatch.c` plus libffi, which is per-architecture assembly) for the sake of one
+   168 KB file, and every JNA upgrade repeats it.
+2. Leave JNA behind. The drop-in candidate is not viable — `libsodium-jni` was last
+   published in **April 2019**. The real version is reimplementing the primitives on
+   BouncyCastle (Ed25519, X25519, Argon2id, Salsa20/Poly1305), which deletes the entire
+   native crypto path and makes the crypto unit-testable on the JVM for the first time.
+   The surface is small — `cryptoSignSeedKeypair`, `cryptoSignDetached`,
+   `cryptoSignVerifyDetached`, `cryptoScalarMultBase`, `cryptoBoxEasy`/`OpenEasy`,
+   `cryptoBoxBeforeNm`, `cryptoSecretBoxEasy`/`OpenEasy`, `cryptoPwHash`, `randomBytesBuf`,
+   across five files. The hard constraint is byte-compatibility with 29 in the wild, and
+   the acceptance criteria already exist: `ios/IOS_PORT_SPEC.md` carries
+   libsodium-verified test vectors for exactly these primitives.
+3. Accept it. It is a technical-quality advisory on a published release, not a block.
+
+### Four instrumented tests fail, and did before any of this
+
+Found while establishing a baseline for the JNA upgrade, so **not caused by it** — they
+fail identically on 5.13.0:
+
+- `CryptoIntegrationTest.bip39_validateMnemonic_acceptsValidMnemonics`
+- `CryptoIntegrationTest.bip39_validateMnemonic_rejectsInvalidWordCounts`
+- `KeyDerivationTest.derivation_works_with24WordMnemonic`
+- `PersistenceIntegrationTest.groupStateManager_survivesRestart` — asserts "Should still be
+  in group" after a restart, which is worth looking at first: it is the only one whose
+  failure mode, if real rather than a test-harness artefact, would be visible to a family.
+
+Unexamined. The unit suite (444) is green; these are the on-device ones, run with
+`connectedDebugAndroidTest` or `am instrument`, and nothing in the workflow ran them
+routinely until now.
+
 ## Track 9 — Transport: a full in-flight window read as a dead connection
 
 Fixed in `fdd190b`. The defect that produced Track 3b, and the explanation for the

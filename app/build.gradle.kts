@@ -49,11 +49,13 @@ android {
             useSupportLibrary = true
         }
         ndk {
-            // Include all ABIs shipped by lazysodium-android and JNA.
-            // arm64-v8a covers modern phones (S20 FE and most devices since ~2017).
-            // armeabi-v7a covers older 32-bit ARM phones.
-            // x86_64 covers emulators.
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            // ARM only by default. arm64-v8a covers modern phones; armeabi-v7a covers
+            // older 32-bit ARM ones.
+            //
+            // x86_64 lives in the debug build type instead of here, because buildType
+            // abiFilters are UNIONED with these rather than replacing them — listing it
+            // here and "filtering" in release would have silently shipped it anyway.
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
     }
 
@@ -85,6 +87,12 @@ android {
             // produces app logs.
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+
+            // Emulators are x86_64, and an emulator is where a second test family member
+            // comes from — so debug carries it and release does not.
+            ndk {
+                abiFilters += listOf("x86_64")
+            }
             buildConfigField("String", "MQTT_ENVIRONMENT", "\"DEVELOPMENT\"")
             buildConfigField("String", "MQTT_USERNAME", "\"${mqttProperties.getProperty("username", "")}\"")
             buildConfigField("String", "MQTT_PASSWORD", "\"${mqttProperties.getProperty("password", "")}\"")
@@ -114,6 +122,13 @@ android {
             // native sources or a dependency ships unstripped libraries.
             ndk {
                 debugSymbolLevel = "SYMBOL_TABLE"
+
+                // Release ships ARM only — see defaultConfig. Every phone this app is for
+                // is arm64; x86_64 reaches emulators and some Chromebooks, and Chromebooks
+                // can run ARM through translation. Leaving it out removes half the
+                // libraries Play flags for 16 KB (the arm64 copy of libjnidispatch is
+                // still flagged, so this narrows the surface rather than clearing the
+                // warning) and drops a set of binaries no family member would ever run.
             }
         }
     }
@@ -179,7 +194,16 @@ dependencies {
     
     // Cryptography - Lazysodium
     implementation("com.goterl:lazysodium-android:5.2.0@aar")
-    implementation("net.java.dev.jna:jna:5.13.0@aar")
+    // 5.13.0 shipped an x86_64 libjnidispatch.so aligned to 4 KB, which cannot load on a
+    // 16 KB-page device; 5.19.1 aligns every ABI to 16 KB and carries the fix for the
+    // SIGSEGV that JNA hit on Android 15 (java-native-access/jna#1618, #1647).
+    //
+    // It does NOT change the toolchain: both versions are built by GCC 4.9 from 2015 with
+    // no .note.android.ident at all, and the AAR still ships mips and mips64 — ABIs the NDK
+    // deleted in 2018. So Play's "compiled using an older Android NDK version" warning is
+    // expected to survive this upgrade. Clearing it means building jnidispatch ourselves or
+    // leaving JNA behind; both are recorded in PROJECT_STATUS.md.
+    implementation("net.java.dev.jna:jna:5.19.1@aar")
     
     // Location Services
     implementation("com.google.android.gms:play-services-location:21.0.1")

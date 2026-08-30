@@ -60,6 +60,30 @@ this.** It stops the divergence happening again and lets the correction through 
 correction still has to be sent. Open the app on both devices, and use Check Family List
 on the Security screen from the device that is behind.
 
+### 16 KB page sizes
+
+Play flagged release 29 for `libjnidispatch.so` on arm64-v8a and x86_64 — JNA, the layer
+lazysodium calls libsodium through. Two things were true and only one was known:
+
+- **x86_64 was never 16 KB-aligned at all** (4 KB), which earlier verification missed by
+  only ever inspecting arm64. JNA 5.13.0 → 5.19.1 aligns every ABI and carries the fix for
+  the SIGSEGV JNA hit on Android 15 (java-native-access/jna#1618, #1647).
+- **x86_64 is no longer shipped in release.** Every phone this app is for is arm64;
+  x86_64 reached emulators and some Chromebooks, and Chromebooks can run ARM through
+  translation. Debug still builds it, because an emulator is where a second test family
+  member comes from.
+
+**The warning is expected to survive both changes.** JNA 5.19.1 is built by the same GCC
+4.9 toolchain from 2015 with no NDK marker at all — its AAR still ships `mips` and
+`mips64`, ABIs the NDK deleted in 2018 — so Play will still see "compiled using an older
+Android NDK version" on the arm64 copy. Clearing it means building `jnidispatch` from
+source against NDK r28+, or leaving JNA behind entirely. Both are recorded in
+`PROJECT_STATUS.md` rather than rushed.
+
+Also checked and *not* the problem: SQLCipher 4.18.0 — the newest release — is still built
+with NDK r25c, so upgrading it would change nothing. CameraX 1.6.2 and graphics-path 1.1.0
+would move two libraries from r25c to r27, but neither was flagged.
+
 ### The map
 
 People close enough that their pins would cover each other are grouped into one bubble.
