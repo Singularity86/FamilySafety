@@ -338,6 +338,10 @@ fun MapScreen(
     // The people currently sharing a patch of screen, and which of those groups is open.
     var pinClusters by remember { mutableStateOf<List<PinCluster>>(emptyList()) }
     var expandedClusterKey by remember { mutableStateOf<String?>(null) }
+    // Shown once, the first time a group ever appears on this device, and never again —
+    // a grouped pin is not self-explanatory the first time but is obvious the second.
+    var showClusterTutorial by remember { mutableStateOf(false) }
+    var clusterTutorialSeen by remember { mutableStateOf(hasSeenClusterTutorial(context)) }
     // Which raised member a group was already opened for. Without this, closing the card
     // while that member is still raised would reopen it on the very next rebuild.
     var autoExpandedFor by remember { mutableStateOf<String?>(null) }
@@ -374,6 +378,13 @@ fun MapScreen(
         if (expandedClusterKey != null && clusters.none { it.key == expandedClusterKey }) {
             expandedClusterKey = null
         }
+        // First group this device has ever drawn: say what it is, once.
+        if (!clusterTutorialSeen && clusters.any { !it.isSingle }) {
+            clusterTutorialSeen = true
+            showClusterTutorial = true
+            markClusterTutorialSeen(context)
+        }
+
         // Asking to see someone who turns out to be in a huddle should say who they are
         // huddled with, rather than drop a bubble on the map and leave them to guess.
         if (raisedMemberId != null && raisedMemberId != autoExpandedFor) {
@@ -608,7 +619,15 @@ fun MapScreen(
                 }
         )
 
-        if (isDownloading) {
+        val openCluster = pinClusters.find { it.key == expandedClusterKey }
+
+        // The card naming a group sits at the bottom centre, up to 320 dp wide, and these
+        // controls are pinned to the same 80 dp on both edges — they only clear each other
+        // above 432 dp of screen width, which is no phone in use. So the map controls stand
+        // down while a group is open, and come back when it closes.
+        val bottomControlsVisible = openCluster == null
+
+        if (bottomControlsVisible && isDownloading) {
             Surface(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -654,7 +673,7 @@ fun MapScreen(
                     )
                 }
             }
-        } else {
+        } else if (bottomControlsVisible) {
             SmallFloatingActionButton(
                 onClick = { showDownloadDialog = true },
                 modifier = Modifier
@@ -666,20 +685,51 @@ fun MapScreen(
             }
         }
 
-        SmallFloatingActionButton(
-            onClick = onNavigateToZones,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 80.dp),
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        ) {
-            Icon(Icons.Default.LocationCity, contentDescription = "Manage zones")
+        if (bottomControlsVisible) {
+            SmallFloatingActionButton(
+                onClick = onNavigateToZones,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 80.dp),
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            ) {
+                Icon(Icons.Default.LocationCity, contentDescription = "Manage zones")
+            }
+        }
+
+        if (showClusterTutorial) {
+            AlertDialog(
+                onDismissRequest = { showClusterTutorial = false },
+                title = { Text("Two of you are in the same place") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "When people are close enough together that their pins would " +
+                                "cover each other up, the map stacks them into one bubble " +
+                                "instead of hiding whoever was drawn second.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            "Tap the bubble to spread the faces out and see who is there. " +
+                                "Zoom in and they separate back into their own pins.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            "You'll only see this once.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = { showClusterTutorial = false }) { Text("Got it") }
+                }
+            )
         }
 
         // The opened group. The bubble on the map says how many people are standing
         // together and shows the first few faces; this is where they get their names back,
         // which is the part the map cannot show at pin size.
-        val openCluster = pinClusters.find { it.key == expandedClusterKey }
         if (openCluster != null && !openCluster.isSingle) {
             Surface(
                 modifier = Modifier
@@ -687,7 +737,9 @@ fun MapScreen(
                     .padding(bottom = 80.dp, start = 16.dp, end = 16.dp)
                     .widthIn(max = 320.dp),
                 shape = MaterialTheme.shapes.medium,
-                color = MaterialTheme.colorScheme.surface,
+                // Half-opaque: the card sits over the map it is describing, and the pins
+                // and streets underneath it are the context for the names on top.
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 tonalElevation = 3.dp
             ) {
@@ -976,6 +1028,24 @@ private fun drawMemberDisc(
 /** How many faces a bubble shows before the rest become a count. */
 internal const val CLUSTER_FACES_SHOWN = 3
 
+/**
+ * Whether the one-time explanation of grouped pins has been shown on this device.
+ *
+ * Stored in the same preference file the tips use. A flag on disk is the whole point here:
+ * the bubble needs explaining exactly once, and an explanation that reappears is worse than
+ * one that never came.
+ */
+private const val CLUSTER_TUTORIAL_PREF = "map_cluster_tutorial_seen"
+
+private fun hasSeenClusterTutorial(context: android.content.Context): Boolean =
+    context.getSharedPreferences("familysafety_prefs", android.content.Context.MODE_PRIVATE)
+        .getBoolean(CLUSTER_TUTORIAL_PREF, false)
+
+private fun markClusterTutorialSeen(context: android.content.Context) {
+    context.getSharedPreferences("familysafety_prefs", android.content.Context.MODE_PRIVATE)
+        .edit().putBoolean(CLUSTER_TUTORIAL_PREF, true).apply()
+}
+
 /** One face in a cluster bubble. */
 internal data class ClusterFace(
     val memberId: String,
@@ -1002,10 +1072,16 @@ internal fun clusterMarkerBitmap(
 ): Bitmap {
     val discD  = sizePx * 0.60f
     val discR  = discD / 2f
-    val pad    = sizePx * 0.11f
+    val pad    = sizePx * 0.09f
     val gap    = sizePx * 0.05f
     val tailH  = sizePx * 0.20f
     val bleed  = sizePx * 0.08f          // room for the shadow to spill into
+
+    // Closed, the faces sit on each other with a third of their width hidden — a stack,
+    // which is both smaller on the map and reads as "these people are in one place".
+    // Opening spreads them to full width with a gap, so the tap has a visible result on
+    // the marker itself and not only in the card.
+    val faceAdvance = if (isOpen) discD + gap else discD * 0.67f
 
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     paint.textSize = discD * 0.44f
@@ -1018,8 +1094,7 @@ internal fun clusterMarkerBitmap(
     // The count needs more room at the end than a face does: the cap is a half-circle, so
     // the white behind text at mid-height runs out sooner than the outline suggests.
     val capsuleW = pad * 2 +
-        faces.size * discD +
-        (faces.size - 1).coerceAtLeast(0) * gap +
+        discD + (faces.size - 1).coerceAtLeast(0) * faceAdvance +
         (if (overflowLabel != null) gap + overflowW + pad * 0.5f else 0f)
 
     val bmp = Bitmap.createBitmap(
@@ -1036,19 +1111,35 @@ internal fun clusterMarkerBitmap(
     val tipX   = left + capsuleW / 2f
     val tipY   = bottom + tailH
 
-    // Capsule and tail as one path, so the shadow behind them is a single shape rather
-    // than two overlapping ones with a seam where they meet.
-    fun bubblePath(inset: Float, tip: Float) = android.graphics.Path().apply {
-        val rect = android.graphics.RectF(
-            left + inset, top + inset, right - inset, bottom - inset
-        )
-        val radius = rect.height() / 2f
-        addRoundRect(rect, radius, radius, android.graphics.Path.Direction.CW)
-        val half = sizePx * 0.085f
-        moveTo(tipX - half, bottom - inset - 1f)
-        lineTo(tipX + half, bottom - inset - 1f)
-        lineTo(tipX, tip)
-        close()
+    // Capsule and tail unioned into a single outline.
+    //
+    // Adding the two as separate subpaths of one Path was not enough: a stroke outlines
+    // every subpath independently, so a line was drawn straight across the top of the tail
+    // and the point read as a separate arrow stuck underneath rather than as part of the
+    // bubble. Path.op(UNION) merges them into one region with one boundary. The triangle
+    // deliberately starts well inside the capsule so the two shapes genuinely overlap —
+    // shapes that merely touch can leave a hairline where the union seams.
+    fun bubblePath(inset: Float, tip: Float): android.graphics.Path {
+        val body = android.graphics.Path().apply {
+            val rect = android.graphics.RectF(
+                left + inset, top + inset, right - inset, bottom - inset
+            )
+            val radius = rect.height() / 2f
+            addRoundRect(rect, radius, radius, android.graphics.Path.Direction.CW)
+        }
+        val tail = android.graphics.Path().apply {
+            // Wide enough to read as the bubble narrowing to a point. The capsule got
+            // shorter when the faces started overlapping; a tail sized for the old one
+            // looked like a drip hanging off it rather than part of the same shape.
+            val half = sizePx * 0.14f
+            val shoulderY = bottom - inset - capsuleH * 0.3f
+            moveTo(tipX - half, shoulderY)
+            lineTo(tipX + half, shoulderY)
+            lineTo(tipX, tip)
+            close()
+        }
+        body.op(tail, android.graphics.Path.Op.UNION)
+        return body
     }
 
     // 1 — Soft drop shadow, matching the single pin's
@@ -1074,10 +1165,17 @@ internal fun clusterMarkerBitmap(
     canvas.drawPath(bubblePath(paint.strokeWidth / 2f, tipY - paint.strokeWidth / 2f), paint)
     paint.style = Paint.Style.FILL
 
-    // 4 — The faces, left to right
-    var cx = left + pad + discR
+    // 4 — The faces.
+    //
+    // Drawn right to left so the leftmost ends up on top of the stack. That matters when
+    // they overlap: the caller puts the member who was asked for first in the list, and
+    // being asked for is the wrong time to be the face buried under two others.
     val cy = top + pad + discR
-    for (face in faces) {
+    val firstCx = left + pad + discR
+    val separator = if (isOpen) 0f else (discR * 0.16f).coerceAtLeast(2f)
+    for (index in faces.indices.reversed()) {
+        val face = faces[index]
+        val cx = firstCx + index * faceAdvance
         val hue = face.colorHue
             ?: ((face.memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
         // A stale face fades on its own; the bubble around it stays solid, since the
@@ -1086,6 +1184,12 @@ internal fun clusterMarkerBitmap(
             0f, 0f, bmp.width.toFloat(), bmp.height.toFloat(),
             if (face.isStale) 140 else 255
         )
+        // A white collar under each overlapping face, so a stack reads as separate people
+        // rather than as one smeared shape where two accent rings meet.
+        if (separator > 0f) {
+            paint.color = Color.WHITE
+            canvas.drawCircle(cx, cy, discR + separator, paint)
+        }
         drawMemberDisc(
             canvas = canvas,
             cx = cx,
@@ -1099,15 +1203,15 @@ internal fun clusterMarkerBitmap(
             highlight = face.memberId == highlightMemberId
         )
         canvas.restoreToCount(restore)
-        cx += discD + gap
     }
 
     // 5 — "+N" for whoever did not fit
     if (overflowLabel != null) {
         paint.color = Color.argb(190, 30, 30, 30)
         paint.textAlign = Paint.Align.LEFT
+        val lastCx = firstCx + (faces.size - 1).coerceAtLeast(0) * faceAdvance
         val textY = cy - (paint.descent() + paint.ascent()) / 2f
-        canvas.drawText(overflowLabel, cx - discR, textY, paint)
+        canvas.drawText(overflowLabel, lastCx + discR + gap, textY, paint)
     }
 
     return bmp

@@ -66,9 +66,13 @@ class MarkerRenderHarness {
                 listOf(face("b", "Beto", 30f), face("a", "Ana", 210f), face("c", "Cruz", 120f)),
                 totalCount = 3, sizePx = sizePx, highlightMemberId = "b", isOpen = false
             ),
-            "open" to clusterMarkerBitmap(
+            "open (spread out)" to clusterMarkerBitmap(
                 listOf(face("a", "Ana", 210f), face("b", "Beto", 30f), face("c", "Cruz", 120f)),
                 totalCount = 3, sizePx = sizePx, highlightMemberId = null, isOpen = true
+            ),
+            "open, with overflow" to clusterMarkerBitmap(
+                listOf(face("a", "Ana", 210f), face("b", "Beto", 30f), face("c", "Cruz", 120f)),
+                totalCount = 6, sizePx = sizePx, highlightMemberId = null, isOpen = true
             ),
             "one face stale" to clusterMarkerBitmap(
                 listOf(face("a", "Ana", 210f), face("b", "Beto", 30f, stale = true)),
