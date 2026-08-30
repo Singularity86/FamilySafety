@@ -418,21 +418,48 @@ clear it:
    libsodium-verified test vectors for exactly these primitives.
 3. Accept it. It is a technical-quality advisory on a published release, not a block.
 
-### Four instrumented tests fail, and did before any of this
+### Four instrumented tests were failing — three were the tests, one was the app
 
-Found while establishing a baseline for the JNA upgrade, so **not caused by it** — they
-fail identically on 5.13.0:
+Found while establishing a baseline for the JNA upgrade, so **not caused by it**: they
+failed identically on 5.13.0. Nothing in the workflow ran the on-device tests routinely,
+so they had been red for a while. All 49 pass now.
 
-- `CryptoIntegrationTest.bip39_validateMnemonic_acceptsValidMnemonics`
-- `CryptoIntegrationTest.bip39_validateMnemonic_rejectsInvalidWordCounts`
-- `KeyDerivationTest.derivation_works_with24WordMnemonic`
-- `PersistenceIntegrationTest.groupStateManager_survivesRestart` — asserts "Should still be
-  in group" after a restart, which is worth looking at first: it is the only one whose
-  failure mode, if real rather than a test-harness artefact, would be visible to a family.
+- **Two BIP-39 tests never initialised the wordlist.** It is read from a resource on
+  demand, and the only caller in the app is `OnboardingViewModel`, which initialises it
+  first. Test setup omission.
+- **`PersistenceIntegrationTest.groupStateManager_survivesRestart` raced a dispatcher.**
+  `isInGroup` is `stateIn(scope, Eagerly, false)` on `Dispatchers.Default`, so `.value`
+  immediately after `initialize()` is still the initial `false` — which read as a device
+  coming back from a restart outside its family. It waits for the flow now. The sibling
+  unit test documents this hazard and avoids it deliberately. (`isInGroup` also has **no
+  consumers in the app** — `MainActivity` decides from `membershipState`. Third piece of
+  dead API after `recordLocationUpdate` and the `RemovedFromGroup` event.)
+- **The fourth was real, and it was the important one.**
 
-Unexamined. The unit suite (444) is green; these are the on-device ones, run with
-`connectedDebugAndroidTest` or `am instrument`, and nothing in the workflow ran them
-routinely until now.
+### The recovery-phrase defect the fourth test was pointing at
+
+`Bip39.validateMnemonic` checked only that every word appeared in the wordlist:
+`mnemonicWords.all { it in words }`. No word count, and **no checksum** — the entire
+purpose of BIP-39's last word. `"abandon abandon abandon"` validated. So would twelve real
+words in the wrong order.
+
+Worse, **nothing called it**, and `DataValidator.validateMnemonic` was exercised only by
+unit tests. Meanwhile `RestoreMnemonicScreen` gates its button on `allWordsFilled` and
+nothing else, then `restoreAccount()` → `initializeKeys()` derives from whatever was typed.
+
+There is no account to fail against here. A phrase that validates derives *a* key, so one
+mistyped word — still a real word, just the wrong one — derived a **different identity**,
+saved it, marked onboarding complete, and dropped the user into the app as a stranger: new
+member ID, not in their family, no error at any point. The same shape as a wrong vault code
+opening an empty vault, except that one is deliberate deniability and this was a missing
+check.
+
+Fixed: `validateMnemonic` now verifies length, membership and checksum by running the
+generator's construction backwards, and the restore screen checks before deriving anything
+and refuses with an explanation. For twelve words the checksum is four bits, so roughly
+fifteen in sixteen single-word errors are now caught. Tested against the canonical BIP-39
+vectors with the real wordlist, including the case that matters — every word real, count
+right, checksum wrong.
 
 ## Track 9 — Transport: a full in-flight window read as a dead connection
 

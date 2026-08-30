@@ -45,6 +45,27 @@ class OnboardingViewModel @Inject constructor(
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    /**
+     * Whether [words] form a real BIP-39 recovery phrase.
+     *
+     * Restoring cannot fail the way a password can: there is nothing to check a phrase
+     * against, so any twelve words derive *a* key and a wrong phrase derives a different
+     * person. Before this check, a single mistyped word — still a real word, just the
+     * wrong one — restored a stranger's identity, marked onboarding complete and dropped
+     * the user into an app where they were nobody, with no error anywhere in the flow.
+     *
+     * Initialises the wordlist because restore is the one path that reaches BIP-39 without
+     * having generated a phrase first.
+     */
+    fun isValidRecoveryPhrase(words: List<String>): Boolean {
+        return try {
+            Bip39.initialize(context)
+            Bip39.validateMnemonic(words.joinToString(" "))
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     fun generateMnemonic() {
         viewModelScope.launch {
             _isLoading.value = true

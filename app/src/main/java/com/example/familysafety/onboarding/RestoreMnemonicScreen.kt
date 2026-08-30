@@ -20,6 +20,9 @@ fun RestoreMnemonicScreen(
 ) {
     var words by remember { mutableStateOf(List(12) { "" }) }
     val allWordsFilled = words.all { it.isNotBlank() }
+    // Cleared as soon as anything is edited, so the message belongs to what is on screen
+    // now rather than to whatever was there when Restore was last pressed.
+    var phraseRejected by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -65,6 +68,7 @@ fun RestoreMnemonicScreen(
                             value = words[index],
                             onValueChange = { newValue ->
                                 words = words.toMutableList().also { it[index] = newValue }
+                                phraseRejected = false
                             },
                             label = { Text("${index + 1}") },
                             singleLine = true,
@@ -74,10 +78,35 @@ fun RestoreMnemonicScreen(
                 }
             }
 
+            if (phraseRejected) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "That isn't a valid recovery phrase. Check the spelling and " +
+                            "the order of the words — a recovery phrase carries a checksum, " +
+                            "so one wrong or swapped word is enough to fail this check.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
             Button(
                 onClick = {
+                    // Checked before anything is derived. A phrase that is merely twelve
+                    // real words derives a valid key belonging to nobody, and restoring
+                    // into that identity is silent and hard to undo.
+                    if (!viewModel.isValidRecoveryPhrase(words)) {
+                        phraseRejected = true
+                        return@Button
+                    }
                     viewModel.setMnemonic(words)
                     onNext()
                 },

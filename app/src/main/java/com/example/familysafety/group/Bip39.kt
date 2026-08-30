@@ -123,15 +123,58 @@ object Bip39 {
         return key.encoded
     }
 
+    /** The only lengths BIP-39 defines. Anything else is not a recovery phrase. */
+    private val VALID_WORD_COUNTS = setOf(12, 15, 18, 21, 24)
+
     /**
-     * Validate a BIP-39 mnemonic.
+     * Validate a BIP-39 mnemonic: length, wordlist membership, and checksum.
+     *
+     * This used to check only that every word appeared in the wordlist, which accepted
+     * "abandon abandon abandon" and any twelve real words in the wrong order. That matters
+     * because there is no account to fail against: a phrase that validates derives *a*
+     * key, and a wrong phrase derives a different person's key rather than an error.
+     *
+     * The checksum is what catches a typo. [generate12WordMnemonic] builds each phrase as
+     * entropy followed by the leading bits of its SHA-256, so this runs that backwards:
+     * rebuild the bit string from the word indices, split it at the entropy boundary, and
+     * re-derive what the checksum should have been. For twelve words that is four bits, so
+     * roughly fifteen in sixteen single-word mistakes are rejected here rather than
+     * silently becoming somebody else.
      *
      * @param mnemonic Space-separated mnemonic words
-     * @return true if all words are in the BIP-39 wordlist
+     * @return true if this is a well-formed BIP-39 phrase
      */
     fun validateMnemonic(mnemonic: String): Boolean {
         val words = getWordlist()
-        val mnemonicWords = mnemonic.trim().lowercase().split("\\s+".toRegex())
-        return mnemonicWords.all { it in words }
+        val mnemonicWords = mnemonic.trim().lowercase()
+            .split("\\s+".toRegex())
+            .filter { it.isNotEmpty() }
+
+        if (mnemonicWords.size !in VALID_WORD_COUNTS) return false
+
+        val indices = mnemonicWords.map { words.indexOf(it) }
+        if (indices.any { it < 0 }) return false
+
+        // 11 bits per word: entropy, then checksum.
+        val bits = StringBuilder(indices.size * 11)
+        for (index in indices) {
+            bits.append(index.toString(2).padStart(11, '0'))
+        }
+
+        val entropyBits = mnemonicWords.size * 11 * 32 / 33
+        val checksumBits = mnemonicWords.size * 11 - entropyBits
+
+        val entropy = ByteArray(entropyBits / 8) { i ->
+            Integer.parseInt(bits.substring(i * 8, i * 8 + 8), 2).toByte()
+        }
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(entropy)
+
+        val expected = StringBuilder(checksumBits)
+        for (i in 0 until checksumBits) {
+            val byte = hash[i / 8].toInt() and 0xFF
+            expected.append((byte shr (7 - i % 8)) and 1)
+        }
+
+        return bits.substring(entropyBits) == expected.toString()
     }
 }
