@@ -1367,11 +1367,30 @@ class SharedFileRepository @Inject constructor(
      * exposed, because the legacy key is computable from the groupId in the topic name
      * plus a constant in the APK. See SECURITY_REVIEW.md F1.
      */
+    /**
+     * The key new uploads are encrypted under, and the version stamped on them.
+     *
+     * Publishes version 3 — the group key with domain separation — as of 1.13.2. Version 2
+     * used the group key *raw*, which made the file key the master key: anything that
+     * recovered it also yielded presence and every other subkey derived from the same
+     * secret. Under version 3 files are a leaf, so a mistake in the file path costs the
+     * files and nothing else. It is the same arrangement presence has always had.
+     *
+     * The reader for version 3 shipped in 29, a release ahead of this writer, deliberately.
+     * A device on 28 does not report an unknown version — its `keyForVersion` falls through
+     * to `else -> deriveLegacyFileKey`, decrypts with the wrong key, fails GCM
+     * authentication and drops the chunk, so files would simply stop arriving with nothing
+     * on screen to say why. Confirmed 2026-08-30 that every device in the family is on 29
+     * or later before flipping this.
+     */
     private fun resolveEncryptionKey(groupId: String): Pair<ByteArray, Int> {
-        val groupKey = groupStateManager.groupDefinition.value?.fileEncryptionKey
-        return if (!groupKey.isNullOrBlank()) {
-            groupKey.hexToBytes() to FILE_KEY_VERSION_GROUP_SECRET
+        val groupKey = groupKeyHex()
+        return if (groupKey != null) {
+            GroupCipher.deriveSubkey(groupKey, GroupCipher.PURPOSE_FILES) to
+                FILE_KEY_VERSION_GROUP_SUBKEY
         } else {
+            // No group key at all: a family created before 1.12.0. Nothing to derive from,
+            // so these stay on the legacy key and this flip is a no-op for them.
             deriveLegacyFileKey(groupId) to FILE_KEY_VERSION_LEGACY
         }
     }

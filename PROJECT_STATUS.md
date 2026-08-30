@@ -44,7 +44,17 @@ locally-built APK cannot be installed over them, and the only way past that is a
 which destroys identity keys and recovery phrases. Everything now reaches those phones
 through Play or not at all.
 
-**Still outstanding — the family recreation.** `GroupDefinition.fileEncryptionKey` is generated
+**Done — the family recreation** *(user-reported, 2026-08-30)*, and done **before** the
+diverging-roster problem appeared, not after. That ordering matters twice over: the v2/v5
+split in Track 3b happened on the *recreated* family, which rules out stale pre-recreation
+state as its cause and leaves the transport defect as the explanation; and both devices
+report `Document key: present`, which is the observable confirmation that the recreation
+took, since the key is only ever generated at creation.
+
+The rest of this section describes the condition that made recreation necessary, kept
+because it still applies to any family created before 1.12.0.
+
+`GroupDefinition.fileEncryptionKey` is generated
 in exactly one place — `GroupStateManager.createGroup` — and there is no backfill anywhere, so
 a family created before 1.12.0 carries a null key permanently. Without it: shared documents
 fall back to file key version 1, `SHA-256(groupId + "familysafety-files-v1")`, whose inputs are

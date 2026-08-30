@@ -109,7 +109,15 @@ data class FileChunkMessage(
 /** Key derived from the public groupId. Readable by anyone on the broker. */
 const val FILE_KEY_VERSION_LEGACY = 1
 
-/** Random per-group key carried inside the encrypted GroupDefinition. */
+/**
+ * Random per-group key carried inside the encrypted GroupDefinition, used **raw**.
+ *
+ * Published by 1.12.0 through 1.13.1. Still read, and always will be — files shared during
+ * those releases are encrypted under it and re-encrypting them is not something the app can
+ * do behind anyone's back. Superseded for new uploads by [FILE_KEY_VERSION_GROUP_SUBKEY],
+ * because using the group key directly made it both the file key and the parent of every
+ * other subkey.
+ */
 const val FILE_KEY_VERSION_GROUP_SECRET = 2
 
 /**
@@ -117,11 +125,15 @@ const val FILE_KEY_VERSION_GROUP_SECRET = 2
  * separation, matching how presence already derives its own subkey instead of using the
  * shared secret raw.
  *
- * **Readable but not yet written.** Landing the reader ahead of the writer is what makes the
- * eventual flip safe: a build that can already open version 3 keeps working the day some
- * device starts producing it, whereas flipping both at once means every peer still on the
- * previous release silently stops being able to decrypt new files. Version 2 remains what
- * this build publishes; see `PROJECT_STATUS.md`.
+ * **Written as of 1.13.2 (31).** The reader shipped in 29, a release ahead of the writer, so
+ * that a build which can already open version 3 was in everyone's hands before any device
+ * started producing it. Flipping both at once would have meant peers on the previous release
+ * silently failing to decrypt new files — silently because a device on 28 does not recognise
+ * the version and reject it, it falls through to the legacy key, fails GCM authentication
+ * and drops the chunk.
+ *
+ * That is also why the flip waited: it was gated on every device in the family being past
+ * 28, confirmed 2026-08-30, and it is not reversible for files already published under it.
  */
 const val FILE_KEY_VERSION_GROUP_SUBKEY = 3
 
