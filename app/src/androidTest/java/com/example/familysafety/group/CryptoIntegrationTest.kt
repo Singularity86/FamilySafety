@@ -34,6 +34,11 @@ class CryptoIntegrationTest {
     @Before
     fun setup() {
         context = InstrumentationRegistry.getInstrumentation().targetContext
+        // The wordlist is read from a resource and is not loaded until something asks for
+        // it. In the app that happens in OnboardingViewModel, which is the only caller of
+        // the two functions that need it; a test reaching validateMnemonic directly has to
+        // do it itself or the call throws before it asserts anything.
+        Bip39.initialize(context)
     }
 
     // =========================================================================

@@ -1,7 +1,9 @@
 package com.example.familysafety.group
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -17,6 +19,14 @@ import org.junit.runner.RunWith
  */
 @RunWith(AndroidJUnit4::class)
 class KeyDerivationTest {
+
+    @Before
+    fun setup() {
+        // Only the 24-word test needs this — it calls validateMnemonic, which reads the
+        // wordlist from a resource. Nothing loads that until asked, and in the app the
+        // asking is done by OnboardingViewModel.
+        Bip39.initialize(InstrumentationRegistry.getInstrumentation().targetContext)
+    }
 
     // =========================================================================
     // SLIP-10 TEST VECTORS (from official spec)

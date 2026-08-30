@@ -2,7 +2,9 @@ package com.example.familysafety.group
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.After
@@ -190,9 +192,17 @@ class PersistenceIntegrationTest {
 
         manager2.initialize()
 
-        // Verify state was restored
+        // Verify state was restored. groupDefinition is the state itself and is set
+        // synchronously by initialize(), so it can be read straight away.
         assertNotNull("Group should be restored after restart", manager2.groupDefinition.value)
         assertEquals("My Family", manager2.groupDefinition.value?.groupName)
+
+        // isInGroup is derived — stateIn(scope, Eagerly, false) on Dispatchers.Default —
+        // so its .value is still the initial `false` until that dispatcher runs. Reading it
+        // synchronously here was racing the dispatcher and losing, which looked like a
+        // device coming back from a restart outside its family. Wait for the flow instead;
+        // the sibling unit test avoids the same trap by only asserting the initial value.
+        withTimeout(5_000) { manager2.isInGroup.first { it } }
         assertTrue("Should still be in group", manager2.isInGroup.value)
     }
 
