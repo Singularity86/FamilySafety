@@ -9,6 +9,51 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.13.2 (31) — a mistyped recovery phrase no longer restores a stranger
+
+Built from the working tree at `339243e` + the version bump. Supersedes 1.13.1 (30).
+
+No wire-format change, so devices on 30 and 31 work together.
+
+### Play copy
+
+```
+Restoring an account now checks your recovery phrase properly. Before this, one mistyped
+word could quietly set up a brand-new empty account instead of restoring yours — with no
+error to tell you. If that happened to you, restore again with the correct phrase.
+
+Also in this version:
+• Fixes for the libraries flagged on 16 KB devices
+```
+
+### What was wrong
+
+Restoring checked that every word you typed appeared in the BIP-39 wordlist, and nothing
+else. No word count, and no checksum — which is what the last word of a recovery phrase is
+*for*. And that check was never called anyway: the Restore button required only that all
+twelve boxes were non-empty, and then derived keys from whatever was in them.
+
+Nothing can fail here the way a wrong password fails, because there is no account on a
+server to check against. Any twelve words derive *a* key. So one wrong word — still a real
+word, just not yours — derived a different identity, saved it, marked setup complete, and
+put the user into the app as somebody who had never existed: new member ID, not in their
+family, no error anywhere. Their real account was still there, reachable only if they
+worked out what had happened.
+
+Now the phrase is checked for length, wordlist membership and checksum before anything is
+derived, and a phrase that fails is refused with an explanation. For a twelve-word phrase
+the checksum is four bits, so roughly fifteen in sixteen single-word mistakes are caught.
+
+**This does not repair an account already restored wrongly** — nothing was lost, but the
+device is holding the wrong identity. Restoring again with the correct phrase recovers it.
+
+### 16 KB, continued
+
+Carries the JNA 5.19.1 upgrade and the x86_64 drop described under 1.13.1, for anyone whose
+30 upload predated them.
+
+---
+
 ## 1.13.1 (30) — the disconnect that was not one
 
 Built from `e0965c8`. Supersedes 1.13.0 (29), which is what the family is running.
