@@ -145,6 +145,24 @@ plus an ACL on `familysafe/group/{groupId}/vault/container` (Phase 2).
 
 Do not re-litigate this without one of those conditions having occurred.
 
+### It stopped being theoretical on 2026-08-29
+
+**1.13.0 (29) went out through Play**, so the vault is on real phones. Two consequences,
+recorded because both were predicted here and both have now happened rather than being
+about to:
+
+- **The passphrase floor is permanent** for any device where someone has already written
+  to a vault. `MIN_PASSPHRASE_LENGTH` is 16 and can never be raised, because a passphrase
+  that exists only as a key-derivation input cannot be re-asked for from a device that has
+  forgotten it. If no real vault has been written to yet, the window is still open — but
+  it closes the first time someone uses the feature, without any event to mark it.
+- **The F2 exposure is live.** A retained container now exists for a real family, so
+  "anyone holding the shared broker credential can guess this family's passphrase offline,
+  forever" describes the present rather than a future release. That is the accepted
+  position, not a new finding.
+
+Nothing here changes the decision. It changes its tense.
+
 Prior analysis of the issuer problem is kept below for that day.
 
 F4's fix changes the conclusion of Phase 1/2 below. Broker ACLs were the proposed answer

@@ -1,12 +1,12 @@
 # FamilySafety (Jibaro Family Safety) — Project Status
 
-Snapshot date: 2026-08-18, with the F2 decision of 2026-08-21 folded in.
-Branch: `main`, HEAD `37dd105`. Covers the F10 vault mitigation,
-which lands with this snapshot. Supersedes the 2026-08-17 snapshot, written at `92e6d9f`.
+Snapshot date: 2026-08-29. Branch: `main`, HEAD `e0965c8`, **1.13.1 / versionCode 30**.
+Rewritten in part from the 2026-08-18 snapshot: the F2 decision was made on the 21st,
+**29 shipped through Play**, and diagnosing a real family's broken sync turned up a
+transport defect that explains several symptoms previously filed as unrelated.
 
-Supersedes the 2026-08-13 snapshot, which was written when Phase 0 of the file redesign was
-the newest thing in the tree. Sixteen commits since. **The file redesign is finished — all
-six phases plus the vault are in `main`** — and versionCode 28 is uploaded to Play.
+Supersedes the 2026-08-17 and 2026-08-13 snapshots. The file redesign is finished — all six
+phases plus the vault are in `main` — and that work is now shipped rather than pending.
 
 ## Scope of this document
 
@@ -20,7 +20,8 @@ wrong when checked, so the distinction is kept deliberately.
 ## What the app is, right now
 
 Privacy-first, end-to-end-encrypted family location/chat/file app.
-`applicationId jibaro.spacepirate.love`, **1.12.10 / versionCode 28**, targetSdk 36, minSdk 26.
+`applicationId jibaro.spacepirate.love`, **1.13.1 / versionCode 30** (29 is what the family is
+running), targetSdk 36, minSdk 26.
 
 - No accounts — BIP-39 mnemonic → SLIP-10 → Ed25519/X25519 identity.
 - Location, chat, files, group membership and presence are all E2EE. An MQTT relay moves
@@ -32,12 +33,16 @@ Privacy-first, end-to-end-encrypted family location/chat/file app.
 - Shared documents are stored encrypted at rest and never assembled in the clear.
 - A shared family vault, opened by a code that is never stored anywhere.
 
-**422 unit tests, 0 failures** at HEAD.
+**444 unit tests, 0 failures** at HEAD.
 
-## Track 1 — Play: 28 shipped, family recreation still outstanding
+## Track 1 — Play: 29 shipped, family recreation still outstanding
 
-versionCode 26 was uploaded 2026-08-13 and **28 is now the shipped build** *(user-reported)*.
-28 carries the member-list fixes from Track 3.
+26 was uploaded 2026-08-13, 28 followed with the member-list fixes, and **29 — Phase 5, the
+vault, and the map bubble — went out through Play** *(user-reported)*. 30 is built and
+waiting. Because 29 went through Play, both family devices run Google-signed builds: a
+locally-built APK cannot be installed over them, and the only way past that is an uninstall,
+which destroys identity keys and recovery phrases. Everything now reaches those phones
+through Play or not at all.
 
 **Still outstanding — the family recreation.** `GroupDefinition.fileEncryptionKey` is generated
 in exactly one place — `GroupStateManager.createGroup` — and there is no backfill anywhere, so
@@ -96,6 +101,48 @@ case: two branches that diverged and *then both moved on*.
 
 **A fork already formed does not self-heal.** That device needs to leave and rejoin, which the
 recreation in Track 1 handles.
+
+## Track 3b — The 2026-08-29 diagnosis: it was the transport, not a fork
+
+Two devices in one real family held different rosters for days: the creator's XCover at
+**v5 with 5 members**, an S25 at **v2 with 2 members**, same group id. Both showed a
+connected relay, a local route to each other, and healthy decrypts a minute old. It looked
+exactly like the fork described above. It was not.
+
+The evidence that settled it was one line of the creator's diagnostics —
+`Sync: error: Failed to broadcast update` — a string set in exactly one place, when *zero*
+of the peer sends succeeded. So the request path worked: the refresh request arrived and
+the creator tried to answer. The broadcast itself failed, for everyone at once, while
+locations and presence flowed normally.
+
+The cause is in **Track 9** below. The reason it produced a permanent-looking divergence
+rather than a transient one: group state is event-driven, so a missed update is never
+re-sent, and every subsequent broadcast failed the same way.
+
+Two useful diagnostic facts fell out of this, worth keeping:
+
+- **`Sync: idle` on the device that is behind is itself evidence.** A group-sync message
+  that arrives and is rejected leaves `conflict` or `error:`, because the version-jump
+  branch sets `Conflict` *before* it applies. `idle` means nothing ever reached the
+  handler.
+- **A version gap does not block catch-up.** `handleGroupSyncMessage` handles
+  `version > current + 1` explicitly and applies it; the `previousStateHash` chain check
+  only governs a direct successor. So a device three versions behind can be repaired by
+  one broadcast, and if it is not, the reason is delivery or validation, not the gap.
+
+**Not yet confirmed on device.** The fix removes the failure we can see. Whether the S25
+then *accepts* v5 is untested — its validation path has never run against the creator's
+state. If it arrives and is rejected, that is the genuine-branch case and that device
+needs to leave and rejoin.
+
+**The ghost member.** The family roster carries a member called "Debug" whose keys no
+longer exist — a debug-build identity whose app data was cleared without using Leave
+Family, so no self-removal was ever broadcast. It cannot remove itself (that needs a
+signature from a destroyed key) and removals are creator-or-self, so only the creator can
+clear it. It is not cosmetic: it takes a slot in every per-recipient fan-out, and
+`waitForAcknowledgments` waits for `memberCount - 1` acks with a 30-second timeout, so
+every group broadcast on that device pays the full 30 seconds waiting for an ack that
+cannot come.
 
 ## Track 4 — Transport and onboarding reliability: closed
 
@@ -181,12 +228,12 @@ because **allocation is blind** — no device can tell filler from another vault
 writing to one vault can overwrite another's. That is inherent: what makes the decoy credible
 is what makes allocation blind. Replication turns it from data loss into loss of redundancy.
 
-### Known landmine, still unaddressed
+### The landmine went off — see Track 9
 
-Paho's `maxInflight` is never set (default 10) and `publishRaw` treats any publish exception as
-connection loss. The publish loop is paced at 15 ms per chunk, which is what currently keeps a
-large upload from knocking the app off its own broker. **`maxInflight` itself is still not
-raised.** Anything that speeds up publishing needs to revisit this first.
+This section used to read: "Paho's `maxInflight` is never set (default 10) and `publishRaw`
+treats any publish exception as connection loss… anything that speeds up publishing needs
+to revisit this first." Nothing sped up publishing. It went off anyway, in an ordinary
+five-member family, and cost a real household its group sync for days. Fixed in `fdd190b`.
 
 ## Track 6 — Security review
 
@@ -279,26 +326,98 @@ a card that names them. Committed at `38d3d3f`; the arithmetic has 15 tests, and
 drawing was checked on device with `MarkerRenderHarness`, which writes a sheet of every
 marker state to `getExternalFilesDir` for a person to look at.
 
-**Tabled by decision on 2026-08-29, in priority order:**
+**Refined 2026-08-29 (`22187fd`), after seeing it rendered on a phone.** The bubble was too
+wide — three faces in a row with gaps is a banner, not a pin. Closed, the faces overlap by a
+third and each gets a white collar so two accent rings do not read as one smeared shape;
+tapping spreads them apart, so the tap changes the marker and not only the card. Faces draw
+right to left so the leftmost is on top, which is where the asked-for member sits. The tail
+was two subpaths, and a stroke outlines each one separately — so a line was drawn across the
+top of it and the point read as something hanging off the bubble; it is unioned with
+`Path.op` now, the triangle starting well inside the capsule since shapes that merely touch
+can still seam, and widened to suit the shorter capsule. The card is half-opaque. The whole
+thing is explained once, on the first bubble a device ever draws, with the flag in the same
+preference file the tips use.
 
-1. **The card collides with both map FABs — a real defect, not a preference.** The card is
-   at `BottomCenter`, ≤320 dp wide, 80 dp up; the offline-download and zones FABs are at
-   `BottomStart`/`BottomEnd` at the same 80 dp. They clear each other only above 432 dp of
-   width, which is no phone in use. Fix by hiding the FABs while a card is open (preferred)
-   or lifting the card to ~140 dp.
-2. **Tapping the map does not dismiss the card.** Only the X, picking a name, or the group
+**Item 1 below was fixed at the same time**, because it would otherwise have shipped: the
+card is bottom-centre at ≤320 dp and the two map buttons are pinned to the same 80 dp on both
+edges, clearing each other only above 432 dp of width — no phone in use. The map controls now
+stand down while a group card is open.
+
+**Still tabled:**
+
+1. **Tapping the map does not dismiss the card.** Only the X, picking a name, or the group
    dissolving closes it. `LongPressOverlay` already handles touches, so a single-tap
    dismissal belongs there.
-3. **What tapping a name should do.** Today it asks for a drive estimate — the same thing
+2. **What tapping a name should do.** Today it asks for a drive estimate — the same thing
    tapping that person's pin did — and closes. Alternatives were panning to them, or
    zooming until the group splits.
-4. **Zoom-to-separate as a card action.** `clusterPins` can say exactly which zoom level
+3. **Zoom-to-separate as a card action.** `clusterPins` can say exactly which zoom level
    breaks a group apart, so "show them apart" is cheap and deterministic. Open question is
    whether it earns its place, since the card already answers "who is here".
 
 Deferred deliberately: anchoring the card to the bubble instead of the bottom of the
 screen. It reads better and costs re-projection on every pan plus edge handling, and
 Life360 — the app this was modelled on — uses a bottom sheet anyway.
+
+## Track 9 — Transport: a full in-flight window read as a dead connection
+
+Fixed in `fdd190b`. The defect that produced Track 3b, and the explanation for the
+intermittent "disconnected" status on the busiest device that nothing in the network could
+account for.
+
+Every message the app sends is QoS 1 — 51 call sites, none at QoS 0 — and every one is
+published per recipient, so one event becomes N publishes and a file share becomes
+hundreds. Paho's in-flight window defaults to 10 and was never set. At the ceiling, a
+publish throws immediately; the socket is fine.
+
+`publishRaw` read that as connection loss and set the state to `Disconnected`. Its own
+first act is to bail out when the state is not `Connected`, so **every later recipient in
+the same loop returned false without an attempt** — one refused publish became all of them.
+Then `scheduleReconnect` incremented the backoff, the reconnect found the client still
+connected, logged "already connected" and restored the state — without resetting
+`reconnectAttempts`, which only resets on a real connect. So the phantom outages grew
+geometrically toward the five-minute cap, appearing and healing with nothing behind them.
+
+Five changes:
+
+- Publish failures ask `mqttClient.isConnected` rather than assuming. A failure on a live
+  connection is backpressure: queue it and carry on.
+- `maxInflight` is set, but **only to 32**. The low ceiling was never the defect, and the
+  client uses `MemoryPersistence`, so unacknowledged messages are held in RAM — at 32 KB
+  chunks a generous window is megabytes on a phone. The old ceiling was also doing
+  accidental backpressure that the 15 ms chunk pacing compensates for.
+- **Two offline queues.** One queue drops by age, so an outage full of location updates
+  evicts the group-state message that must not be lost. Control-plane topics — group sync,
+  sync requests, join requests and approvals, group acks — now have their own bounded queue,
+  drained first. Chat and files stay on the bulk side deliberately: both are replicated and
+  backfilled, so a dropped one is recoverable and a missed roster change is not.
+- **Locations and presence drop to QoS 0.** A position supersedes itself and the replay
+  guard discards anything older than what is held, so at-least-once was paying three times
+  over — an in-flight slot per recipient, a broker session queue per offline peer, and a
+  burst on their reconnect that gets thrown away on arrival. Presence is retained, which
+  the broker keeps regardless of QoS.
+- A broadcast nobody could receive is `SyncState.Deferred`, not `Error`. It is queued on
+  the control path and drains on reconnect; calling it a failure put red text on screen for
+  an ordinary offline moment.
+
+### What this does not fix, and the real scaling ceiling
+
+QoS tuning does not change the shape of the problem:
+
+- **Group state is O(N²).** Every sync carries the entire group definition, per recipient,
+  and every member rebroadcasts during reconciliation.
+- **File sharing is the ceiling.** A 10 MB file is 320 chunks pushed to *every* peer — at
+  five members roughly 1,280 publishes and ~57 MB upstream for one share. Phase 2 built the
+  right primitive (targeted repair: ask one peer for specific indices); the initial share is
+  still push-to-everyone. Turning that into a pull matters far more for scale than anything
+  in the list above.
+
+Also fixed on the way: `GroupStateManager.recordLocationUpdate` had **zero callers**, so the
+diagnostics report's "last location" line read `never` for every member on every device
+whether locations were flowing or not. It is stamped now, after the replay guard so a replay
+cannot make a member look present. Two hours were spent treating that output as evidence
+before the dead field was noticed — the same shape as the `RemovedFromGroup` event that once
+had no collectors.
 
 ## Housekeeping
 
@@ -319,20 +438,25 @@ why the duplication is worth removing before they stop agreeing.
 
 ## Suggested next actions, in order
 
-1. **Run the family recreation** (Track 1). Everything shipped in the last three releases —
-   file-name privacy, presence sealing, at-rest keys, the vault — does nothing for a family
-   created before 1.12.0 until someone recreates the group. It also clears the live fork.
-2. **Cut a release with Phases 5 and 6.** Nothing gates this any more — F2 was decided on
-   2026-08-21 (accepted), which was the one thing that had to be settled before a vault
-   reached real families. Build the bundle with `--rerun-tasks` and verify the dex, not the
-   build log; the release notes need to say plainly that everyone must update, because
-   unsigned manifests from older peers are refused. Note that shipping closes the window on
-   the passphrase floor: it cannot be raised again once a vault exists in the wild.
-3. ~~Decide on F2 in light of the vault.~~ **Done 2026-08-21 — accepted**, recorded in
-   `SECURITY_REVIEW.md` under "Decision, 2026-08-21". Do not re-litigate without one of the
-   recorded reopening conditions having occurred.
-4. Check the iOS CI run (needs `gh auth login`); if green, Phase 0 is done and Phase 1 is next.
-5. Flip the file key writer to version 3 once every device is past 28.
-6. Raise Paho's `maxInflight` before anything else touches transfer throughput.
-7. Refresh or delete `PLAY_STORE_CHECKLIST.md`; `.gitignore` for `.idea/`; decide whether
+1. **Ship 30 and confirm the sync repair on the real family.** The bundle is built and
+   verified; `RELEASE_NOTES.md` carries the copy. Then, on the device that is behind:
+   Security Dashboard → Check Family List, and re-read the diagnostics. `v5` means Track 3b
+   is closed. `conflict`/`error:` means the update now arrives and is *rejected*, which is
+   the genuine-branch case and that device must leave and rejoin. Still `idle` means the
+   diagnosis was incomplete.
+2. **Have the creator remove the "Debug" ghost member** (Track 3b). It costs a slot in every
+   fan-out and 30 seconds of ack timeout on every group broadcast.
+3. ~~Cut a release with Phases 5 and 6.~~ **Done — 29 shipped through Play.** Which means
+   the passphrase floor is now permanent for any device where someone has already written to
+   a vault, and the accepted F2 exposure is live rather than theoretical.
+4. **Run the family recreation** (Track 1). Everything shipped since 1.12.0 — file-name
+   privacy, presence sealing, at-rest keys, the vault — does nothing for a family created
+   before it. Note this family's document key is **present**, so it is *not* one of those;
+   confirm before putting anyone through it.
+5. Check the iOS CI run (needs `gh auth login`); if green, Phase 0 is done and Phase 1 is next.
+6. Flip the file key writer to version 3 once every device is past 28.
+7. **Make the initial file share a pull rather than a push** — the O(N) fan-out per chunk is
+   the real scaling ceiling (Track 9), and the targeted-repair primitive it needs already
+   exists from Phase 2.
+8. Refresh or delete `PLAY_STORE_CHECKLIST.md`; `.gitignore` for `.idea/`; decide whether
    `AGENTS.md` and this file belong in git.
