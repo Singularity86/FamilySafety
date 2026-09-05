@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -34,6 +35,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -50,8 +55,10 @@ import com.example.familysafety.geofence.GeofenceViewModel
 import com.example.familysafety.ui.screens.PrivacyScreen
 import com.example.familysafety.ui.theme.PorchAmber
 import com.example.familysafety.ui.theme.TextDisabled
+import com.example.familysafety.ui.theme.TextSecondary
 import com.example.familysafety.ui.theme.ThemeMode
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.example.familysafety.BuildConfig
 import com.example.familysafety.onboarding.BatteryOptimizationScreen
@@ -239,35 +246,51 @@ fun MainScreen(
             Scaffold(
                 snackbarHost = { SnackbarHost(snackbarHostState) },
                 topBar = {
-                    TopAppBar(
-                        colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
-                            titleContentColor = MaterialTheme.colorScheme.onSurface,
-                            actionIconContentColor = MaterialTheme.colorScheme.onSurface
-                        ),
-                        title = {
-                            Column {
-                                Text("Jibaro:\nFamily Safety", style = MaterialTheme.typography.titleMedium)
+                    val barBackground = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f)
+                    Column {
+                        TopAppBar(
+                            colors = TopAppBarDefaults.topAppBarColors(
+                                containerColor = barBackground,
+                                titleContentColor = MaterialTheme.colorScheme.onSurface,
+                                actionIconContentColor = MaterialTheme.colorScheme.onSurface
+                            ),
+                            title = {
                                 if (groupName.isNotBlank()) {
-                                    Text(
+                                    ShrinkToFitText(
                                         text = groupName,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = TextDisabled
+                                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
+                                } else {
+                                    Text("Jibaro:\nFamily Safety", style = MaterialTheme.typography.titleMedium)
+                                }
+                            },
+                            actions = {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    EncryptionChip()
+                                    ConnectionBadge(viewModel = viewModel)
+                                    SyncIndicator(syncManager = syncManager)
                                 }
                             }
-                        },
-                        actions = {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                EncryptionChip()
-                                ConnectionBadge(viewModel = viewModel)
-                                SyncIndicator(syncManager = syncManager)
-                            }
+                        )
+                        if (groupName.isNotBlank()) {
+                            Text(
+                                text = "Jibaro Family Safety",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(barBackground)
+                                    .padding(bottom = 6.dp)
+                            )
                         }
-                    )
+                    }
                 },
                 bottomBar = {
                     NavigationBar(
@@ -534,4 +557,35 @@ fun MainScreen(
             )
         }
     }
+}
+
+/**
+ * Single-line text that steps its font size down until it fits, instead of wrapping or
+ * truncating. Resets whenever [text] changes so switching families doesn't stay shrunk
+ * from a longer previous name.
+ */
+@Composable
+private fun ShrinkToFitText(
+    text: String,
+    style: TextStyle,
+    color: Color,
+    modifier: Modifier = Modifier,
+    minFontSize: androidx.compose.ui.unit.TextUnit = 14.sp
+) {
+    var fontSize by remember(text) { mutableStateOf(style.fontSize) }
+    Text(
+        text = text,
+        style = style,
+        color = color,
+        fontSize = fontSize,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Clip,
+        modifier = modifier,
+        onTextLayout = { result ->
+            if (result.didOverflowWidth && fontSize > minFontSize) {
+                fontSize = (fontSize.value - 1).sp
+            }
+        }
+    )
 }
