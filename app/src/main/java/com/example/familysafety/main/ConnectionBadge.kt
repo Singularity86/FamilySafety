@@ -32,7 +32,7 @@ import com.example.familysafety.ui.theme.AmberWarning
 import com.example.familysafety.ui.theme.ChipShape
 import com.example.familysafety.ui.theme.RedDanger
 import com.example.familysafety.ui.theme.Spacing
-import com.example.familysafety.ui.theme.TealPrimary
+import com.example.familysafety.ui.theme.ColorSuccess
 
 @Composable
 fun ConnectionBadge(
@@ -50,9 +50,9 @@ fun ConnectionBadge(
     when (mode) {
         MainViewModel.ConnectionMode.LAN -> {
             label = "LAN"
-            tint = TealPrimary
-            containerColor = TealPrimary.copy(alpha = 0.12f)
-            borderColor = TealPrimary.copy(alpha = 0.34f)
+            tint = ColorSuccess
+            containerColor = ColorSuccess.copy(alpha = 0.12f)
+            borderColor = ColorSuccess.copy(alpha = 0.34f)
         }
 
         MainViewModel.ConnectionMode.RELAY -> {
@@ -66,7 +66,7 @@ fun ConnectionBadge(
             label = "Mixed"
             tint = MaterialTheme.colorScheme.onSurface
             containerColor = Color.Transparent
-            borderColor = TealPrimary.copy(alpha = 0.34f)
+            borderColor = ColorSuccess.copy(alpha = 0.34f)
         }
 
         MainViewModel.ConnectionMode.OFFLINE -> {
@@ -172,13 +172,13 @@ private fun MixedConnectionPill(modifier: Modifier = Modifier) {
         shape = ChipShape,
         color = Color.Transparent,
         contentColor = MaterialTheme.colorScheme.onSurface,
-        border = BorderStroke(1.dp, TealPrimary.copy(alpha = 0.34f))
+        border = BorderStroke(1.dp, ColorSuccess.copy(alpha = 0.34f))
     ) {
         Box(
             modifier = Modifier
                 .clip(ChipShape)
                 .drawBehind {
-                    val tealPath = Path().apply {
+                    val lanPath = Path().apply {
                         moveTo(0f, 0f)
                         lineTo(size.width, 0f)
                         lineTo(0f, size.height)
@@ -190,7 +190,7 @@ private fun MixedConnectionPill(modifier: Modifier = Modifier) {
                         lineTo(0f, size.height)
                         close()
                     }
-                    drawPath(tealPath, TealPrimary.copy(alpha = 0.12f))
+                    drawPath(lanPath, ColorSuccess.copy(alpha = 0.12f))
                     drawPath(amberPath, AmberWarning.copy(alpha = 0.12f))
                 }
         ) {

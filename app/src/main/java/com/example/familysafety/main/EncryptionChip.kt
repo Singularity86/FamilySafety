@@ -11,7 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.example.familysafety.ui.theme.TealPrimary
+import com.example.familysafety.ui.theme.ColorSuccess
 
 @Composable
 fun EncryptionChip(
@@ -42,19 +42,19 @@ fun EncryptionChip(
         StatusPill(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.88f),
             borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.9f),
-            contentColor = TealPrimary
+            contentColor = ColorSuccess
         ) {
             Icon(
                 imageVector = Icons.Default.Lock,
                 contentDescription = null,
-                tint = TealPrimary,
+                tint = ColorSuccess,
                 modifier = Modifier.size(12.dp)
             )
             Spacer(modifier = Modifier.width(4.dp))
             Text(
                 text = if (isLocalOnly) "Local E2EE" else "E2EE",
                 style = MaterialTheme.typography.labelSmall,
-                color = TealPrimary
+                color = ColorSuccess
             )
         }
     }

@@ -61,7 +61,7 @@ fun BatteryOptimizationScreen(
             Icon(
                 imageVector = Icons.Default.BatteryAlert,
                 contentDescription = null,
-                tint = TealPrimary,
+                tint = PorchAmber,
                 modifier = Modifier.size(32.dp)
             )
             Spacer(modifier = Modifier.height(Spacing.md))
@@ -82,7 +82,7 @@ fun BatteryOptimizationScreen(
 
             // OEM-specific step-by-step instructions
             Surface(
-                color = TealPrimary.copy(alpha = 0.12f),
+                color = PorchAmber.copy(alpha = 0.12f),
                 shape = MaterialTheme.shapes.small
             ) {
                 Column(modifier = Modifier.padding(Spacing.sm)) {
@@ -96,13 +96,13 @@ fun BatteryOptimizationScreen(
                             Text(
                                 text = "${index + 1}.",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                color = TealPrimary,
+                                color = PorchAmber,
                                 modifier = Modifier.width(20.dp)
                             )
                             Text(
                                 text = step,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = TealPrimary,
+                                color = PorchAmber,
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -116,7 +116,7 @@ fun BatteryOptimizationScreen(
             OutlinedButton(
                 onClick = { OemBatteryHelper.openBatterySettings(context) },
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = TealPrimary)
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = PorchAmber)
             ) {
                 Icon(
                     Icons.AutoMirrored.Filled.OpenInNew,
@@ -153,7 +153,7 @@ fun BatteryOptimizationScreen(
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TealPrimary)
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = PorchAmber)
                 ) {
                     Icon(
                         Icons.AutoMirrored.Filled.OpenInNew,
@@ -189,7 +189,7 @@ fun BatteryOptimizationScreen(
                         }
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = TealPrimary,
+                        containerColor = PorchAmber,
                         contentColor = MaterialTheme.colorScheme.onPrimary
                     )
                 ) {

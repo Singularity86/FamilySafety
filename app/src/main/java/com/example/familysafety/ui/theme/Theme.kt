@@ -9,7 +9,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 private val DarkColorScheme = darkColorScheme(
-    primary          = TealPrimary,
+    primary          = PorchAmber,
     onPrimary        = Black,
     secondary        = AmberWarning,
     onSecondary      = Black,
@@ -28,7 +28,7 @@ private val DarkColorScheme = darkColorScheme(
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary          = TealPrimary,
+    primary          = PorchAmber,
     onPrimary        = Black,
     secondary        = AmberWarning,
     onSecondary      = Black,

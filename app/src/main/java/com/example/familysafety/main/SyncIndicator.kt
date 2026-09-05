@@ -40,7 +40,7 @@ import com.example.familysafety.ui.theme.AmberWarning
 import com.example.familysafety.ui.theme.ChipShape
 import com.example.familysafety.ui.theme.RedDanger
 import com.example.familysafety.ui.theme.Spacing
-import com.example.familysafety.ui.theme.TealPrimary
+import com.example.familysafety.ui.theme.ColorSuccess
 
 private val SyncSlotWidth = 86.dp
 
@@ -168,9 +168,9 @@ private fun SyncedChip(version: Long, modifier: Modifier = Modifier) {
         } else {
             SyncChip(
                 text = "Synced v$version",
-                iconTint = TealPrimary,
-                containerColor = TealPrimary.copy(alpha = 0.10f),
-                borderColor = TealPrimary.copy(alpha = 0.24f),
+                iconTint = ColorSuccess,
+                containerColor = ColorSuccess.copy(alpha = 0.10f),
+                borderColor = ColorSuccess.copy(alpha = 0.24f),
                 icon = Icons.Default.Check,
                 shutterProgress = shutterProgress.value
             )

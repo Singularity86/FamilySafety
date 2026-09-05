@@ -2,19 +2,20 @@ package com.example.familysafety.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Surfaces (OLED-optimized, slightly tinted for depth)
+// Surfaces (OLED-optimized, pine-tinted for depth — matches the app icon's ground color)
 val Black         = Color(0xFF000000)
-val Surface0      = Color(0xFF070A0F)   // default background
-val Surface1      = Color(0xFF101520)   // card background
-val Surface2      = Color(0xFF182131)   // elevated surfaces
+val Surface0      = Color(0xFF101A15)   // default background
+val Surface1      = Color(0xFF16231C)   // card background
+val Surface2      = Color(0xFF1D2C24)   // elevated surfaces
 
-// Light surfaces
+// Light surfaces (unchanged)
 val SurfaceLight0 = Color(0xFFF4F7FB)
 val SurfaceLight1 = Color(0xFFFFFFFF)
 val SurfaceLight2 = Color(0xFFEAF0F7)
 
 // Accent
-val TealPrimary   = Color(0xFF13D0B0)   // primary actions
+val PorchAmber    = Color(0xFFE9A23C)   // primary actions, brand accent — same amber as the app icon
+val SuccessGreen  = Color(0xFF35B378)   // healthy/connected/protected states — distinct from AmberWarning on purpose
 val AmberWarning  = Color(0xFFE2B45F)   // warnings, relay state
 val RedDanger     = Color(0xFFFF5B66)   // genuine danger only
 
@@ -35,6 +36,6 @@ val OutlineMutedLight = Color(0xFFD2DAE4)
 val OutlineSoftLight  = Color(0xFFE2E8F0)
 
 // Semantic aliases (reference constants above, no duplicate hex)
-val ColorSuccess  = TealPrimary
+val ColorSuccess  = SuccessGreen
 val ColorAlert    = AmberWarning
 val ColorError    = RedDanger

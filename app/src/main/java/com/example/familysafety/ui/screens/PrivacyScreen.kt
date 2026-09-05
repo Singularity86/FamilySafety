@@ -16,7 +16,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.familysafety.ui.theme.Spacing
-import com.example.familysafety.ui.theme.TealPrimary
+import com.example.familysafety.ui.theme.PorchAmber
 import com.example.familysafety.ui.theme.TextDisabled
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -93,7 +93,7 @@ private fun PrivacySectionHeader(title: String) {
     Text(
         text = title,
         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-        color = TealPrimary,
+        color = PorchAmber,
         modifier = Modifier.padding(bottom = Spacing.sm)
     )
 }

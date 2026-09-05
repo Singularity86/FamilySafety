@@ -11,7 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.familysafety.ui.theme.TealPrimary
+import com.example.familysafety.ui.theme.PorchAmber
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,7 +55,7 @@ fun GenerateMnemonicScreen(
                 imageVector = Icons.Default.Security,
                 contentDescription = null,
                 modifier = Modifier.size(64.dp),
-                tint = TealPrimary
+                tint = PorchAmber
             )
 
             Spacer(modifier = Modifier.height(24.dp))

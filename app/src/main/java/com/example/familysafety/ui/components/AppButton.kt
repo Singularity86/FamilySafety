@@ -25,7 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.theme.ButtonShape
 import com.example.familysafety.ui.theme.RedDanger
-import com.example.familysafety.ui.theme.TealPrimary
+import com.example.familysafety.ui.theme.PorchAmber
 
 sealed class ButtonState {
     object Idle : ButtonState()
@@ -45,9 +45,9 @@ fun AppButton(
     // Error state borrows RedDanger, and only because it represents a genuine
     // failure to retry — not a destructive action.
     val containerColor = when (state) {
-        is ButtonState.Idle    -> TealPrimary
-        is ButtonState.Loading -> TealPrimary
-        is ButtonState.Success -> TealPrimary.copy(alpha = 0.8f)
+        is ButtonState.Idle    -> PorchAmber
+        is ButtonState.Loading -> PorchAmber
+        is ButtonState.Success -> PorchAmber.copy(alpha = 0.8f)
         is ButtonState.Error   -> RedDanger
     }
     val contentColor = when (state) {

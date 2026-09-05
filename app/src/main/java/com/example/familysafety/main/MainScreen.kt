@@ -48,7 +48,7 @@ import com.example.familysafety.geofence.GeofenceEditorScreen
 import com.example.familysafety.geofence.GeofenceListScreen
 import com.example.familysafety.geofence.GeofenceViewModel
 import com.example.familysafety.ui.screens.PrivacyScreen
-import com.example.familysafety.ui.theme.TealPrimary
+import com.example.familysafety.ui.theme.PorchAmber
 import com.example.familysafety.ui.theme.TextDisabled
 import com.example.familysafety.ui.theme.ThemeMode
 import androidx.compose.ui.unit.dp
@@ -284,7 +284,7 @@ fun MainScreen(
                                 Icon(
                                     imageVector = tab.icon,
                                     contentDescription = tab.label,
-                                    tint = if (selected) TealPrimary else TextDisabled
+                                    tint = if (selected) PorchAmber else TextDisabled
                                 )
                             }
 
@@ -313,7 +313,7 @@ fun MainScreen(
                                 selected = selected,
                                 onClick = { navigatePagerTo(index) },
                                 colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = TealPrimary,
+                                    selectedIconColor = PorchAmber,
                                     selectedTextColor = MaterialTheme.colorScheme.onSurface,
                                     unselectedIconColor = TextDisabled,
                                     unselectedTextColor = TextDisabled,

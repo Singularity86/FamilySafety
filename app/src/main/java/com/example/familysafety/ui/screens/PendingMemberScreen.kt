@@ -27,7 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.example.familysafety.group.MembershipState
 import com.example.familysafety.main.EncryptionChip
 import com.example.familysafety.ui.theme.Spacing
-import com.example.familysafety.ui.theme.TealPrimary
+import com.example.familysafety.ui.theme.PorchAmber
 import com.example.familysafety.ui.theme.TextDisabled
 
 @Composable
@@ -61,7 +61,7 @@ fun PendingMemberScreen(
                 modifier = Modifier
                     .size(80.dp)
                     .scale(scale)
-                    .background(color = TealPrimary, shape = CircleShape)
+                    .background(color = PorchAmber, shape = CircleShape)
             )
 
             Spacer(modifier = Modifier.height(Spacing.xl))
