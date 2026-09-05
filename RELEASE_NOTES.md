@@ -9,6 +9,45 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.13.4 (33) — a warmer icon and a clearer header
+
+Built from `565f9dc` and `5019688` + the version bump. Supersedes 1.13.3 (32).
+
+No wire-format change, so devices on any recent version keep working together — this is
+a purely visual release.
+
+### Play copy
+
+```
+New app icon and a warmer color scheme. Dark mode moves from navy to deep green with
+amber accents; light mode keeps its white background with the same amber. The top bar
+now leads with your family's name instead of the app name.
+```
+
+### What changed, and why it's worth a release
+
+- **New launcher icon** — a house-in-a-pin with a lit, off-center window and light
+  spilling onto the step below, replacing the navy shield-and-family badge. Ships with a
+  proper adaptive foreground/background split (the background layer had been hardcoded
+  transparent despite a color resource already existing for it, unused) and the Android
+  13+ monochrome themed-icon layer, neither of which existed before.
+- **Recolored theme** — dark surfaces move from navy-black to the icon's own pine-green;
+  a new brand amber (`PorchAmber`) replaces teal as the primary color everywhere: buttons,
+  the selected nav tab, onboarding CTAs. Light mode's white surfaces are unchanged, same
+  amber accent.
+- **A second accent, on purpose** — teal had quietly been doing double duty as both the
+  brand color and the "healthy/connected" status color. Collapsing both onto one amber
+  would have made the LAN/Relay badge show the same color for both states, and made
+  "Synced" and "Warning" read the same on the Security screen. A distinct `SuccessGreen`
+  now carries sync status, LAN connection, and the "E2EE active" chip, so status colors
+  stay legible instead of blending into the brand color.
+- **Top bar hierarchy swapped** — your family's name is now the bold headline (shrinking
+  its own font size instead of wrapping or truncating if it's long), and "Jibaro Family
+  Safety" moved to a small caption strip under the whole bar instead of competing for
+  space directly beneath the family name.
+
+---
+
 ## 1.13.3 (32) — shared documents get their own key
 
 Built from `5f3cbae` + the version bump. Supersedes 1.13.2 (31).

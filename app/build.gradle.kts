@@ -41,8 +41,8 @@ android {
         applicationId = "jibaro.spacepirate.love"
         minSdk = 26
         targetSdk = 36
-        versionCode = 32
-        versionName = "1.13.3"
+        versionCode = 33
+        versionName = "1.13.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
