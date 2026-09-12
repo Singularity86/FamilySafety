@@ -76,7 +76,8 @@ class GroupSyncManager @Inject constructor(
     suspend fun broadcastGroupUpdate(
         groupDefinition: GroupDefinition,
         changeType: ChangeType,
-        changedMemberId: String? = null
+        changedMemberId: String? = null,
+        quorumSignatures: List<QuorumSignature> = emptyList()
     ) {
         withContext(Dispatchers.IO) {
             try {
@@ -95,7 +96,8 @@ class GroupSyncManager @Inject constructor(
                     changeType = changeType,
                     changedMemberId = changedMemberId,
                     timestamp = System.currentTimeMillis(),
-                    signature = ""
+                    signature = "",
+                    quorumSignatures = quorumSignatures
                 )
 
                 val payload = createSyncSignaturePayload(syncMessage)
@@ -366,9 +368,12 @@ class GroupSyncManager @Inject constructor(
             try {
                 val manager = groupStateManager ?: return@withContext
 
+                val verifiedQuorumVoterIds = verifyQuorumSignatures(syncMessage)
+
                 val result = manager.applyVerifiedRemoteGroupState(
                     syncMessage.groupDefinition,
-                    syncMessage.updaterMemberId
+                    syncMessage.updaterMemberId,
+                    verifiedQuorumVoterIds
                 )
                 if (result is GroupOperationResult.Failure) {
                     Timber.w("Rejected group update v${syncMessage.version}: ${result.error}")
@@ -461,6 +466,208 @@ class GroupSyncManager @Inject constructor(
         }
     }
 
+    /**
+     * Independently verify each vote riding along with a quorum-authorized removal,
+     * against OUR OWN current roster — never trust the sender's claim about who voted,
+     * the same discipline [verifyGroupSyncSignature] applies to the single envelope
+     * signer. Returns the memberIds whose signature actually checked out; anything not
+     * in this set is simply not counted by [GroupTransitionValidator].
+     */
+    private fun verifyQuorumSignatures(syncMessage: GroupSyncMessage): Set<String> {
+        if (syncMessage.quorumSignatures.isEmpty()) return emptySet()
+        val currentGroup = groupStateManager?.groupDefinition?.value ?: return emptySet()
+        val targetMemberId = syncMessage.changedMemberId ?: run {
+            Timber.w("Quorum signatures present but no changedMemberId to verify them against")
+            return emptySet()
+        }
+        val canonicalMessage = buildQuorumRemovalMessage(
+            groupId = syncMessage.groupId,
+            targetMemberId = targetMemberId,
+            proposedVersion = syncMessage.version,
+            previousStateHash = currentGroup.computeStateHash()
+        )
+        return syncMessage.quorumSignatures.mapNotNull { vote ->
+            val voter = currentGroup.findMemberById(vote.voterMemberId) ?: return@mapNotNull null
+            val valid = try {
+                cryptoProvider.verifySignature(
+                    message = canonicalMessage,
+                    signature = vote.signature.hexToByteArray(),
+                    publicKey = voter.ed25519PublicKey.hexToByteArray()
+                )
+            } catch (e: Exception) {
+                false
+            }
+            vote.voterMemberId.takeIf { valid }
+        }.toSet()
+    }
+
+    // In-memory tally of votes seen so far, keyed by (targetMemberId, proposedVersion,
+    // previousStateHash) so votes for a stale or superseded proposal never mix with a
+    // fresh one. Deliberately not persisted or part of GroupDefinition — an in-progress
+    // vote carries no authority on its own and never touches the hash chain.
+    private data class VoteKey(val targetMemberId: String, val proposedVersion: Long, val previousStateHash: String)
+    private val pendingVotes = ConcurrentHashMap<VoteKey, MutableMap<String, QuorumSignature>>()
+
+    /**
+     * Propose removing [targetMemberId] without the creator's cooperation, casting this
+     * device's own vote immediately and broadcasting it to every other current member.
+     * Available to any member, not just the creator — the whole point of this mechanism.
+     */
+    suspend fun proposeRemoval(targetMemberId: String): Boolean = withContext(Dispatchers.IO) {
+        val manager = groupStateManager ?: return@withContext false
+        val myMemberId = currentMemberId ?: return@withContext false
+        val currentGroup = manager.groupDefinition.value ?: return@withContext false
+        if (currentGroup.findMemberById(targetMemberId) == null) return@withContext false
+
+        val myVote = manager.castRemovalVote(targetMemberId) ?: return@withContext false
+        recordVote(currentGroup, targetMemberId, myVote)
+        broadcastVote(currentGroup, myMemberId, targetMemberId, myVote)
+        true
+    }
+
+    /**
+     * Called by the transport layer when a vote arrives on our removal_vote inbox.
+     */
+    suspend fun handleRemovalVoteMessage(encryptedPayload: String) {
+        ErrorHandler.safely(tag = "GroupSyncManager", operation = "handling removal vote") {
+            val manager = groupStateManager ?: return@safely
+            val currentGroup = manager.groupDefinition.value ?: return@safely
+            val myMemberId = currentMemberId ?: return@safely
+
+            val senderMemberId = extractSenderMemberId(encryptedPayload) ?: return@safely
+            val sender = currentGroup.findMemberById(senderMemberId) ?: run {
+                Timber.w("Removal vote from unknown sender ${senderMemberId.take(8)} — ignoring")
+                return@safely
+            }
+            val decryptedJson = e2eeManager.decryptMessage(
+                encryptedMessageJson = encryptedPayload,
+                senderX25519PublicKey = sender.x25519PublicKey.hexToByteArray(),
+                senderEd25519PublicKey = sender.ed25519PublicKey.hexToByteArray()
+            )
+            val vote = json.decodeFromString<RemovalVoteMessage>(decryptedJson)
+            if (vote.groupId != currentGroup.groupId) return@safely
+            // The envelope's authenticated sender must match the vote's own claim, or
+            // someone could relay another member's vote as if it were their own — harmless
+            // to the eventual quorum check (each signature is still verified independently)
+            // but noisy, so reject it here rather than let it obscure a real tally.
+            if (vote.voterMemberId != senderMemberId) {
+                Timber.w("Removal vote sender/voter mismatch — ignoring")
+                return@safely
+            }
+
+            if (vote.voterMemberId == myMemberId) return@safely // our own vote, echoed back
+
+            val quorumSignature = QuorumSignature(vote.voterMemberId, vote.signature)
+            recordVote(
+                currentGroup,
+                vote.targetMemberId,
+                quorumSignature,
+                proposedVersion = vote.proposedVersion,
+                previousStateHash = vote.previousStateHash
+            )
+        }
+    }
+
+    private suspend fun broadcastVote(
+        currentGroup: GroupDefinition,
+        myMemberId: String,
+        targetMemberId: String,
+        vote: QuorumSignature
+    ) {
+        val message = RemovalVoteMessage(
+            groupId = currentGroup.groupId,
+            targetMemberId = targetMemberId,
+            proposedVersion = currentGroup.version + 1,
+            previousStateHash = currentGroup.computeStateHash(),
+            voterMemberId = myMemberId,
+            signature = vote.signature,
+            timestamp = System.currentTimeMillis()
+        )
+        val messageJson = json.encodeToString(message)
+        currentGroup.members.filter { it.memberId != myMemberId }.forEach { member ->
+            try {
+                val encrypted = e2eeManager.encryptMessage(
+                    plaintext = messageJson,
+                    recipientMemberId = member.memberId,
+                    recipientX25519PublicKey = member.x25519PublicKey.hexToByteArray()
+                )
+                transportProvider.sendMessage(
+                    recipientId = member.memberId,
+                    topic = MqttConfig.getRemovalVoteTopic(member.memberId),
+                    payload = encrypted.toByteArray(),
+                    qos = MqttConfig.DEFAULT_QOS,
+                    retained = true
+                )
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to send removal vote to ${member.memberId.take(8)}")
+            }
+        }
+    }
+
+    /**
+     * Add a vote to the local tally, emit the running count, and — if this device now
+     * sees enough valid votes — apply and broadcast the removal. Multiple devices reaching
+     * quorum near-simultaneously and each broadcasting is expected and safe: it is the same
+     * shape as two members approving a join at the same moment, and GroupStateMerge already
+     * resolves it.
+     */
+    private suspend fun recordVote(
+        currentGroup: GroupDefinition,
+        targetMemberId: String,
+        vote: QuorumSignature,
+        proposedVersion: Long = currentGroup.version + 1,
+        previousStateHash: String = currentGroup.computeStateHash()
+    ) {
+        val manager = groupStateManager ?: return
+        val voter = currentGroup.findMemberById(vote.voterMemberId) ?: return
+        val canonicalMessage = buildQuorumRemovalMessage(
+            groupId = currentGroup.groupId,
+            targetMemberId = targetMemberId,
+            proposedVersion = proposedVersion,
+            previousStateHash = previousStateHash
+        )
+        val valid = try {
+            cryptoProvider.verifySignature(
+                message = canonicalMessage,
+                signature = vote.signature.hexToByteArray(),
+                publicKey = voter.ed25519PublicKey.hexToByteArray()
+            )
+        } catch (e: Exception) {
+            false
+        }
+        if (!valid) {
+            Timber.w("Removal vote from ${vote.voterMemberId.take(8)} failed verification — not counted")
+            return
+        }
+
+        val key = VoteKey(targetMemberId, proposedVersion, previousStateHash)
+        val votesForKey = pendingVotes.computeIfAbsent(key) { java.util.Collections.synchronizedMap(mutableMapOf()) }
+        votesForKey[vote.voterMemberId] = vote
+
+        val remaining = currentGroup.members.size - 1
+        val needed = if (remaining > 0) remaining / 2 + 1 else Int.MAX_VALUE
+        val eligibleCount = votesForKey.keys.count { it != targetMemberId && currentGroup.findMemberById(it) != null }
+
+        manager.emitRemovalVoteTally(targetMemberId, eligibleCount, needed)
+
+        if (eligibleCount < needed) return
+
+        Timber.i("Quorum reached for removing ${targetMemberId.take(8)} (${eligibleCount}/${needed}) — applying")
+        val signatures = votesForKey.values.toList()
+        val result = manager.removeMemberByQuorum(targetMemberId, signatures)
+        if (result is GroupOperationResult.Success) {
+            pendingVotes.remove(key)
+            broadcastGroupUpdate(
+                result.value,
+                ChangeType.MEMBER_REMOVED,
+                changedMemberId = targetMemberId,
+                quorumSignatures = signatures
+            )
+        } else if (result is GroupOperationResult.Failure) {
+            Timber.w("Quorum tally reached threshold locally but removeMemberByQuorum rejected it: ${result.error}")
+        }
+    }
+
     private fun verifyGroupSyncSignature(syncMessage: GroupSyncMessage): Boolean {
         return try {
             val manager = groupStateManager ?: return false
@@ -531,7 +738,29 @@ data class GroupSyncMessage(
     val changeType: ChangeType,
     val changedMemberId: String? = null,
     val timestamp: Long,
-    val signature: String
+    val signature: String,
+    // Populated only when this update is a quorum-authorized removal (or the resulting
+    // creator succession) — see GroupTransitionValidator. Additive field: older peers that
+    // predate this ignore it (kotlinx.serialization's ignoreUnknownKeys) and would simply
+    // reject such an update as unauthorized, same as before this feature existed.
+    val quorumSignatures: List<QuorumSignature> = emptyList()
+)
+
+/**
+ * One member's signed vote toward removing another member without the creator's
+ * cooperation — see [buildQuorumRemovalMessage]. Exchanged during the voting phase,
+ * before quorum is reached; once enough are collected they ride along inside a
+ * [GroupSyncMessage.quorumSignatures] instead of being retransmitted individually.
+ */
+@Serializable
+data class RemovalVoteMessage(
+    val groupId: String,
+    val targetMemberId: String,
+    val proposedVersion: Long,
+    val previousStateHash: String,
+    val voterMemberId: String,
+    val signature: String,
+    val timestamp: Long
 )
 
 @Serializable
@@ -559,5 +788,6 @@ enum class ChangeType {
     NAME_CHANGED,
     VERSION_SYNC,
     CONFLICT_RESOLUTION,
-    FULL_SYNC
+    FULL_SYNC,
+    CREATOR_TRANSFERRED
 }

@@ -194,9 +194,24 @@ class GroupTransitionValidatorTest {
     }
 
     @Test
-    fun `changing the creator is rejected`() {
+    fun `voluntary creator transfer signed by the current creator is accepted`() {
         val current = group()
         val remote = successorOf(current).copy(creatorMemberId = aliceId)
+        assertNull(GroupTransitionValidator.validate(current, remote, creatorId))
+    }
+
+    @Test
+    fun `creator change signed by anyone else is rejected`() {
+        val current = group()
+        val remote = successorOf(current).copy(creatorMemberId = aliceId)
+        assertNotNull(GroupTransitionValidator.validate(current, remote, aliceId))
+    }
+
+    @Test
+    fun `voluntary transfer to a non-member is rejected`() {
+        val current = group()
+        val outsiderId = GroupTransitionValidator.deriveMemberIdFromKey("ff".repeat(32))
+        val remote = successorOf(current).copy(creatorMemberId = outsiderId)
         assertNotNull(GroupTransitionValidator.validate(current, remote, creatorId))
     }
 
@@ -387,5 +402,96 @@ class GroupTransitionValidatorTest {
         val sibling = group(members = setOf(creator, alice, bob))
 
         assertNotNull(GroupTransitionValidator.validateConcurrent(current, sibling, bobId))
+    }
+
+    // ── quorum removal ────────────────────────────────────────────────────────
+    //
+    // Durability escape hatch: a majority of the roster remaining after the target
+    // (creator, alice, bob) can remove someone without the creator's cooperation —
+    // including the creator itself. 3-member group: removing anyone leaves 2
+    // remaining, and majority of 2 is 2 — both must vote.
+
+    @Test
+    fun `quorum removal with every remaining member voting is accepted`() {
+        val current = group()
+        val remote = successorOf(current, members = setOf(creator, alice))
+            .copy(removedMemberIds = setOf(bobId))
+
+        // bob is the target; creator and alice are the only other members — both vote.
+        val votes = setOf(creatorId, aliceId)
+        assertNull(GroupTransitionValidator.validate(current, remote, aliceId, votes))
+    }
+
+    @Test
+    fun `quorum removal one vote short is rejected`() {
+        val current = group()
+        val remote = successorOf(current, members = setOf(creator, alice))
+            .copy(removedMemberIds = setOf(bobId))
+
+        val votes = setOf(aliceId) // creator did not vote
+        assertNotNull(GroupTransitionValidator.validate(current, remote, aliceId, votes))
+    }
+
+    @Test
+    fun `a vote from the target does not count toward their own removal`() {
+        val current = group()
+        val remote = successorOf(current, members = setOf(creator, alice))
+            .copy(removedMemberIds = setOf(bobId))
+
+        val votes = setOf(creatorId, bobId) // bob "voting" for his own removal
+        assertNotNull(GroupTransitionValidator.validate(current, remote, aliceId, votes))
+    }
+
+    @Test
+    fun `a vote from a non-member does not count`() {
+        val current = group()
+        val outsiderId = GroupTransitionValidator.deriveMemberIdFromKey("ff".repeat(32))
+        val remote = successorOf(current, members = setOf(creator, alice))
+            .copy(removedMemberIds = setOf(bobId))
+
+        val votes = setOf(creatorId, outsiderId)
+        assertNotNull(GroupTransitionValidator.validate(current, remote, aliceId, votes))
+    }
+
+    @Test
+    fun `the creator can be removed by quorum, with the successor computed deterministically`() {
+        val current = group() // creator, alice, bob
+        val expectedSuccessor = GroupDefinition.computeSuccessorCreator(
+            members = current.members,
+            excludedIds = setOf(creatorId)
+        )
+        val remote = successorOf(current, members = setOf(alice, bob))
+            .copy(removedMemberIds = setOf(creatorId), creatorMemberId = expectedSuccessor!!)
+
+        val votes = setOf(aliceId, bobId) // the only two remaining, both vote
+        assertNull(GroupTransitionValidator.validate(current, remote, aliceId, votes))
+    }
+
+    @Test
+    fun `quorum-removing the creator with the wrong successor is rejected`() {
+        val current = group()
+        val expectedSuccessor = GroupDefinition.computeSuccessorCreator(
+            members = current.members,
+            excludedIds = setOf(creatorId)
+        )
+        val wrongSuccessor = setOf(aliceId, bobId).first { it != expectedSuccessor }
+        val remote = successorOf(current, members = setOf(alice, bob))
+            .copy(removedMemberIds = setOf(creatorId), creatorMemberId = wrongSuccessor)
+
+        val votes = setOf(aliceId, bobId)
+        assertNotNull(GroupTransitionValidator.validate(current, remote, aliceId, votes))
+    }
+
+    @Test
+    fun `quorum votes cannot authorize removing two members at once`() {
+        // Four members so a non-creator (bob) can target two others (alice and the
+        // newcomer) without either being self-removal or creator-authorized.
+        val newcomer = member(newcomerId, newcomerKey)
+        val current = group(members = setOf(creator, alice, bob, newcomer))
+        val remote = successorOf(current, members = setOf(creator, bob))
+            .copy(removedMemberIds = setOf(aliceId, newcomerId))
+
+        val votes = setOf(creatorId, bobId) // would satisfy a single target's threshold
+        assertNotNull(GroupTransitionValidator.validate(current, remote, bobId, votes))
     }
 }

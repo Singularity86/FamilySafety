@@ -300,6 +300,167 @@ class GroupStateManager(
         return removeMember(targetMemberId, signature, localMemberId)
     }
 
+    /**
+     * Surface a removal-vote tally to the UI/service layer. GroupSyncManager owns the
+     * tallying (it receives the vote messages); this just gives it a way to reuse the
+     * same event stream everything else in this class reports through, rather than
+     * standing up a second one.
+     */
+    suspend fun emitRemovalVoteTally(targetMemberId: String, currentCount: Int, neededCount: Int) {
+        _events.emit(GroupStateEvent.RemovalVoteReceived(targetMemberId, currentCount, neededCount))
+    }
+
+    /**
+     * Sign this device's own vote toward removing [targetMemberId] without the creator's
+     * cooperation — the durability escape hatch for a creator who is gone, unreachable, or
+     * uncooperative. Callers broadcast the resulting [QuorumSignature] to every current
+     * member (see `RemovalVoteMessage` in `sync/GroupSyncManager.kt`); it carries no
+     * authority on its own until enough of them are collected.
+     */
+    suspend fun castRemovalVote(targetMemberId: String): QuorumSignature? {
+        val currentGroup = _groupDefinition.value ?: return null
+        val message = buildQuorumRemovalMessage(
+            groupId = currentGroup.groupId,
+            targetMemberId = targetMemberId,
+            proposedVersion = currentGroup.version + 1,
+            previousStateHash = currentGroup.computeStateHash()
+        )
+        return QuorumSignature(
+            voterMemberId = localMemberId,
+            signature = cryptoProvider.sign(message).toHexString()
+        )
+    }
+
+    /**
+     * Remove a member using a majority-of-remaining-members quorum instead of creator
+     * authorization. Each signature in [quorumSignatures] is independently verified here
+     * against its voter's key **in our own current roster** — never trust a caller's claim
+     * about who voted. If [targetMemberId] is the current creator, the successor is computed
+     * deterministically (see [GroupDefinition.computeSuccessorCreator]) so every device that
+     * applies this same removal reaches the same new creator with no further coordination.
+     */
+    suspend fun removeMemberByQuorum(
+        targetMemberId: String,
+        quorumSignatures: List<QuorumSignature>
+    ): GroupOperationResult<GroupDefinition> {
+        return stateMutex.withLock {
+            val currentGroup = _groupDefinition.value
+                ?: return@withLock GroupOperationResult.Failure(GroupError.NotGroupMember)
+
+            val targetMember = currentGroup.findMemberById(targetMemberId)
+                ?: return@withLock GroupOperationResult.Failure(GroupError.MemberNotFound)
+
+            val canonicalMessage = buildQuorumRemovalMessage(
+                groupId = currentGroup.groupId,
+                targetMemberId = targetMemberId,
+                proposedVersion = currentGroup.version + 1,
+                previousStateHash = currentGroup.computeStateHash()
+            )
+
+            val verifiedVoterIds = quorumSignatures
+                .asSequence()
+                .filter { it.voterMemberId != targetMemberId }
+                .mapNotNull { vote ->
+                    val voter = currentGroup.findMemberById(vote.voterMemberId) ?: return@mapNotNull null
+                    val valid = try {
+                        cryptoProvider.verifySignature(
+                            message = canonicalMessage,
+                            signature = vote.signature.hexToByteArray(),
+                            publicKeyHex = voter.ed25519PublicKey
+                        )
+                    } catch (e: Exception) {
+                        false
+                    }
+                    vote.voterMemberId.takeIf { valid }
+                }
+                .toSet()
+
+            val remaining = currentGroup.members.size - 1
+            val needed = remaining / 2 + 1
+            if (remaining <= 0 || verifiedVoterIds.size < needed) {
+                return@withLock GroupOperationResult.Failure(
+                    GroupError.InsufficientQuorum(have = verifiedVoterIds.size, needed = needed)
+                )
+            }
+
+            val isCreatorTarget = targetMemberId == currentGroup.creatorMemberId
+            val newCreatorMemberId = if (isCreatorTarget) {
+                GroupDefinition.computeSuccessorCreator(currentGroup.members, setOf(targetMemberId))
+                    ?: return@withLock GroupOperationResult.Failure(GroupError.MemberNotFound)
+            } else {
+                currentGroup.creatorMemberId
+            }
+
+            // The tombstone is what stops a concurrent merge from quietly putting this
+            // member back — see GroupStateMerge, which also recomputes this same successor
+            // if it learns of this removal only after merging with a branch that does not.
+            val updatedGroup = currentGroup.copy(
+                members = currentGroup.members.filter { it.memberId != targetMemberId }.toSet(),
+                removedMemberIds = currentGroup.removedMemberIds + targetMemberId,
+                creatorMemberId = newCreatorMemberId,
+                version = currentGroup.version + 1,
+                previousStateHash = currentGroup.computeStateHash()
+            )
+
+            try {
+                persistence.saveGroupDefinition(updatedGroup)
+            } catch (e: Exception) {
+                return@withLock GroupOperationResult.Failure(GroupError.StorageError)
+            }
+
+            _groupDefinition.value = updatedGroup
+            removeMemberRuntimeState(targetMemberId)
+
+            _events.emit(GroupStateEvent.MemberRemoved(targetMember, removedBy = null))
+            if (isCreatorTarget) {
+                _events.emit(GroupStateEvent.CreatorTransferred(targetMemberId, newCreatorMemberId))
+            }
+            if (targetMemberId == localMemberId) {
+                _events.emit(GroupStateEvent.RemovedFromGroup)
+            }
+
+            GroupOperationResult.Success(updatedGroup)
+        }
+    }
+
+    /**
+     * Voluntarily hand off the creator role to another current member. Only the *current*
+     * creator can call this meaningfully — [GroupTransitionValidator] rejects the resulting
+     * update from anyone else — but the check is enforced remotely, not here, matching how
+     * every other local mutation in this file trusts its caller and lets the receiving side
+     * be the enforcement point.
+     */
+    suspend fun transferCreator(newCreatorMemberId: String): GroupOperationResult<GroupDefinition> {
+        return stateMutex.withLock {
+            val currentGroup = _groupDefinition.value
+                ?: return@withLock GroupOperationResult.Failure(GroupError.NotGroupMember)
+
+            if (localMemberId != currentGroup.creatorMemberId) {
+                return@withLock GroupOperationResult.Failure(GroupError.NotGroupCreator)
+            }
+            if (currentGroup.findMemberById(newCreatorMemberId) == null) {
+                return@withLock GroupOperationResult.Failure(GroupError.MemberNotFound)
+            }
+
+            val updatedGroup = currentGroup.copy(
+                creatorMemberId = newCreatorMemberId,
+                version = currentGroup.version + 1,
+                previousStateHash = currentGroup.computeStateHash()
+            )
+
+            try {
+                persistence.saveGroupDefinition(updatedGroup)
+            } catch (e: Exception) {
+                return@withLock GroupOperationResult.Failure(GroupError.StorageError)
+            }
+
+            _groupDefinition.value = updatedGroup
+            _events.emit(GroupStateEvent.CreatorTransferred(localMemberId, newCreatorMemberId))
+
+            GroupOperationResult.Success(updatedGroup)
+        }
+    }
+
     // =========================================================================
     // AVATAR HASH UPDATE
     // =========================================================================
@@ -519,7 +680,7 @@ class GroupStateManager(
                 return@withLock GroupOperationResult.Failure(GroupError.InvalidSignature)
             }
 
-            applyRemoteGroupStateLocked(remoteDefinition, senderMemberId)
+            applyRemoteGroupStateLocked(remoteDefinition, senderMemberId, emptySet())
         }
     }
 
@@ -529,19 +690,25 @@ class GroupStateManager(
      *
      * @param updaterMemberId The member whose signature was verified — used to
      *        authorize the transition (e.g. only the creator may remove others).
+     * @param verifiedQuorumVoterIds memberIds whose REMOVE_QUORUM vote signature GroupSyncManager
+     *        has already verified against this device's own current roster — see
+     *        [GroupTransitionValidator.validate]. Empty for every update except a
+     *        quorum-authorized removal.
      */
     suspend fun applyVerifiedRemoteGroupState(
         remoteDefinition: GroupDefinition,
-        updaterMemberId: String
+        updaterMemberId: String,
+        verifiedQuorumVoterIds: Set<String> = emptySet()
     ): GroupOperationResult<GroupDefinition> {
         return stateMutex.withLock {
-            applyRemoteGroupStateLocked(remoteDefinition, updaterMemberId)
+            applyRemoteGroupStateLocked(remoteDefinition, updaterMemberId, verifiedQuorumVoterIds)
         }
     }
 
     private suspend fun applyRemoteGroupStateLocked(
         remoteDefinition: GroupDefinition,
-        updaterMemberId: String
+        updaterMemberId: String,
+        verifiedQuorumVoterIds: Set<String> = emptySet()
     ): GroupOperationResult<GroupDefinition> {
         val currentGroup = _groupDefinition.value
 
@@ -558,7 +725,7 @@ class GroupStateManager(
                     // Reconcile instead of failing — a rejection here is what left devices
                     // permanently forked.
                     return reconcileConcurrentEditLocked(
-                        currentGroup, remoteDefinition, updaterMemberId
+                        currentGroup, remoteDefinition, updaterMemberId, verifiedQuorumVoterIds
                     )
                 }
             }
@@ -568,7 +735,8 @@ class GroupStateManager(
             val rejection = GroupTransitionValidator.validate(
                 current = currentGroup,
                 remote = remoteDefinition,
-                updaterMemberId = updaterMemberId
+                updaterMemberId = updaterMemberId,
+                verifiedQuorumVoterIds = verifiedQuorumVoterIds
             )
             if (rejection != null) {
                 // A broken chain means the two states diverged and then both moved on. That
@@ -585,7 +753,7 @@ class GroupStateManager(
                 // that advanced to different versions fell through to here.
                 if (rejection.startsWith(GroupTransitionValidator.CHAIN_MISMATCH_PREFIX)) {
                     timber.log.Timber.w("GroupStateManager: chain mismatch with ${updaterMemberId.take(8)} — reconciling diverged branches")
-                    return reconcileDivergedLocked(currentGroup, remoteDefinition, updaterMemberId)
+                    return reconcileDivergedLocked(currentGroup, remoteDefinition, updaterMemberId, verifiedQuorumVoterIds)
                 }
                 return GroupOperationResult.Failure(GroupError.UnauthorizedChange(rejection))
             }
@@ -638,7 +806,8 @@ class GroupStateManager(
     private suspend fun reconcileConcurrentEditLocked(
         currentGroup: GroupDefinition,
         remoteDefinition: GroupDefinition,
-        updaterMemberId: String
+        updaterMemberId: String,
+        verifiedQuorumVoterIds: Set<String> = emptySet()
     ): GroupOperationResult<GroupDefinition> {
         _events.emit(
             GroupStateEvent.ConflictDetected(
@@ -660,7 +829,8 @@ class GroupStateManager(
         val rejection = GroupTransitionValidator.validateConcurrent(
             current = currentGroup,
             remote = remoteDefinition,
-            updaterMemberId = updaterMemberId
+            updaterMemberId = updaterMemberId,
+            verifiedQuorumVoterIds = verifiedQuorumVoterIds
         )
         if (rejection != null) {
             return GroupOperationResult.Failure(GroupError.UnauthorizedChange(rejection))
@@ -687,12 +857,14 @@ class GroupStateManager(
     private suspend fun reconcileDivergedLocked(
         currentGroup: GroupDefinition,
         remoteDefinition: GroupDefinition,
-        updaterMemberId: String
+        updaterMemberId: String,
+        verifiedQuorumVoterIds: Set<String> = emptySet()
     ): GroupOperationResult<GroupDefinition> {
         val rejection = GroupTransitionValidator.validateConcurrent(
             current = currentGroup,
             remote = remoteDefinition,
-            updaterMemberId = updaterMemberId
+            updaterMemberId = updaterMemberId,
+            verifiedQuorumVoterIds = verifiedQuorumVoterIds
         )
         if (rejection != null) {
             return GroupOperationResult.Failure(GroupError.UnauthorizedChange(rejection))

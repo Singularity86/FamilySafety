@@ -623,6 +623,44 @@ class MainViewModel @Inject constructor(
             }
         }
     }
+
+    /**
+     * Propose removing [memberId] without the creator's cooperation — the durability path
+     * for a creator who is gone, unreachable, or uncooperative. Available to any member.
+     * Casts this device's own vote immediately; the removal only takes effect once enough
+     * other members vote too (see [removalVoteTallies]).
+     */
+    fun proposeRemoval(memberId: String) {
+        viewModelScope.launch {
+            groupSyncManager.proposeRemoval(memberId)
+        }
+    }
+
+    /** Voluntarily hand off the creator role — only meaningful when called by the creator. */
+    fun transferCreator(newCreatorMemberId: String) {
+        viewModelScope.launch {
+            when (val result = groupStateManager.transferCreator(newCreatorMemberId)) {
+                is com.example.familysafety.group.GroupOperationResult.Success -> {
+                    groupSyncManager.broadcastGroupUpdate(
+                        result.value,
+                        com.example.familysafety.sync.ChangeType.CREATOR_TRANSFERRED,
+                        newCreatorMemberId
+                    )
+                }
+                is com.example.familysafety.group.GroupOperationResult.Failure -> {
+                    timber.log.Timber.w("transferCreator(${newCreatorMemberId.take(8)}) rejected: ${result.error}")
+                }
+            }
+        }
+    }
+
+    /** Running removal-vote tallies, keyed by target memberId, as (haveCount, neededCount). */
+    val removalVoteTallies: StateFlow<Map<String, Pair<Int, Int>>> = groupStateManager.events
+        .filterIsInstance<com.example.familysafety.group.GroupStateEvent.RemovalVoteReceived>()
+        .scan(emptyMap<String, Pair<Int, Int>>()) { tallies, event ->
+            tallies + (event.targetMemberId to (event.currentCount to event.neededCount))
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 }
 
 internal fun selectDriveEstimateOrigin(

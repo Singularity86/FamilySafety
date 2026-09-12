@@ -5,17 +5,22 @@ import java.security.MessageDigest
 /**
  * Authorization rules for applying a remote GroupDefinition on top of the local one.
  *
- * The sync layer verifies WHO signed an update (envelope + payload signatures);
- * this validator decides whether that member was ALLOWED to make the change.
+ * The sync layer verifies WHO signed an update (envelope + payload signatures, and —
+ * for a quorum-authorized removal — each individual vote signature); this validator
+ * decides whether the resulting set of verified signers was ALLOWED to make the change.
  * Without it, any group member could broadcast a state that removes the creator,
  * swaps another member's keys, or rewrites the group identity.
  *
  * Policy (matches the local rules in GroupStateManager):
- * - groupId, creatorMemberId, createdAtEpochMs are immutable
+ * - groupId, createdAtEpochMs are immutable
+ * - creatorMemberId changes only via voluntary transfer (signed by the *current*
+ *   creator) or quorum succession (accompanies a quorum-authorized removal of the
+ *   current creator, successor computed deterministically — see [GroupDefinition.computeSuccessorCreator])
  * - the updater must be a member of the state being upgraded FROM
  * - a member's keys can never change under the same member ID (no key rotation)
  * - added members must have memberId == SHA-256(ed25519 key).take(16)
- * - only the creator may remove other members; anyone may remove themselves
+ * - a member is removed by: the creator, themselves, or a majority of the current
+ *   roster excluding the target (quorum vote — see [verifiedQuorumVoterIds])
  * - removal tombstones are append-only, and a tombstoned member may never reappear in
  *   the roster (see GroupStateMerge — merging two rosters would otherwise readmit anyone
  *   the other side had just removed)
@@ -29,11 +34,11 @@ import java.security.MessageDigest
  * re-sign states containing changes they did not author, and cosmetic fields are
  * not worth breaking that recovery path over.
  *
- * Known limitation: a REMOVAL relayed by a non-creator (e.g. a FULL_SYNC response
- * to a peer that missed the original update) is rejected, because a relayed
- * removal is indistinguishable from a forged one. Affected peers still converge:
- * the creator's original broadcast is QoS 1 into each member's persistent
- * session, and refresh requests are answered by every peer including the creator.
+ * Known limitation: a REMOVAL relayed by a non-creator, non-quorum updater (e.g. a
+ * FULL_SYNC response to a peer that missed the original update) is rejected, because
+ * a relayed removal is indistinguishable from a forged one. Affected peers still
+ * converge: the original broadcast is QoS 1 into each member's persistent session,
+ * and refresh requests are answered by every peer at or past that version.
  */
 object GroupTransitionValidator {
 
@@ -55,14 +60,21 @@ object GroupTransitionValidator {
     }
 
     /**
+     * @param verifiedQuorumVoterIds memberIds whose `REMOVE_QUORUM` signature over this
+     *   exact proposal (groupId, target, proposedVersion, previousStateHash) has already
+     *   been cryptographically verified by the caller against **their own current
+     *   roster** — this function only reasons about identity/counting, never raw bytes.
+     *   Signature verification lives in the sync layer, same division of labor as the
+     *   single-signer `updaterMemberId` this function has always taken on trust.
      * @return null if [remote] is an authorized successor of [current] made by
      *         [updaterMemberId], otherwise a human-readable rejection reason.
      */
     fun validate(
         current: GroupDefinition,
         remote: GroupDefinition,
-        updaterMemberId: String
-    ): String? = check(current, remote, updaterMemberId, concurrent = false)
+        updaterMemberId: String,
+        verifiedQuorumVoterIds: Set<String> = emptySet()
+    ): String? = check(current, remote, updaterMemberId, concurrent = false, verifiedQuorumVoterIds)
 
     /**
      * Same rules, for a state that is a concurrent sibling of ours rather than a successor
@@ -79,20 +91,39 @@ object GroupTransitionValidator {
     fun validateConcurrent(
         current: GroupDefinition,
         remote: GroupDefinition,
-        updaterMemberId: String
-    ): String? = check(current, remote, updaterMemberId, concurrent = true)
+        updaterMemberId: String,
+        verifiedQuorumVoterIds: Set<String> = emptySet()
+    ): String? = check(current, remote, updaterMemberId, concurrent = true, verifiedQuorumVoterIds)
+
+    /**
+     * Whether a majority of the current roster, excluding [targetMemberId], is present in
+     * [verifiedQuorumVoterIds]. Defensively re-checks membership and excludes the target
+     * even though callers are expected to have already filtered — this function is the
+     * single source of truth for the threshold, so nothing else should redefine it.
+     */
+    private fun isQuorumSufficient(
+        current: GroupDefinition,
+        targetMemberId: String,
+        verifiedQuorumVoterIds: Set<String>
+    ): Boolean {
+        val eligibleVoters = verifiedQuorumVoterIds.count { voterId ->
+            voterId != targetMemberId && current.findMemberById(voterId) != null
+        }
+        val remaining = current.members.size - 1
+        if (remaining <= 0) return false
+        val needed = remaining / 2 + 1
+        return eligibleVoters >= needed
+    }
 
     private fun check(
         current: GroupDefinition,
         remote: GroupDefinition,
         updaterMemberId: String,
-        concurrent: Boolean
+        concurrent: Boolean,
+        verifiedQuorumVoterIds: Set<String>
     ): String? {
         if (remote.groupId != current.groupId) {
             return "group ID changed"
-        }
-        if (remote.creatorMemberId != current.creatorMemberId) {
-            return "creator changed"
         }
         if (remote.createdAtEpochMs != current.createdAtEpochMs) {
             return "creation timestamp changed"
@@ -152,17 +183,6 @@ object GroupTransitionValidator {
             return "removed member ${resurrected.first().take(8)} is present in the roster"
         }
 
-        // Authorizing a *new* tombstone follows the same rule as the removal it records:
-        // the creator may remove anyone, anyone may remove themselves.
-        val newTombstones = remote.removedMemberIds - current.removedMemberIds
-        if (newTombstones.isNotEmpty() &&
-            updaterMemberId != current.creatorMemberId &&
-            newTombstones != setOf(updaterMemberId)
-        ) {
-            return "only the group creator may remove other members " +
-                "(updater ${updaterMemberId.take(8)} tombstoned ${newTombstones.size})"
-        }
-
         // A member may also disappear from the roster without a tombstone — that is what
         // every build before tombstones existed produced, and what a relayed FULL_SYNC from
         // such a peer still looks like.
@@ -174,6 +194,45 @@ object GroupTransitionValidator {
         ) {
             return "only the group creator may remove other members " +
                 "(updater ${updaterMemberId.take(8)} removed ${removedIds.size})"
+        }
+
+        // Authorizing a *new* tombstone: the creator may remove anyone, anyone may remove
+        // themselves, or a majority of the remaining roster (excluding the target) may
+        // remove them without the creator's cooperation — the durability escape hatch for
+        // a creator who is gone, unreachable, or uncooperative.
+        val newTombstones = remote.removedMemberIds - current.removedMemberIds
+        if (newTombstones.isNotEmpty()) {
+            val isCreatorAuthorized = updaterMemberId == current.creatorMemberId
+            val isSelfRemoval = newTombstones == setOf(updaterMemberId)
+            val isQuorumAuthorized = newTombstones.size == 1 &&
+                isQuorumSufficient(current, newTombstones.first(), verifiedQuorumVoterIds)
+            if (!isCreatorAuthorized && !isSelfRemoval && !isQuorumAuthorized) {
+                return "only the group creator may remove other members " +
+                    "(updater ${updaterMemberId.take(8)} tombstoned ${newTombstones.size})"
+            }
+        }
+
+        // creatorMemberId is immutable except through exactly two authorized transitions:
+        // a voluntary hand-off signed by the *current* creator, or succession forced by a
+        // quorum-authorized removal of the current creator (checked above as a tombstone;
+        // here we only confirm the successor is the one every device would compute
+        // independently, never an arbitrary replacement).
+        if (remote.creatorMemberId != current.creatorMemberId) {
+            val voluntaryTransfer = updaterMemberId == current.creatorMemberId &&
+                newTombstones.isEmpty() &&
+                current.findMemberById(remote.creatorMemberId) != null &&
+                remote.creatorMemberId !in effectiveTombstones
+
+            val creatorWasQuorumRemoved = newTombstones == setOf(current.creatorMemberId) &&
+                isQuorumSufficient(current, current.creatorMemberId, verifiedQuorumVoterIds)
+            val expectedSuccessor = if (creatorWasQuorumRemoved) {
+                GroupDefinition.computeSuccessorCreator(current.members, newTombstones)
+            } else null
+            val quorumSuccession = creatorWasQuorumRemoved && remote.creatorMemberId == expectedSuccessor
+
+            if (!voluntaryTransfer && !quorumSuccession) {
+                return "creator changed"
+            }
         }
 
         if (remote.groupName != current.groupName && updaterMemberId != current.creatorMemberId) {

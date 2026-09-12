@@ -52,6 +52,7 @@ object MqttConfig {
             topic.endsWith("/sync_request") ||
             topic.endsWith("/join_request") ||
             topic.endsWith("/join_approval") ||
+            topic.endsWith("/removal_vote") ||
             (topic.contains("/group/") && topic.endsWith("/ack"))
 
 
@@ -92,6 +93,16 @@ object MqttConfig {
 
     fun getGroupSyncInboxTopic(memberId: String): String {
         return "familysafe/$memberId/group_sync"
+    }
+
+    /**
+     * Per-recipient inbox for a quorum-removal vote (see GroupSyncManager). Retained, like
+     * join_approval, so a member who was offline while votes were cast still finds them —
+     * a vote that only reached members who happened to be online would make the quorum
+     * threshold depend on timing rather than agreement.
+     */
+    fun getRemovalVoteTopic(memberId: String): String {
+        return "familysafe/$memberId/removal_vote"
     }
     
     fun getJoinRequestTopic(inviterMemberId: String): String {

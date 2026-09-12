@@ -77,6 +77,39 @@ data class MemberRuntimeState(
 )
 
 /**
+ * One member's signed vote toward removing another member without the creator's
+ * cooperation. Carried alongside a [GroupDefinition] update (see `GroupSyncMessage`
+ * in `sync/GroupSyncManager.kt`) once a quorum has been collected — never part of
+ * [GroupDefinition] itself, so in-flight voting never touches the hash chain.
+ *
+ * @property signature over `"REMOVE_QUORUM:$groupId:$targetMemberId:$proposedVersion:$previousStateHash"`,
+ *   verified against [voterMemberId]'s key in the *current* roster (never the incoming one).
+ */
+@Serializable
+data class QuorumSignature(
+    val voterMemberId: String,
+    val signature: String
+)
+
+/**
+ * Canonical message a quorum-removal vote signs. Shared by [GroupStateManager] (which
+ * generates and re-verifies it) and `GroupSyncManager` (which verifies it independently
+ * on receipt, both for individual votes and for the assembled removal it accompanies) —
+ * one definition so the two can never silently drift apart. Prefixed distinctly from the
+ * creator/self removal message ("REMOVE" vs "REMOVE_QUORUM") so a vote signature can never
+ * be replayed as one of those or vice versa, and binds to [proposedVersion] and
+ * [previousStateHash] so a vote cast for one proposal cannot authorize a different one.
+ */
+fun buildQuorumRemovalMessage(
+    groupId: String,
+    targetMemberId: String,
+    proposedVersion: Long,
+    previousStateHash: String
+): ByteArray =
+    "REMOVE_QUORUM:$groupId:$targetMemberId:$proposedVersion:$previousStateHash"
+        .toByteArray(Charsets.UTF_8)
+
+/**
  * The complete family group definition.
  * This is the persisted, signed group state that all members must agree upon.
  *
@@ -165,6 +198,23 @@ data class GroupDefinition(
 
     fun containsMember(memberId: String): Boolean =
         members.any { it.memberId == memberId }
+
+    companion object {
+        /**
+         * Deterministic successor when the creator is removed (by quorum vote — see
+         * [GroupTransitionValidator]). Every device must compute the same answer
+         * independently with no extra vote, so this is a pure function of already-
+         * replicated roster state: the longest-standing remaining member, tie-broken
+         * by memberId for full determinism when two members share a timestamp.
+         *
+         * @param members the roster to choose from (already tombstone-filtered by the caller)
+         * @param excludedIds member IDs ineligible to succeed (at minimum, the member being removed)
+         */
+        fun computeSuccessorCreator(members: Set<FamilyMember>, excludedIds: Set<String>): String? =
+            members.filterNot { it.memberId in excludedIds }
+                .minWithOrNull(compareBy({ it.addedAtEpochMs }, { it.memberId }))
+                ?.memberId
+    }
 }
 
 /**
@@ -199,6 +249,17 @@ sealed class GroupStateEvent {
 
     /** Received a group state that conflicts with local state (requires resolution). */
     data class ConflictDetected(val localVersion: Long, val remoteVersion: Long) : GroupStateEvent()
+
+    /** The group creator role moved to a different member, voluntarily or by quorum vote. */
+    data class CreatorTransferred(val oldCreatorMemberId: String, val newCreatorMemberId: String) : GroupStateEvent()
+
+    /** A vote toward removing [targetMemberId] was received; tally is informational only
+     *  until [currentCount] reaches [neededCount], at which point the removal is applied. */
+    data class RemovalVoteReceived(
+        val targetMemberId: String,
+        val currentCount: Int,
+        val neededCount: Int
+    ) : GroupStateEvent()
 }
 
 /**
@@ -222,6 +283,9 @@ sealed class GroupError {
 
     /** The update was validly signed, but the signer was not allowed to make this change. */
     data class UnauthorizedChange(val reason: String) : GroupError()
+
+    /** A quorum-removal vote had valid signatures but not enough of them. */
+    data class InsufficientQuorum(val have: Int, val needed: Int) : GroupError()
     object StorageError : GroupError()
     data class CryptoError(val message: String) : GroupError()
     data class NetworkError(val message: String) : GroupError()

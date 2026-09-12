@@ -74,12 +74,27 @@ object GroupStateMerge {
             .filterNot { it.memberId in tombstones }
             .toSet()
 
-        val nothingToAdd = roster == winner.members && tombstones == winner.removedMemberIds
+        // The winner's creator may have been quorum-removed on a branch it does not know
+        // about yet (see GroupTransitionValidator). Blindly inheriting winner.creatorMemberId
+        // would silently resurrect a removed creator's authority — the exact bug this whole
+        // feature exists to close. Recompute the same deterministic successor every device
+        // would independently reach, rather than trusting either side's copy of the field.
+        val creatorMemberId = if (winner.creatorMemberId in tombstones) {
+            GroupDefinition.computeSuccessorCreator(roster, tombstones)
+                ?: winner.creatorMemberId // no eligible successor (should not happen in practice)
+        } else {
+            winner.creatorMemberId
+        }
+
+        val nothingToAdd = roster == winner.members &&
+            tombstones == winner.removedMemberIds &&
+            creatorMemberId == winner.creatorMemberId
         if (nothingToAdd) return null
 
         return winner.copy(
             members = roster,
             removedMemberIds = tombstones,
+            creatorMemberId = creatorMemberId,
             version = winner.version + 1,
             previousStateHash = winner.computeStateHash(),
             // A group key is generated once at creation and never rotates, so both sides

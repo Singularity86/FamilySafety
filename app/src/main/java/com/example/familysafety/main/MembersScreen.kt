@@ -11,9 +11,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.HowToVote
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PersonRemove
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import com.example.familysafety.invite.JoinRequest
 import com.example.familysafety.ui.components.ShimmerBox
 import com.example.familysafety.ui.theme.AmberWarning
+import com.example.familysafety.ui.theme.ColorSuccess
 
 
 @Composable
@@ -51,9 +54,12 @@ fun MembersScreen(
     val groupName by viewModel.groupName.collectAsState()
     val groupDefinition by viewModel.groupDefinition.collectAsState()
     val myMemberId = viewModel.myMemberId
-    // Only the creator may remove other members (enforced by GroupStateManager and
-    // by every peer via GroupTransitionValidator) — don't offer a button that fails.
-    val canRemoveOthers = groupDefinition?.creatorMemberId == myMemberId
+    val removalVoteTallies by viewModel.removalVoteTallies.collectAsState()
+    // The creator may remove other members immediately (enforced by GroupStateManager and
+    // by every peer via GroupTransitionValidator) — don't offer a button that fails. Anyone
+    // else can still propose a removal, which takes effect once a majority of the remaining
+    // roster votes for it — the durability path when the creator is gone or uncooperative.
+    val isCreator = groupDefinition?.creatorMemberId == myMemberId
     val haptic = LocalHapticFeedback.current
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -108,7 +114,11 @@ fun MembersScreen(
                         },
                         onShowHistory = { onNavigateToHistory(member.memberId) },
                         onRemove = { viewModel.removeMember(member.memberId) },
-                        canRemove = canRemoveOthers,
+                        canRemove = isCreator,
+                        onProposeRemoval = { viewModel.proposeRemoval(member.memberId) },
+                        voteTally = removalVoteTallies[member.memberId],
+                        canTransferCreator = isCreator && member.memberId != groupDefinition?.creatorMemberId,
+                        onTransferCreator = { viewModel.transferCreator(member.memberId) },
                         colorHue = member.colorHue
                     )
                 }
@@ -185,7 +195,7 @@ internal fun JoinRequestCard(
                     Icon(
                         imageVector = Icons.Default.Check,
                         contentDescription = "Approve",
-                        tint = MaterialTheme.colorScheme.primary
+                        tint = ColorSuccess
                     )
                 }
             }
@@ -257,11 +267,86 @@ private fun MemberCard(
     onShowHistory: () -> Unit = {},
     onRemove: () -> Unit = {},
     canRemove: Boolean = false,
+    onProposeRemoval: () -> Unit = {},
+    /** (haveCount, neededCount) for an in-progress removal vote against this member, or null. */
+    voteTally: Pair<Int, Int>? = null,
+    canTransferCreator: Boolean = false,
+    onTransferCreator: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showDialog by remember { mutableStateOf(false) }
     var showRemoveDialog by remember { mutableStateOf(false) }
+    var showProposeRemovalDialog by remember { mutableStateOf(false) }
+    var showTransferCreatorDialog by remember { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
+
+    if (showProposeRemovalDialog) {
+        AlertDialog(
+            onDismissRequest = { showProposeRemovalDialog = false },
+            icon = {
+                Icon(
+                    Icons.Default.HowToVote,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = { Text("Propose removing ${member.displayName}?") },
+            text = {
+                Text(
+                    "This starts a vote rather than removing them immediately. Your vote " +
+                    "counts right away; ${member.displayName} is removed once a majority " +
+                    "of everyone else in the family also votes to remove them."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        showProposeRemovalDialog = false
+                        onProposeRemoval()
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Start vote")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showProposeRemovalDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showTransferCreatorDialog) {
+        AlertDialog(
+            onDismissRequest = { showTransferCreatorDialog = false },
+            title = { Text("Make ${member.displayName} the family creator?") },
+            text = {
+                Text(
+                    "${member.displayName} will be able to remove other members and rename " +
+                    "the group. You will still be able to remove members yourself only by " +
+                    "starting a vote, the same as anyone else."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    showTransferCreatorDialog = false
+                    onTransferCreator()
+                }) {
+                    Text("Make creator")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTransferCreatorDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     if (showRemoveDialog) {
         AlertDialog(
@@ -401,6 +486,14 @@ private fun MemberCard(
                             color = AmberWarning
                         )
                     }
+                    if (voteTally != null) {
+                        val (have, needed) = voteTally
+                        Text(
+                            text = "Removal vote: $have of $needed",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
 
@@ -426,6 +519,19 @@ private fun MemberCard(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                if (!isMe && canTransferCreator) {
+                    IconButton(
+                        onClick = { showTransferCreatorDialog = true },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Star,
+                            contentDescription = "Make ${member.displayName} the family creator",
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 if (!isMe && canRemove) {
                     IconButton(
                         onClick = { showRemoveDialog = true },
@@ -436,6 +542,20 @@ private fun MemberCard(
                             contentDescription = "Remove member",
                             modifier = Modifier.size(20.dp),
                             tint = MaterialTheme.colorScheme.error
+                        )
+                    }
+                } else if (!isMe) {
+                    // Not the creator: propose a vote instead of removing immediately —
+                    // the durability path when the creator is gone or uncooperative.
+                    IconButton(
+                        onClick = { showProposeRemovalDialog = true },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.HowToVote,
+                            contentDescription = "Propose removing ${member.displayName}",
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }

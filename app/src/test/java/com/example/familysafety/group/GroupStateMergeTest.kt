@@ -228,6 +228,30 @@ class GroupStateMergeTest {
     }
 
     @Test
+    fun aQuorumRemovedCreatorIsNotResurrectedByTheWinnersStaleCopy() {
+        // Bob's branch already reflects a quorum-authorized removal of the creator, with
+        // the successor computed the same way every device would. The winner (by hash
+        // order) is Carol's branch, which never heard about the removal and still lists
+        // the old creator — a naive merge would silently keep the dead creator's authority.
+        val expectedSuccessor = GroupDefinition.computeSuccessorCreator(
+            members = setOf(bob, carol, dave),
+            excludedIds = setOf(creator.memberId)
+        )!!
+        val bobSide = baseGroup(bob, carol, dave).copy(
+            removedMemberIds = setOf(creator.memberId),
+            creatorMemberId = expectedSuccessor
+        )
+        val carolSide = baseGroup(creator, bob, carol, dave)
+
+        val winner = GroupStateMerge.pickWinner(bobSide, carolSide)
+        val loser = if (winner === bobSide) carolSide else bobSide
+        val merged = GroupStateMerge.merge(winner = winner, ours = loser)!!
+
+        assertEquals(expectedSuccessor, merged.creatorMemberId)
+        assertFalse(merged.members.any { it.memberId == creator.memberId })
+    }
+
+    @Test
     fun theMergedStateCarriesEveryMemberRecordIntact() {
         val ours = baseGroup(creator, bob, carol)
         val theirs = baseGroup(creator, bob, dave)

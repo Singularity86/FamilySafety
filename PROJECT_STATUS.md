@@ -1,12 +1,15 @@
 # FamilySafety (Jibaro Family Safety) — Project Status
 
-Snapshot date: 2026-08-29. Branch: `main`, HEAD `e0965c8`, **1.13.1 / versionCode 30**.
-Rewritten in part from the 2026-08-18 snapshot: the F2 decision was made on the 21st,
-**29 shipped through Play**, and diagnosing a real family's broken sync turned up a
-transport defect that explains several symptoms previously filed as unrelated.
+Snapshot date: 2026-09-08. Branch: `main`, HEAD `ea2ce5a`, **1.13.4 / versionCode 33**.
+Rewritten in part from the 2026-08-29 snapshot: the fixes it described as pending —
+the recovery-phrase checksum, the JNA/16 KB alignment work, and the file-key flip —
+shipped as versionCode 31, then 32; 33 followed with a new launcher icon, a recolored
+theme, and a reordered top bar, none of which touch the wire format. **Whether 30–33
+reached Play is unconfirmed here — the only user-reported upload is still 29.**
 
-Supersedes the 2026-08-17 and 2026-08-13 snapshots. The file redesign is finished — all six
-phases plus the vault are in `main` — and that work is now shipped rather than pending.
+Supersedes the 2026-08-18, 2026-08-17, and 2026-08-13 snapshots. The file redesign is
+finished — all six phases plus the vault are in `main` — and that work is now shipped
+rather than pending.
 
 ## Scope of this document
 
@@ -33,16 +36,18 @@ running), targetSdk 36, minSdk 26.
 - Shared documents are stored encrypted at rest and never assembled in the clear.
 - A shared family vault, opened by a code that is never stored anywhere.
 
-**444 unit tests, 0 failures** at HEAD.
+**453 unit tests, 0 failures** at HEAD (verified with `./gradlew testDebugUnitTest`,
+2026-09-08).
 
-## Track 1 — Play: 29 shipped, family recreation still outstanding
+## Track 1 — Play: 29 shipped, family recreated
 
 26 was uploaded 2026-08-13, 28 followed with the member-list fixes, and **29 — Phase 5, the
-vault, and the map bubble — went out through Play** *(user-reported)*. 30 is built and
-waiting. Because 29 went through Play, both family devices run Google-signed builds: a
-locally-built APK cannot be installed over them, and the only way past that is an uninstall,
-which destroys identity keys and recovery phrases. Everything now reaches those phones
-through Play or not at all.
+vault, and the map bubble — went out through Play** *(user-reported)*. 30 is built; 31 (the
+recovery-phrase checksum), 32 (the file-key flip), and 33 (icon/theme/top-bar) followed it.
+Whether any of 30–33 reached Play is unconfirmed here. Because 29 went through Play, both
+family devices run Google-signed builds: a locally-built APK cannot be installed over them,
+and the only way past that is an uninstall, which destroys identity keys and recovery
+phrases. Everything now reaches those phones through Play or not at all.
 
 **Done — the family recreation** *(user-reported, 2026-08-30)*, and done **before** the
 diverging-roster problem appeared, not after. That ordering matters twice over: the v2/v5
@@ -154,6 +159,48 @@ clear it. It is not cosmetic: it takes a slot in every per-recipient fan-out, an
 every group broadcast on that device pays the full 30 seconds waiting for an ack that
 cannot come.
 
+**This ghost member was cleaned up at some point after the above was written** — confirmed
+2026-09-09 when investigating the issue below, since the user was clear no ghost existed
+before that session. See the 2026-09-08 incident note further down: a fresh "Debug" ghost now
+exists again, recreated by an `adb pm clear` run on the device that held that identity, which
+turned out to still be an active family member rather than the already-dead entry described
+above.
+
+**Worse than the first occurrence: "Debug" was this family's creator.** Confirmed 2026-09-09.
+Since `creatorMemberId` is permanently immutable and only the creator may remove *other*
+members (self-removal is the only other path — no creator-transfer mechanism exists anywhere
+in the codebase), this ghost **cannot be removed by anyone**, and this family has permanently
+lost the ability to remove any other member (short of self-removal) or rename the group, for
+its remaining lifetime. The only way out is the same one this file's Track 1 already
+documents for the older file-key problem: recreate the family from scratch under a new
+creator. The roster diagnosis for how sascha's join propagated is also unrecoverable, since
+the device's own state is gone.
+
+## Track 3c — 2026-09-09: "sascha" missing from Mommy's roster, live and unresolved
+
+The wife's phone ("Mommy") does not show family member "sascha" — confirmed still missing as
+of this session, on the same app version (33) it's been on throughout, so not a stale-build
+issue. A currently-live device ("Daddy") shows sascha correctly, confirming at least one
+correct copy of the roster exists; the family has 7 members total (Debug, Mommy, Daddy,
+Saniya, Samara, sascha, Courage Phone).
+
+The approver of sascha's join was the debug-build device — the same one destroyed in the
+2026-09-08 incident above, closing off the ability to inspect what its roster looked like at
+the time it approved her, or to confirm whether its own broadcast of her addition ever
+reached other devices. Likely mechanism, matching this track's diagnosis above: the approval
+happened on an older build (before the Track 9 transport fix, `fdd190b`), the broadcast
+silently failed to reach Mommy's phone specifically, and — per this track's own finding — that
+gap **does not self-heal**. Whoever approved the next member after sascha did so from
+whatever roster they had at the time; if that broadcast is the one Mommy's phone actually
+applied, it would explain her being caught up to a later version while still missing sascha
+specifically.
+
+**Fix**: Mommy's phone needs to leave the family and rejoin with a fresh invite from a device
+that currently shows sascha correctly (Daddy's). Any member can approve a join, not just the
+creator, so this is unaffected by the creator-ghost problem above. Not yet done as of this
+snapshot — the user was warned this destroys that device's local identity/recovery phrase and
+requires a new invite, and wanted to think it over before acting.
+
 ## Track 4 — Transport and onboarding reliability: closed
 
 - **MQTT self-eviction (`368bc9a`).** Four racing `initialize()` callers each built a client
@@ -205,10 +252,13 @@ Three things were wrong and are now not:
   cache cleared on launch. A resumable startup pass migrates older plaintext copies one file
   at a time, deleting the plaintext only after the encrypted copy verifies.
 
-**File key version 3** — the group key with purpose separation — is readable but deliberately
-**not written**. 1.12.10 maps an unrecognised version to the legacy key, so publishing v3 now
-would make new files undecryptable to peers that have not updated. *This is the one piece of
-deferred work in the file subsystem: flip the writer once every device is past 28.*
+**File key version 3** — the group key with purpose separation — was flipped on in **1.13.3
+(32)**, `5f3cbae`, once this family was confirmed past 28 on 2026-08-30. Files now derive
+`deriveSubkey(groupKey, PURPOSE_FILES)` instead of using the raw group key directly, so a
+flaw in the file path costs the files and nothing else — the arrangement presence already
+had. Not reversible for anything published under the old version: a device that stayed on 28
+could never read those files, even after updating, unless they were shared again. Families
+created before 1.12.0 have no group key to derive from and stay on the legacy key regardless.
 
 Rollout note: **peers on 1.12.10 publish unsigned manifests and will stop updating a newer
 device's file list until they update.** That is the intended trade — the Family screen already
@@ -326,6 +376,25 @@ redesign as **undocumented rather than done**.
 
 New since the last snapshot: the Files screen has a search box (which is also the vault's
 entry point), a status board, per-file status chips and availability counts.
+
+### Rebrand: icon, theme, and top bar (2026-09-04, `565f9dc`/`5019688`, shipped in 33)
+
+New adaptive launcher icon — a house-in-a-pin with an off-center window and light spilling
+onto the step below — replacing the navy shield-and-family badge, with the Android 13+
+monochrome themed-icon layer and a properly wired adaptive background (previously hardcoded
+to `@android:color/transparent` despite a color resource already existing for it, unused).
+Dark surfaces move from navy-black to the icon's own pine-green; a new `PorchAmber` replaces
+teal as the brand primary everywhere — buttons, the selected nav tab, onboarding CTAs. Teal
+had been doing double duty as both brand color and "healthy/connected" status color, so
+collapsing everything onto one amber would have made the LAN/Relay badge and the Security
+screen's "Synced"/"Warning" states read the same; a separate `SuccessGreen` now carries sync
+status, LAN connection, and the "E2EE active" chip instead. Light mode's white surfaces are
+unchanged.
+
+The top bar's hierarchy was inverted: the family name is now the bold headline (shrinking its
+own font size, down to a 14sp floor, rather than wrapping or truncating), and "Jibaro Family
+Safety" moved out to a small centered caption strip under the whole bar instead of competing
+with the family name and action icons for space. No wire-format change — purely visual.
 
 ### Map: overlapping pins, and the four questions left open
 
@@ -535,11 +604,14 @@ had no collectors.
 
 - **Untracked**: `AGENTS.md` (a Codex-facing near-duplicate of `CLAUDE.md`),
   `.claude/settings.json`, `FamiliySafetyIcon.png` (note the typo), and `.idea/` noise that
-  belongs in `.gitignore`.
-- `.claude/settings.local.json` is tracked but carries personal overrides, and has uncommitted
-  local modifications.
-- Local branches `ui-refactor` and `ui-checkpoint-current` are merged history;
-  `origin/claude/family-safety-invite-bug-lsvy7p` is a leftover remote branch.
+  belongs in `.gitignore` — unchanged since the last snapshot.
+- `.claude/settings.local.json` is tracked and carries personal overrides. Its dev-command
+  allowlist additions (git commit/push, adb device inspection) were committed in `b20005c`
+  (2026-09-03), so it's clean now rather than carrying uncommitted local modifications.
+- Local branches `ui-refactor` and `ui-checkpoint-current` are merged history. Leftover remote
+  branches have grown to three: `origin/claude/family-safety-invite-bug-lsvy7p`,
+  `origin/claude/family-safety-testing-strategy-xnhioq`, and
+  `origin/claude/github-contact-audit-hol65a`.
 
 ## Deliberately parked
 
@@ -550,25 +622,94 @@ why the duplication is worth removing before they stop agreeing.
 
 ## Suggested next actions, in order
 
-1. **Ship 30 and confirm the sync repair on the real family.** The bundle is built and
-   verified; `RELEASE_NOTES.md` carries the copy. Then, on the device that is behind:
-   Security Dashboard → Check Family List, and re-read the diagnostics. `v5` means Track 3b
-   is closed. `conflict`/`error:` means the update now arrives and is *rejected*, which is
-   the genuine-branch case and that device must leave and rejoin. Still `idle` means the
-   diagnosis was incomplete.
+1. **Ship a build carrying the sync repair (30+) and confirm it on the real family.** 33 is
+   built and verified; `RELEASE_NOTES.md` carries the copy for each of 30–33. Whether any of
+   them has actually reached the family's phones through Play is unconfirmed here — still
+   check before trusting device state. Then, on the device that is behind: Security Dashboard
+   → Check Family List, and re-read the diagnostics. `v5` means Track 3b is closed.
+   `conflict`/`error:` means the update now arrives and is *rejected*, which is the
+   genuine-branch case and that device must leave and rejoin. Still `idle` means the diagnosis
+   was incomplete.
 2. **Have the creator remove the "Debug" ghost member** (Track 3b). It costs a slot in every
    fan-out and 30 seconds of ack timeout on every group broadcast.
 3. ~~Cut a release with Phases 5 and 6.~~ **Done — 29 shipped through Play.** Which means
    the passphrase floor is now permanent for any device where someone has already written to
    a vault, and the accepted F2 exposure is live rather than theoretical.
-4. **Run the family recreation** (Track 1). Everything shipped since 1.12.0 — file-name
-   privacy, presence sealing, at-rest keys, the vault — does nothing for a family created
-   before it. Note this family's document key is **present**, so it is *not* one of those;
-   confirm before putting anyone through it.
+4. ~~Run the family recreation~~ (Track 1). **Done** — *(user-reported, 2026-08-30)*, and
+   before the diverging-roster problem in Track 3b, which is what rules out stale
+   pre-recreation state as its cause. Both devices report `Document key: present`, the
+   observable confirmation the recreation took.
 5. Check the iOS CI run (needs `gh auth login`); if green, Phase 0 is done and Phase 1 is next.
-6. Flip the file key writer to version 3 once every device is past 28.
+6. ~~Flip the file key writer to version 3 once every device is past 28.~~ **Done — 32
+   (`5f3cbae`), confirmed past 28 for this family on 2026-08-30.**
 7. **Make the initial file share a pull rather than a push** — the O(N) fan-out per chunk is
    the real scaling ceiling (Track 9), and the targeted-repair primitive it needs already
    exists from Phase 2.
 8. Refresh or delete `PLAY_STORE_CHECKLIST.md`; `.gitignore` for `.idea/`; decide whether
    `AGENTS.md` and this file belong in git.
+9. **Auto-backup — designed, paused before implementation (2026-09-08).** `BackupManager.kt`
+   already does password-derived, portable AES-256-GCM export/import of mnemonic + group
+   definition (PBKDF2-SHA256, 200k iterations); Settings wires it to a manual share-sheet
+   export and a restart-on-import restore. What's missing is automation: periodic/event-
+   triggered re-export to a SAF-picked folder, using a backup password remembered locally
+   (same `EncryptedSharedPreferences` + Keystore `MasterKey` protection as the mnemonic).
+   Confirmed this can't ride Android's OS-level Auto Backup — `AndroidKeyStoreLocalKeyStore`
+   wraps the mnemonic in a hardware-bound, non-exportable Keystore key, so an OS-backed copy
+   would be undecryptable after reinstall or on a new device; only the portable
+   `BackupManager` path works. User chose silent background backup over a reminder-only
+   approach, but flagged for security review first: unlike a one-off manual export, a
+   continuous background write means the encrypted file leaves the device permanently
+   (possibly to a synced cloud folder), with the backup password as the sole barrier
+   protecting the full mnemonic + roster — same blast radius as the vault's F10 finding, and
+   `BackupManager` currently enforces no minimum password length (the vault requires 16 chars
+   after F10). Agreed safeguards before building: enforce a password-length floor matching
+   the vault's, warn once at folder-pick time that a synced folder leaves the device, always
+   overwrite one fixed filename rather than accumulating crackable history, and surface
+   backup failures visibly rather than failing silently (the same failure shape as the
+   `pm clear` incident below). **Paused pending explicit go-ahead to implement.**
+10. **Creator-removal-by-vote — requested, not started (2026-09-08).** Today only the
+    creator may remove another member, and only the creator may rename the group
+    (`GroupTransitionValidator.kt`); nobody can remove the creator, and if the creator's
+    device is gone without a self-removal broadcast, that entry is permanently stuck in the
+    roster — the same shape as the existing "Debug" ghost member in Track 3b, but for the
+    creator role itself, which also permanently disables all creator-only moderation for the
+    family. Asked for a quorum-signed alternative: any member proposes removing a target
+    (including the creator), other members broadcast signed votes, and once a majority of
+    the current roster (excluding the target) has signed, the removal is authorized without
+    the creator. Sketch not yet written up in detail or implemented — needs a new signed
+    message type, a `GroupTransitionValidator` branch alongside the existing
+    creator-or-self rule, and a decided rule for what happens to `creatorMemberId` (itself
+    otherwise immutable) when the creator is the one voted out — likely auto-promoting the
+    longest-standing remaining member, since that's independently computable from already-
+    replicated roster/join-order state without a second vote.
+
+## 2026-09-08 incident: `pm clear` destroyed a live member of the real family
+
+While on-device testing the onboarding IME fixes below, `adb shell pm clear` was run twice
+against the `.debug`-suffixed test package to reset onboarding state, on the assumption that
+build variant was disposable. It wasn't safely assumed, twice over:
+
+First, the user had a *separate* family set up in the debug build purely for testing, without
+its recovery phrase saved elsewhere, and `pm clear` destroys `AndroidKeyStoreLocalKeyStore`'s
+local storage irrecoverably (Keystore-bound, no server backup by design). That identity is
+gone.
+
+Second — worse, and only surfaced afterward while debugging an unrelated sync bug (a
+"sascha" roster entry missing on the wife's phone, see the note below) — that same debug
+install was, at the time, **also an active member of the real family ("Familia Mia"), and its
+creator**, and specifically the device that had approved sascha's join. It was not the
+pre-existing "Debug" ghost member this file's Track 3b section already described from an
+earlier, separately resolved incident; that one had already been cleaned up before this
+session. This is a *new* ghost — and because it was the creator, it is unremovable by anyone
+(`creatorMemberId` is immutable, only the creator may remove other members, no creator-
+transfer mechanism exists), permanently stuck in the real family's roster, and this family has
+permanently lost the ability to remove any other member (short of self-removal) or rename
+itself for its remaining lifetime. Whatever roster state that device held when it approved
+sascha is also now unrecoverable, closing off part of the diagnosis for the sync bug below.
+The only remedy for the creator problem is a full family recreation (Track 1's existing
+prescription for a different reason) — not attempted yet, pending the user's decision.
+
+Lesson: a doc entry describing a past incident is not evidence a package is currently
+disposable — it needs to be checked against present state, not assumed from history.
+Recorded as a standing rule going forward: no data-clearing command on any
+package for this project, including `.debug`, without asking first.

@@ -336,6 +336,10 @@ class MqttTransport @Inject constructor(
         topics.add(MqttConfig.getSyncRequestTopic(id))
         qosLevels.add(MqttConfig.DEFAULT_QOS)
 
+        // Quorum-removal votes addressed to us
+        topics.add(MqttConfig.getRemovalVoteTopic(id))
+        qosLevels.add(MqttConfig.DEFAULT_QOS)
+
         // Per-member encrypted group sync inbox
         topics.add(MqttConfig.getGroupSyncInboxTopic(id))
         qosLevels.add(MqttConfig.DEFAULT_QOS)

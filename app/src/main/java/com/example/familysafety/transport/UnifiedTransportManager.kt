@@ -209,6 +209,10 @@ class UnifiedTransportManager @Inject constructor(
                         groupSyncManagerProvider.get().handleSyncRequestMessage(payload)
                     }
 
+                    topic.endsWith("/removal_vote") -> {
+                        groupSyncManagerProvider.get().handleRemovalVoteMessage(payload)
+                    }
+
                     topic.endsWith("/location_inbox") -> {
                         mqttTransport.handleLocationInbox(payload)
                     }
