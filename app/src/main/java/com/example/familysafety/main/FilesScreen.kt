@@ -27,6 +27,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
+import com.example.familysafety.ui.theme.statusColors
 import com.example.familysafety.ui.theme.CardShape
 import com.example.familysafety.vault.VaultKeyDerivation
 import androidx.compose.ui.text.style.TextOverflow
@@ -39,7 +40,6 @@ import com.example.familysafety.storage.SharedFileEntity
 import com.example.familysafety.ui.components.AppButton
 import com.example.familysafety.ui.components.ButtonState
 import com.example.familysafety.ui.components.ShimmerBox
-import com.example.familysafety.ui.theme.AmberWarning
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -299,7 +299,7 @@ private fun StorageBar(usedBytes: Long, maxBytes: Long) {
             Text(
                 "$usedMb MB / $maxMb MB",
                 style = MaterialTheme.typography.labelMedium,
-                color = if (isNearFull) AmberWarning
+                color = if (isNearFull) statusColors.warningText
                         else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -310,7 +310,7 @@ private fun StorageBar(usedBytes: Long, maxBytes: Long) {
                 .fillMaxWidth()
                 .height(6.dp)
                 .clip(RoundedCornerShape(3.dp)),
-            color = if (isNearFull) AmberWarning
+            color = if (isNearFull) statusColors.warningIndicator
                     else MaterialTheme.colorScheme.primary
         )
         if (isNearFull) {
@@ -318,7 +318,7 @@ private fun StorageBar(usedBytes: Long, maxBytes: Long) {
             Text(
                 "Storage almost full — delete files to make room",
                 style = MaterialTheme.typography.labelSmall,
-                color = AmberWarning
+                color = statusColors.warningText
             )
         }
     }

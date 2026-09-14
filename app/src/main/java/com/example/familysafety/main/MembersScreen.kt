@@ -31,10 +31,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.familysafety.ui.theme.statusColors
 import com.example.familysafety.invite.JoinRequest
 import com.example.familysafety.ui.components.ShimmerBox
-import com.example.familysafety.ui.theme.AmberWarning
-import com.example.familysafety.ui.theme.ColorSuccess
 
 
 @Composable
@@ -195,7 +194,7 @@ internal fun JoinRequestCard(
                     Icon(
                         imageVector = Icons.Default.Check,
                         contentDescription = "Approve",
-                        tint = ColorSuccess
+                        tint = statusColors.successIndicator
                     )
                 }
             }
@@ -483,7 +482,7 @@ private fun MemberCard(
                         Text(
                             text = "Needs to update the app — their location and files can't reach you",
                             style = MaterialTheme.typography.bodySmall,
-                            color = AmberWarning
+                            color = statusColors.warningText
                         )
                     }
                     if (voteTally != null) {

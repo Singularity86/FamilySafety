@@ -5,6 +5,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -30,12 +31,12 @@ private val DarkColorScheme = darkColorScheme(
 private val LightColorScheme = lightColorScheme(
     primary          = PorchAmberOnLight,
     onPrimary        = White,
-    secondary        = AmberWarning,
-    onSecondary      = Black,
-    tertiary         = RedDanger,
-    onTertiary       = TextPrimary,
-    error            = RedDanger,
-    onError          = TextPrimary,
+    secondary        = WarningTextLight,
+    onSecondary      = White,
+    tertiary         = DangerTextLight,
+    onTertiary       = White,
+    error            = DangerTextLight,
+    onError          = White,
     background       = SurfaceLight0,
     onBackground     = TextPrimaryLight,
     surface          = SurfaceLight1,
@@ -67,12 +68,16 @@ fun AppTheme(
         }
     }
 
-    MaterialTheme(
-        colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
-        typography  = AppTypography,
-        shapes      = AppShapes,
-        content     = content
-    )
+    CompositionLocalProvider(
+        LocalStatusPalette provides if (darkTheme) DarkStatusPalette else LightStatusPalette
+    ) {
+        MaterialTheme(
+            colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
+            typography  = AppTypography,
+            shapes      = AppShapes,
+            content     = content
+        )
+    }
 }
 
 // Compatibility shim — Session 2 will wire MainActivity and CrashAlertActivity to AppTheme directly

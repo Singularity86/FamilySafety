@@ -23,8 +23,7 @@ import com.example.familysafety.core.SecurityEventRepository
 import com.example.familysafety.group.GroupDefinition
 import com.example.familysafety.sync.GroupSyncManager
 import com.example.familysafety.transport.MqttTransport
-import com.example.familysafety.ui.theme.AmberWarning
-import com.example.familysafety.ui.theme.ColorSuccess
+import com.example.familysafety.ui.theme.statusColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -146,12 +145,12 @@ private fun SecurityVerdictCard(
         waitingForSync -> Triple(
             "Waiting for devices",
             "Jibaro Family Safety is checking the family list or waiting for other devices to answer.",
-            AmberWarning
+            statusColors.warningIndicator
         )
         else -> Triple(
             "All clear",
             "Jibaro Family Safety has a working route and no current key issues.",
-            ColorSuccess
+            statusColors.successIndicator
         )
     }
 
@@ -192,15 +191,15 @@ private fun NetworkStatusCard(
             Spacer(Modifier.height(12.dp))
 
             StatusRow(
-                color = if (deviceNetworkAvailable) ColorSuccess else MaterialTheme.colorScheme.error,
+                color = if (deviceNetworkAvailable) statusColors.successIndicator else MaterialTheme.colorScheme.error,
                 label = "Device internet: ${if (deviceNetworkAvailable) "Available" else "Unavailable"}"
             )
 
             Spacer(Modifier.height(6.dp))
 
             val (mqttColor, mqttLabel) = when (mqttState) {
-                is MqttTransport.ConnectionState.Connected   -> ColorSuccess to "Connected"
-                is MqttTransport.ConnectionState.Connecting  -> AmberWarning to "Connecting…"
+                is MqttTransport.ConnectionState.Connected   -> statusColors.successIndicator to "Connected"
+                is MqttTransport.ConnectionState.Connecting  -> statusColors.warningIndicator to "Connecting…"
                 is MqttTransport.ConnectionState.Error       -> MaterialTheme.colorScheme.error to "Error"
                 else                                         -> MaterialTheme.colorScheme.onSurfaceVariant to "Disconnected"
             }
@@ -210,7 +209,7 @@ private fun NetworkStatusCard(
 
             val localColor = when {
                 routeHealth.totalPeerCount == 0 -> MaterialTheme.colorScheme.onSurfaceVariant
-                routeHealth.localPeerCount > 0 -> ColorSuccess
+                routeHealth.localPeerCount > 0 -> statusColors.successIndicator
                 else -> MaterialTheme.colorScheme.onSurfaceVariant
             }
             StatusRow(
@@ -229,9 +228,9 @@ private fun NetworkStatusCard(
                 else -> "No active route"
             }
             val routeColor = when (routeLabel) {
-                "Local" -> ColorSuccess
-                "Mixed local + relay" -> AmberWarning
-                "Relay" -> AmberWarning
+                "Local" -> statusColors.successIndicator
+                "Mixed local + relay" -> statusColors.warningIndicator
+                "Relay" -> statusColors.warningIndicator
                 else -> MaterialTheme.colorScheme.error
             }
             StatusRow(routeColor, "App route: $routeLabel")
@@ -239,10 +238,10 @@ private fun NetworkStatusCard(
             Spacer(Modifier.height(6.dp))
 
             val (syncColor, syncLabel) = when (val s = syncState) {
-                is GroupSyncManager.SyncState.Synced   -> ColorSuccess to "Synced v${s.version}"
-                is GroupSyncManager.SyncState.Syncing  -> AmberWarning to "Syncing…"
+                is GroupSyncManager.SyncState.Synced   -> statusColors.successIndicator to "Synced v${s.version}"
+                is GroupSyncManager.SyncState.Syncing  -> statusColors.warningIndicator to "Syncing…"
                 is GroupSyncManager.SyncState.Conflict -> MaterialTheme.colorScheme.error to "Conflict detected"
-                is GroupSyncManager.SyncState.Deferred -> AmberWarning to "Queued for v${s.version}"
+                is GroupSyncManager.SyncState.Deferred -> statusColors.warningIndicator to "Queued for v${s.version}"
                 is GroupSyncManager.SyncState.Error    -> MaterialTheme.colorScheme.error to "Error: ${s.message}"
                 else                                   -> MaterialTheme.colorScheme.onSurfaceVariant to "Idle"
             }
@@ -543,7 +542,7 @@ private fun FamilyKeyStatus(hasKey: Boolean) {
     Spacer(Modifier.height(10.dp))
     if (hasKey) {
         StatusRow(
-            color = ColorSuccess,
+            color = statusColors.successIndicator,
             label = "This family has its own key. Documents you share, their names, and who is " +
                 "online can only be read by this family."
         )
@@ -551,7 +550,7 @@ private fun FamilyKeyStatus(hasKey: Boolean) {
     }
 
     StatusRow(
-        color = AmberWarning,
+        color = statusColors.warningIndicator,
         label = "This family was started before per-family keys existed, so it never got one."
     )
     Spacer(Modifier.height(8.dp))
@@ -573,13 +572,13 @@ private fun KeySyncStatus(state: MainViewModel.KeySyncRequestState) {
         MainViewModel.KeySyncRequestState.Idle ->
             MaterialTheme.colorScheme.onSurfaceVariant to "Ready to ask family devices for their latest member list."
         MainViewModel.KeySyncRequestState.Sending ->
-            AmberWarning to "Sending sync request..."
+            statusColors.warningIndicator to "Sending sync request..."
         is MainViewModel.KeySyncRequestState.Requested ->
-            AmberWarning to "Asked ${state.peerCount} device${if (state.peerCount != 1) "s" else ""}. ${state.sentCount} reachable, ${state.failedCount} no response so far."
+            statusColors.warningIndicator to "Asked ${state.peerCount} device${if (state.peerCount != 1) "s" else ""}. ${state.sentCount} reachable, ${state.failedCount} no response so far."
         is MainViewModel.KeySyncRequestState.Updated ->
-            ColorSuccess to "Updated family list from v${state.fromVersion} to v${state.toVersion}."
+            statusColors.successIndicator to "Updated family list from v${state.fromVersion} to v${state.toVersion}."
         is MainViewModel.KeySyncRequestState.NoNewerUpdate ->
-            ColorSuccess to "No newer family list came back. ${state.sentCount} reachable, ${state.failedCount} no response. This device is on v${state.version}."
+            statusColors.successIndicator to "No newer family list came back. ${state.sentCount} reachable, ${state.failedCount} no response. This device is on v${state.version}."
         MainViewModel.KeySyncRequestState.NoPeers ->
             MaterialTheme.colorScheme.onSurfaceVariant to "No other family devices are in this family yet."
         is MainViewModel.KeySyncRequestState.Error ->
@@ -712,7 +711,7 @@ private fun MemberKeysCard(
                         Icon(
                             Icons.Default.CheckCircle,
                             contentDescription = "OK",
-                            tint = ColorSuccess,
+                            tint = statusColors.successIndicator,
                             modifier = Modifier.size(20.dp)
                         )
                     }

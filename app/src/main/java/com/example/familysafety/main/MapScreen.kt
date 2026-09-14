@@ -42,10 +42,10 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.runtime.saveable.rememberSaveable
+import com.example.familysafety.ui.theme.statusColors
 import com.example.familysafety.BuildConfig
 import com.example.familysafety.geofence.GeofenceZone
 import com.example.familysafety.location.MemberLocation
-import com.example.familysafety.ui.theme.AmberWarning
 import kotlin.math.ceil
 import kotlin.math.log2
 import kotlinx.coroutines.launch
@@ -503,14 +503,14 @@ fun MapScreen(
                     )
                     if (isLarge && !tooMany) {
                         Surface(
-                            color = AmberWarning.copy(alpha = 0.16f),
+                            color = statusColors.warningIndicator.copy(alpha = 0.16f),
                             shape = MaterialTheme.shapes.extraSmall
                         ) {
                             Text(
                                 text = "Large download — make sure you're on Wi-Fi.",
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = AmberWarning
+                                color = statusColors.warningText
                             )
                         }
                     }

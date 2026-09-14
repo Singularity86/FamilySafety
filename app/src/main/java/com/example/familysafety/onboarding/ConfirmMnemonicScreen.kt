@@ -10,7 +10,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.example.familysafety.ui.theme.AmberWarning
+import com.example.familysafety.ui.theme.statusColors
 import com.example.familysafety.ui.theme.Spacing
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -57,9 +57,9 @@ fun ConfirmMnemonicScreen(
             OutlinedCard(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.outlinedCardColors(
-                    containerColor = AmberWarning.copy(alpha = 0.08f)
+                    containerColor = statusColors.warningIndicator.copy(alpha = 0.08f)
                 ),
-                border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.34f))
+                border = BorderStroke(1.dp, statusColors.warningIndicator.copy(alpha = 0.34f))
             ) {
                 Row(
                     modifier = Modifier.padding(Spacing.md),
@@ -68,7 +68,7 @@ fun ConfirmMnemonicScreen(
                     Icon(
                         imageVector = Icons.Default.WarningAmber,
                         contentDescription = null,
-                        tint = AmberWarning,
+                        tint = statusColors.warningIndicator,
                         modifier = Modifier.padding(top = 2.dp)
                     )
                     Column {

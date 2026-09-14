@@ -49,7 +49,7 @@ import androidx.compose.ui.window.Dialog
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberPermissionState
 import com.example.familysafety.ui.components.PermissionRationaleCard
-import com.example.familysafety.ui.theme.SuccessGreen
+import com.example.familysafety.ui.theme.statusColors
 import com.example.familysafety.ui.theme.ThemeMode
 import com.example.familysafety.ui.theme.ThemePreference
 import com.example.familysafety.ui.theme.UnitPreference
@@ -1341,7 +1341,7 @@ private fun PermissionStatusRow(label: String, granted: Boolean, onGrant: () -> 
             Icon(
                 imageVector = if (granted) Icons.Default.CheckCircle else Icons.Default.Warning,
                 contentDescription = null,
-                tint = if (granted) SuccessGreen else MaterialTheme.colorScheme.error,
+                tint = if (granted) statusColors.successIndicator else MaterialTheme.colorScheme.error,
                 modifier = Modifier.size(18.dp)
             )
             Spacer(Modifier.width(8.dp))
@@ -1350,7 +1350,7 @@ private fun PermissionStatusRow(label: String, granted: Boolean, onGrant: () -> 
                 Text(
                     text = if (granted) "Granted" else "Not granted — tap to fix",
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (granted) SuccessGreen else MaterialTheme.colorScheme.error
+                    color = if (granted) statusColors.successText else MaterialTheme.colorScheme.error
                 )
             }
         }

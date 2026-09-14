@@ -24,7 +24,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.theme.ButtonShape
-import com.example.familysafety.ui.theme.RedDanger
 
 sealed class ButtonState {
     object Idle : ButtonState()
@@ -41,13 +40,13 @@ fun AppButton(
     modifier: Modifier = Modifier
 ) {
     // Idle/Loading/Success stay on the single accent (primary emphasis); only the
-    // Error state borrows RedDanger, and only because it represents a genuine
+    // Error state borrows the error role, and only because it represents a genuine
     // failure to retry — not a destructive action.
     val containerColor = when (state) {
         is ButtonState.Idle    -> MaterialTheme.colorScheme.primary
         is ButtonState.Loading -> MaterialTheme.colorScheme.primary
         is ButtonState.Success -> MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
-        is ButtonState.Error   -> RedDanger
+        is ButtonState.Error   -> MaterialTheme.colorScheme.error
     }
     val contentColor = when (state) {
         is ButtonState.Error -> MaterialTheme.colorScheme.onError

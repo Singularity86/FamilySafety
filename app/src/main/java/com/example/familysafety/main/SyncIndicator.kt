@@ -36,11 +36,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.sync.GroupSyncManager
-import com.example.familysafety.ui.theme.AmberWarning
+import com.example.familysafety.ui.theme.statusColors
 import com.example.familysafety.ui.theme.ChipShape
-import com.example.familysafety.ui.theme.RedDanger
 import com.example.familysafety.ui.theme.Spacing
-import com.example.familysafety.ui.theme.ColorSuccess
 
 private val SyncSlotWidth = 86.dp
 
@@ -95,9 +93,9 @@ fun SyncIndicator(
         ) {
             SyncChip(
                 text = "Sync issue",
-                iconTint = AmberWarning,
-                containerColor = AmberWarning.copy(alpha = 0.12f),
-                borderColor = AmberWarning.copy(alpha = 0.34f),
+                iconTint = statusColors.warningText,
+                containerColor = statusColors.warningIndicator.copy(alpha = 0.12f),
+                borderColor = statusColors.warningIndicator.copy(alpha = 0.34f),
                 icon = Icons.Default.WarningAmber
             )
         }
@@ -113,9 +111,9 @@ fun SyncIndicator(
         ) {
             SyncChip(
                 text = "Queued",
-                iconTint = AmberWarning,
-                containerColor = AmberWarning.copy(alpha = 0.10f),
-                borderColor = AmberWarning.copy(alpha = 0.28f),
+                iconTint = statusColors.warningText,
+                containerColor = statusColors.warningIndicator.copy(alpha = 0.10f),
+                borderColor = statusColors.warningIndicator.copy(alpha = 0.28f),
                 icon = Icons.Default.WarningAmber
             )
         }
@@ -130,9 +128,9 @@ fun SyncIndicator(
         ) {
             SyncChip(
                 text = "Sync error",
-                iconTint = RedDanger,
-                containerColor = RedDanger.copy(alpha = 0.10f),
-                borderColor = RedDanger.copy(alpha = 0.28f),
+                iconTint = statusColors.dangerText,
+                containerColor = statusColors.dangerIndicator.copy(alpha = 0.10f),
+                borderColor = statusColors.dangerIndicator.copy(alpha = 0.28f),
                 icon = Icons.Default.Error
             )
         }
@@ -168,9 +166,9 @@ private fun SyncedChip(version: Long, modifier: Modifier = Modifier) {
         } else {
             SyncChip(
                 text = "Synced v$version",
-                iconTint = ColorSuccess,
-                containerColor = ColorSuccess.copy(alpha = 0.10f),
-                borderColor = ColorSuccess.copy(alpha = 0.24f),
+                iconTint = statusColors.successText,
+                containerColor = statusColors.successIndicator.copy(alpha = 0.10f),
+                borderColor = statusColors.successIndicator.copy(alpha = 0.24f),
                 icon = Icons.Default.Check,
                 shutterProgress = shutterProgress.value
             )

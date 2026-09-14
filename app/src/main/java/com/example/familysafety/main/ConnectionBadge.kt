@@ -28,11 +28,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.unit.dp
-import com.example.familysafety.ui.theme.AmberWarning
+import com.example.familysafety.ui.theme.statusColors
 import com.example.familysafety.ui.theme.ChipShape
-import com.example.familysafety.ui.theme.RedDanger
 import com.example.familysafety.ui.theme.Spacing
-import com.example.familysafety.ui.theme.ColorSuccess
 
 @Composable
 fun ConnectionBadge(
@@ -50,30 +48,30 @@ fun ConnectionBadge(
     when (mode) {
         MainViewModel.ConnectionMode.LAN -> {
             label = "LAN"
-            tint = ColorSuccess
-            containerColor = ColorSuccess.copy(alpha = 0.12f)
-            borderColor = ColorSuccess.copy(alpha = 0.34f)
+            tint = statusColors.successText
+            containerColor = statusColors.successIndicator.copy(alpha = 0.12f)
+            borderColor = statusColors.successIndicator.copy(alpha = 0.34f)
         }
 
         MainViewModel.ConnectionMode.RELAY -> {
             label = "Relay"
-            tint = AmberWarning
-            containerColor = AmberWarning.copy(alpha = 0.12f)
-            borderColor = AmberWarning.copy(alpha = 0.34f)
+            tint = statusColors.warningText
+            containerColor = statusColors.warningIndicator.copy(alpha = 0.12f)
+            borderColor = statusColors.warningIndicator.copy(alpha = 0.34f)
         }
 
         MainViewModel.ConnectionMode.MIXED -> {
             label = "Mixed"
             tint = MaterialTheme.colorScheme.onSurface
             containerColor = Color.Transparent
-            borderColor = ColorSuccess.copy(alpha = 0.34f)
+            borderColor = statusColors.successIndicator.copy(alpha = 0.34f)
         }
 
         MainViewModel.ConnectionMode.OFFLINE -> {
             label = "Offline"
-            tint = RedDanger
-            containerColor = RedDanger.copy(alpha = 0.10f)
-            borderColor = RedDanger.copy(alpha = 0.28f)
+            tint = statusColors.dangerText
+            containerColor = statusColors.dangerIndicator.copy(alpha = 0.10f)
+            borderColor = statusColors.dangerIndicator.copy(alpha = 0.28f)
         }
     }
 
@@ -167,12 +165,15 @@ private fun routeSummary(
 
 @Composable
 private fun MixedConnectionPill(modifier: Modifier = Modifier) {
+    // Hoisted: drawBehind runs in DrawScope, which can't read the theme.
+    val relayTint = statusColors.warningIndicator
+    val lanTint = statusColors.successIndicator
     Surface(
         modifier = modifier,
         shape = ChipShape,
         color = Color.Transparent,
         contentColor = MaterialTheme.colorScheme.onSurface,
-        border = BorderStroke(1.dp, ColorSuccess.copy(alpha = 0.34f))
+        border = BorderStroke(1.dp, statusColors.successIndicator.copy(alpha = 0.34f))
     ) {
         Box(
             modifier = Modifier
@@ -190,8 +191,8 @@ private fun MixedConnectionPill(modifier: Modifier = Modifier) {
                         lineTo(0f, size.height)
                         close()
                     }
-                    drawPath(lanPath, ColorSuccess.copy(alpha = 0.12f))
-                    drawPath(amberPath, AmberWarning.copy(alpha = 0.12f))
+                    drawPath(lanPath, lanTint.copy(alpha = 0.12f))
+                    drawPath(amberPath, relayTint.copy(alpha = 0.12f))
                 }
         ) {
             Row(
