@@ -24,7 +24,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.theme.Spacing
-import com.example.familysafety.ui.theme.PorchAmber
 import kotlinx.coroutines.delay
 
 /**
@@ -55,7 +54,7 @@ fun ApprovedScreen(
             Box(
                 modifier = Modifier
                     .size(80.dp)
-                    .background(color = PorchAmber, shape = CircleShape),
+                    .background(color = MaterialTheme.colorScheme.primary, shape = CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -89,7 +88,7 @@ fun ApprovedScreen(
             Button(
                 onClick = onContinue,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = PorchAmber,
+                    containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary
                 )
             ) {

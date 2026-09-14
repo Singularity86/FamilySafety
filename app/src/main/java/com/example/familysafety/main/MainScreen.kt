@@ -1,6 +1,10 @@
 package com.example.familysafety.main
 
 import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -53,10 +57,10 @@ import com.example.familysafety.geofence.GeofenceEditorScreen
 import com.example.familysafety.geofence.GeofenceListScreen
 import com.example.familysafety.geofence.GeofenceViewModel
 import com.example.familysafety.ui.screens.PrivacyScreen
-import com.example.familysafety.ui.theme.PorchAmber
 import com.example.familysafety.ui.theme.TextDisabled
 import com.example.familysafety.ui.theme.TextSecondary
 import com.example.familysafety.ui.theme.ThemeMode
+import com.example.familysafety.ui.theme.rememberReducedMotion
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -304,11 +308,38 @@ fun MainScreen(
 
                             // Local glow+icon lambda — avoids duplicating the Box tree.
                             val glowIcon: @Composable () -> Unit = {
-                                Icon(
-                                    imageVector = tab.icon,
-                                    contentDescription = tab.label,
-                                    tint = if (selected) PorchAmber else TextDisabled
+                                val reducedMotion = rememberReducedMotion()
+                                // A porch light doesn't snap: ease in slightly slower (warming up),
+                                // fade out slower still (dimming), never symmetric like a toggle switch.
+                                val glowAlpha by animateFloatAsState(
+                                    targetValue = if (selected) 1f else 0f,
+                                    animationSpec = when {
+                                        reducedMotion -> snap()
+                                        selected      -> tween(durationMillis = 260, easing = LinearOutSlowInEasing)
+                                        else          -> tween(durationMillis = 420, easing = FastOutSlowInEasing)
+                                    },
+                                    label = "navGlow"
                                 )
+                                Box(contentAlignment = Alignment.Center) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .background(
+                                                brush = Brush.radialGradient(
+                                                    colors = listOf(
+                                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.35f * glowAlpha),
+                                                        MaterialTheme.colorScheme.primary.copy(alpha = 0f)
+                                                    )
+                                                ),
+                                                shape = CircleShape
+                                            )
+                                    )
+                                    Icon(
+                                        imageVector = tab.icon,
+                                        contentDescription = tab.label,
+                                        tint = if (selected) MaterialTheme.colorScheme.primary else TextDisabled
+                                    )
+                                }
                             }
 
                             NavigationBarItem(
@@ -336,7 +367,7 @@ fun MainScreen(
                                 selected = selected,
                                 onClick = { navigatePagerTo(index) },
                                 colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = PorchAmber,
+                                    selectedIconColor = MaterialTheme.colorScheme.primary,
                                     selectedTextColor = MaterialTheme.colorScheme.onSurface,
                                     unselectedIconColor = TextDisabled,
                                     unselectedTextColor = TextDisabled,

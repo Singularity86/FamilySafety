@@ -10,27 +10,35 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Shape
 import com.example.familysafety.ui.theme.CardShape
+import com.example.familysafety.ui.theme.rememberReducedMotion
 
 @Composable
 fun ShimmerBox(
     modifier: Modifier = Modifier,
     shape: Shape = CardShape
 ) {
+    val reducedMotion = rememberReducedMotion()
     val transition = rememberInfiniteTransition(label = "shimmer")
-    val animatedValue by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "shimmer_offset"
-    )
+    val animatedValue by if (reducedMotion) {
+        remember { mutableFloatStateOf(0.5f) }
+    } else {
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1200),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "shimmer_offset"
+        )
+    }
 
     val baseColor = MaterialTheme.colorScheme.surface
     val highlightColor = MaterialTheme.colorScheme.surfaceVariant

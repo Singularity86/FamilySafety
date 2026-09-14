@@ -19,6 +19,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
@@ -27,8 +29,8 @@ import androidx.compose.ui.unit.dp
 import com.example.familysafety.group.MembershipState
 import com.example.familysafety.main.EncryptionChip
 import com.example.familysafety.ui.theme.Spacing
-import com.example.familysafety.ui.theme.PorchAmber
 import com.example.familysafety.ui.theme.TextDisabled
+import com.example.familysafety.ui.theme.rememberReducedMotion
 
 @Composable
 fun PendingMemberScreen(
@@ -39,16 +41,21 @@ fun PendingMemberScreen(
     // Suppress back button — this screen is terminal until approved or cancelled.
     BackHandler { }
 
+    val reducedMotion = rememberReducedMotion()
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val scale by infiniteTransition.animateFloat(
-        initialValue = 0.9f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulse_scale"
-    )
+    val scale by if (reducedMotion) {
+        remember { mutableFloatStateOf(1f) }
+    } else {
+        infiniteTransition.animateFloat(
+            initialValue = 0.9f,
+            targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1200),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "pulse_scale"
+        )
+    }
 
     Box(
         modifier = modifier.fillMaxSize(),
@@ -61,7 +68,7 @@ fun PendingMemberScreen(
                 modifier = Modifier
                     .size(80.dp)
                     .scale(scale)
-                    .background(color = PorchAmber, shape = CircleShape)
+                    .background(color = MaterialTheme.colorScheme.primary, shape = CircleShape)
             )
 
             Spacer(modifier = Modifier.height(Spacing.xl))

@@ -14,7 +14,9 @@ val SurfaceLight1 = Color(0xFFFFFFFF)
 val SurfaceLight2 = Color(0xFFEAF0F7)
 
 // Accent
-val PorchAmber    = Color(0xFFE9A23C)   // primary actions, brand accent — same amber as the app icon
+val PorchAmber    = Color(0xFFE8C858)   // primary actions, brand accent — softened toward gold (was #E9A23C, hue 35° read as orange)
+val PorchAmberOnLight = Color(0xFF8A6A0F) // PorchAmber darkened for light-theme foreground use — raw PorchAmber is ~1.6:1 on white, fails WCAG AA
+val White         = Color(0xFFFFFFFF)
 val SuccessGreen  = Color(0xFF35B378)   // healthy/connected/protected states — distinct from AmberWarning on purpose
 val AmberWarning  = Color(0xFFE2B45F)   // warnings, relay state
 val RedDanger     = Color(0xFFFF5B66)   // genuine danger only

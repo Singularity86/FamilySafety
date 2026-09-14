@@ -12,7 +12,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.theme.Spacing
-import com.example.familysafety.ui.theme.PorchAmber
 
 @SuppressLint("InlinedApi")
 @Composable
@@ -40,7 +39,7 @@ fun PermissionRationaleCard(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = PorchAmber,
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(32.dp)
             )
             Spacer(modifier = Modifier.height(Spacing.md))
@@ -58,13 +57,13 @@ fun PermissionRationaleCard(
             if (coaching != null) {
                 Spacer(modifier = Modifier.height(Spacing.md))
                 Surface(
-                    color = PorchAmber.copy(alpha = 0.12f),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
                     shape = MaterialTheme.shapes.small
                 ) {
                     Text(
                         text = coaching,
                         style = MaterialTheme.typography.bodySmall,
-                        color = PorchAmber,
+                        color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(Spacing.sm)
                     )
                 }
@@ -81,7 +80,7 @@ fun PermissionRationaleCard(
                 Button(
                     onClick = onRequestPermission,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = PorchAmber,
+                        containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary
                     )
                 ) {

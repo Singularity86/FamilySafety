@@ -28,8 +28,8 @@ private val DarkColorScheme = darkColorScheme(
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary          = PorchAmber,
-    onPrimary        = Black,
+    primary          = PorchAmberOnLight,
+    onPrimary        = White,
     secondary        = AmberWarning,
     onSecondary      = Black,
     tertiary         = RedDanger,
