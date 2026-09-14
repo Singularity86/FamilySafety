@@ -43,6 +43,54 @@ val SuccessIndicatorLight = Color(0xFF219A5E)  // 3.34:1
 val WarningIndicatorLight = Color(0xFFC77800)  // 3.19:1
 val DangerIndicatorLight  = Color(0xFFE03E4A)  // 3.94:1
 
+// Tonal containers.
+//
+// Material fills every role its scheme builder is not given, and its defaults are the
+// baseline violet — which is why undefined roles showed up as lavender chips on a pine
+// and gold app. Everything the scheme accepts is now named here, derived from the
+// palette above, so nothing falls back.
+val PrimaryContainerDark     = Color(0xFF3A3118)
+val OnPrimaryContainerDark   = Color(0xFFF6E4AE)
+val SecondaryContainerDark   = Color(0xFF33301E)
+val OnSecondaryContainerDark = Color(0xFFEFE0B4)
+val TertiaryContainerDark    = Color(0xFF1E3227)
+val OnTertiaryContainerDark  = Color(0xFFC6E7D3)
+val ErrorContainerDark       = Color(0xFF4A1F22)
+val OnErrorContainerDark     = Color(0xFFFFD9DC)
+
+val PrimaryContainerLight     = Color(0xFFF7E9C2)
+val OnPrimaryContainerLight   = Color(0xFF3D2E00)
+val SecondaryContainerLight   = Color(0xFFF5E8CC)
+val OnSecondaryContainerLight = Color(0xFF3D2E05)
+val TertiaryContainerLight    = Color(0xFFDCEDE3)
+val OnTertiaryContainerLight  = Color(0xFF16301F)
+val ErrorContainerLight       = Color(0xFFFCE6E7)
+val OnErrorContainerLight     = Color(0xFF5A1015)
+
+// Surface tiers. Material 3 draws navigation bars, sheets and menus from these; left
+// undefined they come back as Material's neutral greys, which read cold against pine.
+val SurfaceDimDark              = Color(0xFF0C1410)
+val SurfaceBrightDark           = Color(0xFF26332B)
+val SurfaceContainerLowestDark  = Color(0xFF0B120E)
+val SurfaceContainerLowDark     = Color(0xFF131E18)
+val SurfaceContainerDark        = Color(0xFF16231C)
+val SurfaceContainerHighDark    = Color(0xFF1D2C24)
+val SurfaceContainerHighestDark = Color(0xFF24352C)
+
+val SurfaceDimLight              = Color(0xFFDDE3EA)
+val SurfaceBrightLight           = Color(0xFFFFFFFF)
+val SurfaceContainerLowestLight  = Color(0xFFFFFFFF)
+val SurfaceContainerLowLight     = Color(0xFFF7F9FC)
+val SurfaceContainerLight        = Color(0xFFF1F5F9)
+val SurfaceContainerHighLight    = Color(0xFFEAF0F7)
+val SurfaceContainerHighestLight = Color(0xFFE3EBF3)
+
+// Inverse pair, used by snackbars.
+val InverseSurfaceDark    = Color(0xFFE8EDE9)
+val InverseOnSurfaceDark  = Color(0xFF16231C)
+val InverseSurfaceLight   = Color(0xFF1D2C24)
+val InverseOnSurfaceLight = Color(0xFFF4F7FB)
+
 // Text
 val TextPrimary   = Color(0xFFF3F5FA)
 val TextSecondary = Color(0xFF95A0B3)
