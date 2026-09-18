@@ -1,6 +1,8 @@
 package com.example.familysafety.onboarding
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.QrCodeScanner
@@ -11,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -47,6 +50,32 @@ fun JoinFamilyScreen(
     }
     val isLoading by viewModel.isLoading.collectAsState()
     val scope = rememberCoroutineScope()
+
+    val submit: () -> Unit = {
+        if (inviteCode.isNotBlank() && !isLoading) {
+            joinFailed = false
+            scope.launch {
+                val result = viewModel.sendJoinRequest(inviteCode)
+                when (result) {
+                    is OnboardingViewModel.JoinSubmitResult.Submitted -> {
+                        membershipViewModel.setPendingApproval(
+                            familyName = result.familyName,
+                            inviterName = result.inviterName,
+                            memberId = result.memberId,
+                            inviterMemberId = result.inviterMemberId,
+                            groupId = result.groupId,
+                            joinRequestJson = result.joinRequestJson
+                        )
+                        // State change drives navigation — no explicit call needed.
+                    }
+                    is OnboardingViewModel.JoinSubmitResult.Failed -> {
+                        joinFailed = true
+                        joinFailedReason = result.reason
+                    }
+                }
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -95,7 +124,9 @@ fun JoinFamilyScreen(
                     IconButton(onClick = onNavigateToScanner) {
                         Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan QR Code")
                     }
-                }
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { submit() })
             )
 
             Spacer(modifier = Modifier.weight(1f))
@@ -129,29 +160,7 @@ fun JoinFamilyScreen(
             }
 
             Button(
-                onClick = {
-                    joinFailed = false
-                    scope.launch {
-                        val result = viewModel.sendJoinRequest(inviteCode)
-                        when (result) {
-                            is OnboardingViewModel.JoinSubmitResult.Submitted -> {
-                                membershipViewModel.setPendingApproval(
-                                    familyName = result.familyName,
-                                    inviterName = result.inviterName,
-                                    memberId = result.memberId,
-                                    inviterMemberId = result.inviterMemberId,
-                                    groupId = result.groupId,
-                                    joinRequestJson = result.joinRequestJson
-                                )
-                                // State change drives navigation — no explicit call needed.
-                            }
-                            is OnboardingViewModel.JoinSubmitResult.Failed -> {
-                                joinFailed = true
-                                joinFailedReason = result.reason
-                            }
-                        }
-                    }
-                },
+                onClick = submit,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),

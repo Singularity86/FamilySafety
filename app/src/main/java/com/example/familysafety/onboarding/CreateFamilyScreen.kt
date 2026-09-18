@@ -62,8 +62,8 @@ fun CreateFamilyScreen(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 placeholder = { Text("e.g., The Smiths") },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = {
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = {
                     if (familyName.isNotBlank() && !isLoading) {
                         scope.launch {
                             viewModel.setFamilyName(familyName)

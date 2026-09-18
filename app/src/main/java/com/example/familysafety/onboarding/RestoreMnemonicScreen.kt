@@ -3,11 +3,16 @@ package com.example.familysafety.onboarding
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -23,6 +28,19 @@ fun RestoreMnemonicScreen(
     // Cleared as soon as anything is edited, so the message belongs to what is on screen
     // now rather than to whatever was there when Restore was last pressed.
     var phraseRejected by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+
+    val submit: () -> Unit = {
+        // Checked before anything is derived. A phrase that is merely twelve
+        // real words derives a valid key belonging to nobody, and restoring
+        // into that identity is silent and hard to undo.
+        if (!viewModel.isValidRecoveryPhrase(words)) {
+            phraseRejected = true
+        } else {
+            viewModel.setMnemonic(words)
+            onNext()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -64,6 +82,7 @@ fun RestoreMnemonicScreen(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(12) { index ->
+                        val isLast = index == 11
                         OutlinedTextField(
                             value = words[index],
                             onValueChange = { newValue ->
@@ -72,7 +91,14 @@ fun RestoreMnemonicScreen(
                             },
                             label = { Text("${index + 1}") },
                             singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(
+                                imeAction = if (isLast) ImeAction.Go else ImeAction.Next
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onNext = { focusManager.moveFocus(FocusDirection.Next) },
+                                onGo = { submit() }
+                            )
                         )
                     }
                 }
@@ -99,17 +125,7 @@ fun RestoreMnemonicScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Button(
-                onClick = {
-                    // Checked before anything is derived. A phrase that is merely twelve
-                    // real words derives a valid key belonging to nobody, and restoring
-                    // into that identity is silent and hard to undo.
-                    if (!viewModel.isValidRecoveryPhrase(words)) {
-                        phraseRejected = true
-                        return@Button
-                    }
-                    viewModel.setMnemonic(words)
-                    onNext()
-                },
+                onClick = submit,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),

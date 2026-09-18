@@ -59,8 +59,8 @@ fun EnterNameScreen(
                 label = { Text("Display Name") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = {
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = {
                     if (name.isNotBlank() && !isLoading) {
                         viewModel.setDisplayName(name)
                         onNext()
