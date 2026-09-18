@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only overlay.
+
+  CrashAlertActivity is exported="false" in the main manifest, which is correct — nothing
+  outside the app should be able to raise a full-screen "are you okay?" alarm. That also
+  makes the one part of crash detection you cannot reach any other way untestable by hand:
+  the 60-second countdown, the "I'm okay" cancel, and the message sent to the family when
+  it expires. The trigger rule and the notification are covered by unit tests, but reaching
+  this screen for real needs an actual 3g impact, and 3g is a collision — you cannot
+  produce it by driving safely.
+
+  So debug builds export it, and only debug builds:
+
+      adb shell am start -n jibaro.spacepirate.love.debug/com.example.familysafety.crash.CrashAlertActivity
+
+  Release keeps exported="false" untouched.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+        <activity
+            android:name=".crash.CrashAlertActivity"
+            android:exported="true"
+            tools:replace="android:exported" />
+    </application>
+
+</manifest>

@@ -10,6 +10,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
+import androidx.annotation.VisibleForTesting
 import androidx.core.app.NotificationCompat
 import com.example.familysafety.R
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -37,19 +38,14 @@ class CrashDetectionMonitor @Inject constructor(
     private val sensorListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
             if (!isEnabled || !isArmed) return
-            val x = event.values[0]
-            val y = event.values[1]
-            val z = event.values[2]
-            val magnitude = sqrt(x * x + y * y + z * z)
-            if (magnitude >= thresholdMs2) {
-                val now = System.currentTimeMillis()
-                val last = lastAlertTime.get()
-                if (lastSpeedMs >= SPEED_GUARD_MS &&
-                    (now - last) > ALERT_COOLDOWN_MS &&
-                    lastAlertTime.compareAndSet(last, now)) {
-                    Timber.w("CrashDetection: impact detected! accel=${magnitude}m/s², speed=${lastSpeedMs}m/s")
-                    triggerCrashAlert()
-                }
+            val magnitude = magnitudeOf(event.values[0], event.values[1], event.values[2])
+            val now = System.currentTimeMillis()
+            val last = lastAlertTime.get()
+            // compareAndSet last so two sensor callbacks in the same millisecond can't both fire.
+            if (shouldTriggerAlert(magnitude, thresholdMs2, lastSpeedMs, now, last) &&
+                lastAlertTime.compareAndSet(last, now)) {
+                Timber.w("CrashDetection: impact detected! accel=${magnitude}m/s², speed=${lastSpeedMs}m/s")
+                triggerCrashAlert()
             }
         }
 
@@ -94,7 +90,8 @@ class CrashDetectionMonitor @Inject constructor(
         Timber.d("CrashDetection: disarmed")
     }
 
-    private fun triggerCrashAlert() {
+    @VisibleForTesting
+    internal fun triggerCrashAlert() {
         createNotificationChannel()
         val alertIntent = Intent(context, CrashAlertActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -140,10 +137,31 @@ class CrashDetectionMonitor @Inject constructor(
         const val NOTIFICATION_ID = 9999
 
         /** Minimum GPS speed in m/s before impact before arming the alert (25 mph = 11.2 m/s). */
-        private const val SPEED_GUARD_MS = 11.2f
+        const val SPEED_GUARD_MS = 11.2f
 
         /** Don't fire again within 10 minutes of a previous alert. */
-        private const val ALERT_COOLDOWN_MS = 10 * 60 * 1000L
+        const val ALERT_COOLDOWN_MS = 10 * 60 * 1000L
+
+        /** Magnitude of a linear acceleration sample. Gravity is already removed by the sensor. */
+        fun magnitudeOf(x: Float, y: Float, z: Float): Float = sqrt(x * x + y * y + z * z)
+
+        /**
+         * Whether a sample should raise the alert. Pure on purpose: the interesting behaviour is
+         * the conjunction, not the sensor plumbing, and the speed guard is what separates a real
+         * impact from a phone dropped on a hard surface.
+         *
+         * @param nowMs passed in rather than read from the clock so the cooldown is testable.
+         */
+        fun shouldTriggerAlert(
+            magnitudeMs2: Float,
+            thresholdMs2: Float,
+            speedMs: Float,
+            nowMs: Long,
+            lastAlertMs: Long
+        ): Boolean =
+            magnitudeMs2 >= thresholdMs2 &&
+                speedMs >= SPEED_GUARD_MS &&
+                (nowMs - lastAlertMs) > ALERT_COOLDOWN_MS
 
         /** Linear acceleration thresholds in m/s² (gravity already removed by sensor type). */
         const val SENSITIVITY_LOW = 40f     // ~4g — severe crashes only
