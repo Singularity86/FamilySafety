@@ -9,6 +9,36 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.13.5 (34) — location updates that keep flowing in the background
+
+Built from `b3dd517`..`59bf9fc` + the version bump. Supersedes 1.13.4 (33).
+
+No wire-format change, so devices on any recent version keep working together.
+
+### Play copy
+
+```
+Fixes location updates going quiet for hours until the app was reopened. A stalled
+connection to the relay can no longer block reconnecting, and phones with extra
+background limits (Samsung, Xiaomi, Oppo and others) now show step-by-step settings
+help in Settings.
+```
+
+### What changed, and why it's worth a release
+
+- **Stuck relay connection** — a connect attempt that never called back left the
+  transport at "Connecting" and held the connection lock forever, so the 5-minute
+  heartbeat, backoff and network-restored reconnects all queued behind it until the
+  process died. Every attempt is now time-bounded and aborted, and the heartbeat
+  force-aborts a Connecting state too old to be live.
+- **Silent group-load failure** now logs an error instead of looking like "no group".
+- **Unsent-location backlog** capped at the newest 100 per member.
+- **Rate limiter** uses a monotonic clock, so a clock adjustment can't lock it out.
+- **Activity recognition** can retry after a failed registration.
+- **Settings** permanently shows OEM background-limit guidance on affected phones.
+
+---
+
 ## 1.13.4 (33) — a warmer icon and a clearer header
 
 Built from `565f9dc` and `5019688` + the version bump. Supersedes 1.13.3 (32).
