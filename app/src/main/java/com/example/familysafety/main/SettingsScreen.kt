@@ -13,6 +13,7 @@ import com.example.familysafety.crash.CrashDetectionMonitor
 import com.example.familysafety.location.LocationService
 import com.example.familysafety.location.LocationPermissionHelper
 import com.example.familysafety.onboarding.PermissionCopy
+import com.example.familysafety.util.OemBatteryHelper
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -200,6 +201,39 @@ fun SettingsScreen(
                         )
                     ) {
                         Text("Fix Now")
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // The standard exemption above is necessary but not sufficient on these phones: their
+        // own autostart / background-launch toggles kill the process regardless, and Android
+        // gives no way to read that state, so this cannot be hidden once "fixed".
+        if (OemBatteryHelper.detectOem() != OemBatteryHelper.Oem.GENERIC) {
+            OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Keep location sharing running",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Your phone's maker adds its own background limits. If family " +
+                            "members see your location go quiet, check these:",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OemBatteryHelper.getInstructions().forEachIndexed { index, step ->
+                        Text(
+                            text = "${index + 1}. $step",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(onClick = { OemBatteryHelper.openBatterySettings(context) }) {
+                        Text("Open phone settings")
                     }
                 }
             }
