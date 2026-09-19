@@ -63,7 +63,11 @@ class ActivityRecognitionManager @Inject constructor(
         ActivityRecognition.getClient(context)
             .requestActivityTransitionUpdates(ActivityTransitionRequest(transitions), pi)
             .addOnSuccessListener { Timber.i("Activity recognition monitoring started") }
-            .addOnFailureListener { e -> Timber.e(e, "Failed to start activity recognition") }
+            .addOnFailureListener { e ->
+                Timber.e(e, "Failed to start activity recognition")
+                // Otherwise the guard above makes every later startMonitoring() a no-op.
+                if (pendingIntent === pi) pendingIntent = null
+            }
     }
 
     fun stopMonitoring() {
