@@ -26,7 +26,7 @@ class RateLimiter(
         val window = windows.getOrPut(key) { RequestWindow() }
         
         return window.mutex.withLock {
-            val now = System.currentTimeMillis()
+            val now = monotonicNowMs()
             
             // Remove old requests outside the window
             window.requests.removeAll { it < now - windowMs }
@@ -49,7 +49,7 @@ class RateLimiter(
         val window = windows[key] ?: return 0
         
         return window.mutex.withLock {
-            val now = System.currentTimeMillis()
+            val now = monotonicNowMs()
             window.requests.removeAll { it < now - windowMs }
             
             if (window.requests.size < maxRequests) {
@@ -118,3 +118,7 @@ object RateLimiters {
         windowMs = 60 * 1000
     )
 }
+
+// Monotonic on purpose: a wall-clock step backwards (NTP, DST, manual edit) left stored
+// timestamps "in the future", so nothing expired and the limiter rejected for up to two windows.
+private fun monotonicNowMs(): Long = System.nanoTime() / 1_000_000L
