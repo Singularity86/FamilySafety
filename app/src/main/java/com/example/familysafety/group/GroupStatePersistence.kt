@@ -10,6 +10,7 @@ import androidx.datastore.dataStoreFile
 import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.InputStream
@@ -142,7 +143,9 @@ class EncryptedGroupStatePersistence private constructor(
 
                 json.decodeFromString<GroupDefinition>(decryptedJson)
             } catch (e: Exception) {
-                // Log error but don't crash - treat as no persisted state
+                // Treated as "no persisted group", which silently disables all publishing,
+                // so it must at least be visible in the log.
+                Timber.e(e, "GroupStatePersistence: failed to load persisted group definition")
                 null
             }
         }
