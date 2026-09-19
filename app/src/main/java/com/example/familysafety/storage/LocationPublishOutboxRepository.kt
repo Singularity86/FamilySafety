@@ -13,12 +13,18 @@ class LocationPublishOutboxRepository @Inject constructor(
 ) {
     companion object {
         private const val TAG = "LocationOutbox"
+
+        /** A position supersedes itself, so a long outage only needs the recent trail. */
+        const val MAX_PENDING_PER_MEMBER = 100
     }
 
     suspend fun enqueue(location: MemberLocation): Long {
-        return pendingLocationPublishDao.insert(
+        val id = pendingLocationPublishDao.insert(
             PendingLocationPublishEntity.fromMemberLocation(location)
         )
+        val dropped = pendingLocationPublishDao.trimToNewest(location.memberId, MAX_PENDING_PER_MEMBER)
+        if (dropped > 0) Timber.d("$TAG: dropped $dropped stale pending locations")
+        return id
     }
 
     suspend fun enqueueAll(locations: List<MemberLocation>) {

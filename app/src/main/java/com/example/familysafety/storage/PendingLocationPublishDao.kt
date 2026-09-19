@@ -42,6 +42,18 @@ interface PendingLocationPublishDao {
     @Query("DELETE FROM pending_location_publishes WHERE memberId = :memberId")
     suspend fun deleteAllForMember(memberId: String)
 
+    @Query("""
+        DELETE FROM pending_location_publishes
+        WHERE memberId = :memberId
+        AND id NOT IN (
+            SELECT id FROM pending_location_publishes
+            WHERE memberId = :memberId
+            ORDER BY timestamp DESC, id DESC
+            LIMIT :keep
+        )
+    """)
+    suspend fun trimToNewest(memberId: String, keep: Int): Int
+
     @Query("DELETE FROM pending_location_publishes WHERE timestamp < :beforeTimestamp")
     suspend fun deleteOlderThan(beforeTimestamp: Long): Int
 }
