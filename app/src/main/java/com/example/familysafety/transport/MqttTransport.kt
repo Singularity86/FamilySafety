@@ -50,6 +50,7 @@ class MqttTransport @Inject constructor(
     private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var reconnectJob: Job? = null
     private var reconnectAttempts = 0
+    @Volatile private var connectingSince = 0L
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
@@ -89,9 +90,21 @@ class MqttTransport @Inject constructor(
 
     // Throttle group-sync requests triggered by decrypt failures to once per sender per minute.
     private val decryptFailureSyncCooldowns = ConcurrentHashMap<String, Long>()
-    private companion object {
+    companion object {
         private const val TAG = "MqttTransport"
         private const val DECRYPT_SYNC_COOLDOWN_MS = 60_000L
+
+        /** Paho's own timeout plus margin; a single connect attempt must never outlive this. */
+        const val CONNECT_ATTEMPT_TIMEOUT_MS = MqttConfig.CONNECTION_TIMEOUT * 1000L + 5_000L
+
+        /**
+         * A Connecting state older than one full attempt plus a retry-backoff margin cannot be
+         * a live attempt, because every attempt is bounded by [CONNECT_ATTEMPT_TIMEOUT_MS].
+         * Pure so the wedge check is testable without a client.
+         */
+        fun isConnectingStale(connectingSinceMs: Long, nowMs: Long): Boolean =
+            connectingSinceMs > 0L &&
+                nowMs - connectingSinceMs > 3 * CONNECT_ATTEMPT_TIMEOUT_MS + 10_000L
     }
 
     sealed class ConnectionState {
@@ -162,6 +175,7 @@ class MqttTransport @Inject constructor(
 
         withContext(Dispatchers.IO) {
             try {
+                connectingSince = System.currentTimeMillis()
                 _connectionState.value = ConnectionState.Connecting
 
                 val brokerUrl = MqttConfig.BROKER_URL
@@ -212,8 +226,21 @@ class MqttTransport @Inject constructor(
                         Timber.w(e, "$TAG: connection attempt $attempt failed")
                     }
                 ) {
+                    // Paho's own connectionTimeout has been observed not to fire when the
+                    // process is throttled mid-handshake. Without this bound the coroutine
+                    // never resumes, connectMutex is never released, and every reconnect
+                    // path queues behind it until the process dies.
+                    withTimeout(CONNECT_ATTEMPT_TIMEOUT_MS) {
                     suspendCancellableCoroutine { continuation ->
-                        mqttClient?.connect(connOpts, null, object : IMqttActionListener {
+                        val attemptClient = mqttClient
+                        continuation.invokeOnCancellation {
+                            try {
+                                attemptClient?.disconnectForcibly(0, 0)
+                            } catch (e: Exception) {
+                                Timber.d("$TAG: could not abort timed-out connect: ${e.message}")
+                            }
+                        }
+                        attemptClient?.connect(connOpts, null, object : IMqttActionListener {
                             override fun onSuccess(asyncActionToken: IMqttToken?) {
                                 continuation.resume(Unit)
                             }
@@ -233,6 +260,7 @@ class MqttTransport @Inject constructor(
                                 continuation.resumeWith(Result.failure(exception ?: Exception("MQTT connection failed")))
                             }
                         })
+                    }
                     }
                 }
 
@@ -652,7 +680,18 @@ class MqttTransport @Inject constructor(
     suspend fun ensureConnectedNow() {
         when (_connectionState.value) {
             ConnectionState.Connected -> return
-            ConnectionState.Connecting -> return  // attempt already in flight
+            ConnectionState.Connecting -> {
+                if (!isConnectingStale(connectingSince, System.currentTimeMillis())) return
+                // Backstop for a hang the attempt timeout somehow missed: aborting the client
+                // makes Paho fail the pending connect, which resumes the stuck coroutine and
+                // releases connectMutex so the initialize() below can proceed.
+                Timber.w("$TAG: Connecting state stale — aborting wedged attempt")
+                try {
+                    mqttClient?.disconnectForcibly(0, 0)
+                } catch (e: Exception) {
+                    Timber.d("$TAG: could not abort wedged client: ${e.message}")
+                }
+            }
             else -> {}
         }
         val id = memberId ?: return
