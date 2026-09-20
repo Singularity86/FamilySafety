@@ -511,7 +511,7 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
-                var locationEnabled by remember { mutableStateOf(true) }
+                var locationEnabled by remember { mutableStateOf(!LocationService.isSharingPaused(context)) }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -522,7 +522,23 @@ fun SettingsScreen(
                     Text("Share my location")
                     Switch(
                         checked = locationEnabled,
-                        onCheckedChange = { locationEnabled = it }
+                        onCheckedChange = { enabled ->
+                            locationEnabled = enabled
+                            LocationService.setSharingPaused(context, !enabled)
+                            if (enabled) {
+                                LocationService.startTracking(context, myMemberId)
+                            } else {
+                                LocationService.stopTracking(context)
+                            }
+                        }
+                    )
+                }
+                if (!locationEnabled) {
+                    Text(
+                        text = "Paused: your family can't see where you are, and place, speed " +
+                            "and crash alerts from this phone are off. Chat still works.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
@@ -1254,6 +1270,7 @@ fun SettingsScreen(
                     onClick = {
                         isLeaving = true
                         scope.launch {
+                            LocationService.setSharingPaused(context, false)
                             LocationService.stopTracking(context)
                             viewModel.leaveFamily()
                             val restartIntent = context.packageManager

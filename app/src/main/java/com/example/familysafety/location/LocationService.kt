@@ -120,7 +120,23 @@ class LocationService : Service() {
         var isRunning = false
             private set
 
+        /** User-chosen pause from Settings. Every restart path goes through startTracking/requestHeartbeat. */
+        const val PREF_SHARING_PAUSED = "sharing_paused"
+
+        fun isSharingPaused(context: Context): Boolean =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(PREF_SHARING_PAUSED, false)
+
+        fun setSharingPaused(context: Context, paused: Boolean) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putBoolean(PREF_SHARING_PAUSED, paused).apply()
+        }
+
         fun startTracking(context: Context, memberId: String) {
+            if (isSharingPaused(context)) {
+                Timber.i("LocationService: start ignored — sharing is paused by the user")
+                return
+            }
             val intent = Intent(context, LocationService::class.java).apply {
                 action = ACTION_START_TRACKING
                 putExtra(EXTRA_MEMBER_ID, memberId)
@@ -140,6 +156,7 @@ class LocationService : Service() {
         }
 
         fun requestHeartbeat(context: Context) {
+            if (isSharingPaused(context)) return
             val intent = Intent(context, LocationService::class.java).apply {
                 action = ACTION_HEARTBEAT
             }
