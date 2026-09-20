@@ -1,6 +1,6 @@
 # Jibaro Family Safety — Privacy Policy
 
-_Last updated: July 6, 2026_
+_Last updated: September 19, 2026_
 
 Jibaro Family Safety is a private, family-only location-sharing app. It was built on a
 simple principle: **your family's location and messages belong to your family,
@@ -11,9 +11,10 @@ your data.
 
 | Data | Purpose | Who can see it |
 |---|---|---|
-| Precise location (including in the background) | Real-time location sharing and location history with your family group | Only members of your family group |
+| Precise location (including in the background) | Real-time location sharing, 30-day location history, place and speed alerts, and crash detection for your family group | Only members of your family group |
 | Chat messages and shared files | Family messaging | Only members of your family group |
 | Display name, avatar photo, color choice | Identifying you inside your group | Only members of your family group |
+| Phone motion sensor (crash detection, only while you are driving) | Detecting a likely crash; if you do not respond within 60 seconds an alert is sent to your family group | Processed on your device; only the alert is shared, with your family group |
 | Motion/activity state (moving vs. still) | Adjusting GPS frequency to save battery | Processed on your device only |
 | Online/offline status | Showing whether a family member's device is connected | Only members of your family group |
 
@@ -50,10 +51,22 @@ database (SQLCipher), and is replicated between family members' devices as an
 encrypted backup. Location history is kept for 30 days and chat messages for
 90 days, then deleted automatically. There is no cloud copy we hold.
 
-## Sharing with third parties
+## Outside services the app contacts
 
-We do not sell, rent, or share your data with anyone. There are no third
-parties beyond the message relay described above.
+We do not sell or rent your data, and we do not use advertising or analytics
+services. Two features contact outside services directly, **not** through the
+encrypted family channel:
+
+- **Map tiles (OpenStreetMap).** When you view the map, the app downloads map
+  images from openstreetmap.org. That service sees your IP address and which part
+  of the map you are viewing.
+- **Drive-time estimates (OSRM).** Only when you tap a drive-time estimate for a
+  family member, the app sends your location and that member's most recent
+  location to the public routing service at router.project-osrm.org, which also
+  sees your IP address. Nothing is sent unless you ask for an estimate.
+
+Apart from these and the message relay described above, there are no other third
+parties.
 
 ## Children
 
@@ -64,6 +77,9 @@ the same encryption described above.
 
 ## Your controls
 
+- **Pause location sharing** at any time (Settings → Share my location). While
+  paused, your phone sends no locations, and place, speed and crash alerts from
+  your phone are off. Chat still works.
 - **Leave a family** at any time (Settings → Leave Family): your device wipes
   its group data and tells the group to stop sharing with you.
 - **Remove a member** (group creator): the removed device stops sharing and is
@@ -80,6 +96,9 @@ retention windows expire.
 
 - **Location (all the time)** — the app's core function: sharing your location
   with your family, including when the app is closed or not in use.
+- **Alarms and full-screen alerts** — precise alarms keep location sharing running
+  when the phone is idle; a full-screen alert asks whether you are okay after a
+  likely crash.
 - **Notifications** — safety alerts, place arrivals, crash alerts, messages.
 - **Camera** — scanning family invite QR codes only; no images are captured.
 - **Physical activity** — detecting driving/walking to tune GPS battery use.

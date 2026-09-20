@@ -65,7 +65,7 @@
 <div class="wrap">
   <div class="eyebrow">Jibaro Family Safety</div>
   <h1>Privacy Policy</h1>
-  <div class="updated">Last updated: July 6, 2026</div>
+  <div class="updated">Last updated: September 19, 2026</div>
 
   <div class="lede">
     Jibaro Family Safety is a private, family-only location-sharing app built on a simple
@@ -77,9 +77,10 @@
   <div class="tablewrap">
     <table>
       <tr><th>Data</th><th>Purpose</th><th>Who can see it</th></tr>
-      <tr><td>Precise location (including in the background)</td><td>Real-time location sharing and location history with your family group</td><td>Only members of your family group</td></tr>
+      <tr><td>Precise location (including in the background)</td><td>Real-time location sharing, 30-day location history, place and speed alerts, and crash detection for your family group</td><td>Only members of your family group</td></tr>
       <tr><td>Chat messages and shared files</td><td>Family messaging</td><td>Only members of your family group</td></tr>
       <tr><td>Display name, avatar photo, color choice</td><td>Identifying you inside your group</td><td>Only members of your family group</td></tr>
+      <tr><td>Phone motion sensor (crash detection, only while you are driving)</td><td>Detecting a likely crash; if you do not respond within 60 seconds an alert is sent to your family group</td><td>Processed on your device; only the alert is shared, with your family group</td></tr>
       <tr><td>Motion/activity state (moving vs. still)</td><td>Adjusting GPS frequency to save battery</td><td>Processed on your device only</td></tr>
       <tr><td>Online/offline status</td><td>Showing whether a family member's device is connected</td><td>Your family group; see “Message relay” below</td></tr>
     </table>
@@ -109,9 +110,21 @@
   an encrypted backup. Location history is kept for 30 days and chat messages for 90
   days, then deleted automatically. There is no cloud copy we hold.</p>
 
-  <h2>Sharing with third parties</h2>
-  <p>We do not sell, rent, or share your data with anyone. There are no third parties
-  beyond the message relay described above.</p>
+  <h2>Outside services the app contacts</h2>
+  <p>We do not sell or rent your data, and we do not use advertising or analytics
+  services. Two features contact outside services directly, <strong>not</strong> through
+  the encrypted family channel:</p>
+  <ul>
+    <li><strong>Map tiles (OpenStreetMap).</strong> When you view the map, the app
+    downloads map images from openstreetmap.org. That service sees your IP address and
+    which part of the map you are viewing.</li>
+    <li><strong>Drive-time estimates (OSRM).</strong> Only when you tap a drive-time
+    estimate for a family member, the app sends your location and that member's most
+    recent location to the public routing service at router.project-osrm.org, which
+    also sees your IP address. Nothing is sent unless you ask for an estimate.</li>
+  </ul>
+  <p>Apart from these and the message relay described above, there are no other third
+  parties.</p>
 
   <h2>Children</h2>
   <p>Jibaro Family Safety is intended to be set up and administered by adults. A parent or
@@ -121,6 +134,9 @@
 
   <h2>Your controls</h2>
   <ul>
+    <li><strong>Pause location sharing</strong> at any time (Settings → Share my
+    location). While paused, your phone sends no locations, and place, speed and crash
+    alerts from your phone are off. Chat still works.</li>
     <li><strong>Leave a family</strong> at any time (Settings → Leave Family): your device
     wipes its group data and tells the group to stop sharing with you.</li>
     <li><strong>Remove a member</strong> (group creator): the removed device stops sharing
@@ -137,6 +153,9 @@
   <ul>
     <li><strong>Location (all the time)</strong> — the app's core function: sharing your
     location with your family, including when the app is closed or not in use.</li>
+    <li><strong>Alarms and full-screen alerts</strong> — precise alarms keep location
+    sharing running when the phone is idle; a full-screen alert asks whether you are okay
+    after a likely crash.</li>
     <li><strong>Notifications</strong> — safety alerts, place arrivals, crash alerts, messages.</li>
     <li><strong>Camera</strong> — scanning family invite QR codes only; no images are captured.</li>
     <li><strong>Physical activity</strong> — detecting driving/walking to tune GPS battery use.</li>

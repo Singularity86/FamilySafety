@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -46,7 +47,7 @@ fun PrivacyScreen(navController: NavController) {
             PrivacySectionHeader("Stored On This Device")
             PrivacyItem(Icons.Default.Lock,          "Your encryption keys")
             PrivacyItem(Icons.Default.People,        "Family member profiles")
-            PrivacyItem(Icons.Default.Schedule,      "Location history (last 24 hours)")
+            PrivacyItem(Icons.Default.Schedule,      "Location history (last 30 days)")
             PrivacyItem(Icons.Default.Notifications, "Alert history")
 
             HorizontalDivider(
@@ -58,6 +59,16 @@ fun PrivacyScreen(navController: NavController) {
             PrivacyItem(Icons.Default.LocationOn,           "Location updates (to family circle only)")
             PrivacyItem(Icons.Default.Warning,              "Safety alerts")
             PrivacyItem(Icons.Default.CheckCircle,          "Delivery confirmations")
+            PrivacyItem(Icons.Default.Chat,                 "Chat messages and files (encrypted; only your family can read them)")
+
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = Spacing.md),
+                color = MaterialTheme.colorScheme.outlineVariant
+            )
+
+            PrivacySectionHeader("Sent To Outside Services")
+            PrivacyItem(Icons.Default.Map,           "Map tiles: the area you are viewing and your IP address go to OpenStreetMap")
+            PrivacyItem(Icons.Default.DirectionsCar, "Drive-time estimates, only when you tap one: your location and that member's location go to the public OSRM routing service")
 
             HorizontalDivider(
                 modifier = Modifier.padding(vertical = Spacing.md),
@@ -66,9 +77,8 @@ fun PrivacyScreen(navController: NavController) {
 
             PrivacySectionHeader("Never Transmitted")
             PrivacyItem(Icons.Default.Lock,    "Your encryption keys")
-            PrivacyItem(Icons.Default.Chat,    "Message content")
+            PrivacyItem(Icons.Default.Chat,    "Readable message content (messages are always encrypted first)")
             PrivacyItem(Icons.Default.Person,  "Contact list")
-            PrivacyItem(Icons.Default.Block,   "Any data not listed above")
 
             Spacer(modifier = Modifier.height(Spacing.lg))
 
@@ -81,6 +91,16 @@ fun PrivacyScreen(navController: NavController) {
                     .fillMaxWidth()
                     .padding(horizontal = Spacing.md)
             )
+
+            Spacer(modifier = Modifier.height(Spacing.sm))
+
+            val uriHandler = LocalUriHandler.current
+            TextButton(
+                onClick = { uriHandler.openUri("https://singularity86.github.io/FamilySafety/privacy.html") },
+                modifier = Modifier.align(Alignment.CenterHorizontally)
+            ) {
+                Text("Read the full privacy policy")
+            }
 
             Spacer(modifier = Modifier.height(Spacing.md))
         }
