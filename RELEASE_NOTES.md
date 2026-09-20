@@ -9,6 +9,35 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.13.6 (35) — a real pause switch, and privacy text that matches the app
+
+Built from the commits after `582ec70` + the version bump. Supersedes 1.13.5 (34).
+
+No wire-format change.
+
+### Play copy
+
+```
+"Share my location" in Settings now really pauses sharing, and turns it back on when
+you flip it again. The location permission screen now lists everything location is
+used for, and the Privacy screen and policy now match how the app works, including
+map tiles and drive-time estimates.
+```
+
+### What changed, and why it's worth a release
+
+- **Share my location switch** did nothing before. It now saves its state, stops the
+  location service when off, and every restart path (boot, alarms, watchdog) honors it.
+  Place, speed and crash alerts from that phone are off while paused; chat still works.
+- **Background-location explanation** now names every use: sharing, 30-day history,
+  place and speed alerts, and crash detection.
+- **Privacy screen** corrected (30-day history, chat is encrypted, outside services
+  listed) and links to the full policy.
+- **Privacy policy** now discloses OpenStreetMap map tiles and OSRM drive-time
+  estimates, the crash-detection sensor, alarms and full-screen alerts, and the pause.
+
+---
+
 ## 1.13.5 (34) — location updates that keep flowing in the background
 
 Built from `b3dd517`..`59bf9fc` + the version bump. Supersedes 1.13.4 (33).
