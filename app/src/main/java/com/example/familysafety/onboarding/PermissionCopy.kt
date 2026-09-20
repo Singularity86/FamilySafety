@@ -29,11 +29,14 @@ sealed class PermissionCopy(
         title = "Always-On Location",
         // Wording deliberately follows Google Play's prominent-disclosure
         // formula for background location; changing it can fail app review.
+        // Google requires every background use of location to be listed here: sharing,
+        // history (kept by family devices), place/speed alerts, and crash detection.
         rationale = "Jibaro Family Safety collects location data to enable real-time " +
-            "location sharing with your family group, even when the app is " +
-            "closed or not in use. Your location is end-to-end encrypted, is " +
-            "shared only with your family members, and is never sold or given " +
-            "to anyone else."
+            "location sharing with your family group, a 30-day location history, " +
+            "place and speed alerts, and crash detection that alerts your family, " +
+            "even when the app is closed or not in use. Your location is " +
+            "end-to-end encrypted, is shared only with your family members, and " +
+            "is never sold or used for ads."
     ) {
         override fun coachingText(context: Context): String {
             // Android 11+ (API 30+) removed the direct "Allow all the time" dialog option —
