@@ -1,8 +1,34 @@
 # FamilySafety — iOS Port Specification & Interop Contract
 
-**Version 1.10 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
-revised 2026-08-16 against Android `main` at 4f3c1f0, which is 1.12.10 (versionCode 28) plus
-the unreleased shared-file rebuild and the family vault.**
+**Version 1.11 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
+revised 2026-08-16 against Android `main` at 4f3c1f0 (1.12.10 plus the shared-file rebuild and
+the vault), and revised again 2026-09-19 against Android `main` at b2d0807, which is 1.13.6
+(versionCode 35).**
+
+## Changes since the 2026-08-16 revision (read this first if you already started)
+
+Everything Android changed between 4f3c1f0 and b2d0807 that an iOS client must match or can
+safely ignore. **wire** = changes what goes over the broker; **behaviour** = changes what a
+correct client must do without changing a byte; **product** = policy, not interop.
+
+| Android | Kind | What changed | Where |
+|---|---|---|---|
+| 1.13.0 (29) | behaviour | Vault hardening: the container's rollback high-water mark must be **persisted**; inbound vault chunks are bounded four ways; the vault passphrase floor is **16** characters. | §6.8 |
+| 1.13.1 (30) | **wire** | **Location and presence are published at QoS 0** (presence still retained; the last-will stays QoS 1). Everything else stays QoS 1. | §4, §5 |
+| 1.13.1 (30) | behaviour | In-flight window of 32, two offline queues (control-plane vs bulk), and a failed publish must be judged by asking the client whether it is connected. A group broadcast with no reachable peer is *deferred*, not an error. | §4 |
+| 1.13.2 (31) | behaviour | A restored recovery phrase is **rejected unless it passes the BIP-39 checksum**. | §2.1 |
+| 1.13.3 (32) | **wire** | **File key version 3 is now what Android writes.** The reader from the 2026-08-16 spec is no longer optional. | §6.7 |
+| 1.13.5 (34) | **wire** | **Quorum removal and creator transfer**: new `removal_vote` topic, `RemovalVoteMessage`, `GroupSyncMessage.quorumSignatures`, and `creatorMemberId` is no longer immutable. **First Android build that can emit these; 1.13.4 and earlier reject such updates.** | §5, §6.4, §7.3, §7.5 |
+| 1.13.5 (34) | behaviour | Every MQTT connect attempt must be time-bounded; the offline location queue is capped. | §4 |
+| 1.13.6 (35) | product | A real "Share my location" pause; the background-location disclosure lists every use; the privacy text discloses outside services. | §11 |
+| — | behaviour | The joiner strips **all whitespace** from a pasted or scanned invite code before Base64-decoding. | §8.3 |
+| — | wire | The broker is EMQX Cloud with username/password auth, not the public HiveMQ broker (the old text was stale). | §4 |
+
+Not in this table because they do not touch interop: the icon and theme, map-bubble and
+marker fixes, keyboard actions, crash-detection tests, and the diagnostics changes.
+
+The vault and shared-file sections were already correct against 4f3c1f0 and are only amended
+where noted.
 
 > The shared-file rebuild that landed in six phases is now fully written up: targeted repair
 > and the durable outbox (§6.7), `isEssential` and holdings announcements (§6.7), manifest
@@ -104,6 +130,15 @@ shared encrypted file library, geofences, location history.
 - Seed: `PBKDF2-HMAC-SHA512(password = normalized mnemonic, salt = "mnemonic" + passphrase, iterations = 2048, dkLen = 64)`.
   - Normalization: trim, lowercase, collapse internal whitespace to single spaces.
   - The app always uses an **empty passphrase**.
+- **Validate before deriving (since 1.13.2).** BIP-39 has no notion of a "wrong" phrase: any
+  valid phrase derives *a* key, and a mistyped word that is still a real word silently derives
+  a stranger's identity. Restore must therefore refuse anything that is not: a word count in
+  {12, 15, 18, 21, 24}; every word in the wordlist; and a correct checksum. Checksum: rebuild
+  the bit string from the 11-bit word indices, split at `entropyBits = words × 11 × 32 / 33`,
+  and require the remaining `checksumBits` to equal the leading bits of `SHA-256(entropy)`. For
+  12 words that is 4 bits, so about 15 in 16 single-word mistakes are caught. Do this
+  **before** any key is derived or saved, and explain the refusal on screen. Ground truth: the
+  canonical BIP-39 test vectors with the real wordlist.
 
 ### 2.2 Seed → key pairs (SLIP-10, ed25519 curve)
 Path: `m/44'/1984'/0'/keyType'` — **all indices hardened** (`index | 0x80000000`).
@@ -168,17 +203,52 @@ against the QR invite's `inviterMemberId` (§8.4).
 ## 4. MQTT session contract
 
 - Library on Android: Eclipse Paho (MQTT **3.1.1**). iOS: CocoaMQTT works.
-- Broker (dev): `ssl://broker.hivemq.com:8883` (public HiveMQ, TLS). Staging/prod URLs in `BrokerConfig.kt`.
+- Broker (all environments): EMQX Cloud serverless, `ssl://r161feb1.ala.us-east-1.emqxsl.com:8883`
+  (TLS, publicly trusted CA). It **requires a username and password**, which Android bakes into
+  the build from a gitignored file and which are extractable from a shipped app
+  (`SECURITY_REVIEW.md` F2, accepted). Ask the project owner for the values; never commit them.
+  The earlier public HiveMQ dev broker is no longer used.
 - Client ID: `familysafe_{memberId}`. **Stable** — combined with `cleanSession = false` this
   gives the broker-side persistent session that provides offline delivery.
-- `cleanSession = false`, keep-alive **30 s**, connect timeout 30 s, QoS **1** for everything.
+- `cleanSession = false`, keep-alive **30 s**, connect timeout 30 s. QoS **1** for everything
+  **except** `location_inbox` and the online/offline presence publishes, which are QoS **0**
+  (since 1.13.1). A position supersedes itself and receivers discard anything older than what
+  they hold, so retransmitting one only spends an in-flight slot per recipient and queues
+  positions for offline peers that get thrown away on arrival. Delivery of the *current*
+  position is covered by the outbox retry and the heartbeat, not by QoS.
+- **Bound every connect attempt (since 1.13.5).** Paho's own 30 s timeout was observed not to
+  fire when the process is throttled mid-handshake, which left the client "connecting"
+  forever, held the connection lock, and blocked every other reconnect path until the
+  process died. Wrap each attempt in your own timeout a little longer than the transport's
+  (Android: 35 s), abort the client on expiry, and treat a "connecting" state older than the
+  whole retry sequence as stale. Any single-flight connect guard must be releasable.
+- **In-flight window: 32** (`maxInflight`). Paho's default of 10 is reachable in ordinary use
+  because every message is published once per recipient. On iOS, size the window the same
+  way and hold unacknowledged messages in memory only briefly: 32 KB file chunks make a deep
+  window megabytes.
+- **A publish that fails on a live connection is backpressure, not a disconnect.** Ask the
+  client whether it is connected; if it is, queue the message and move on. Android used to
+  read the failure as connection loss, forced the state to Disconnected, and abandoned every
+  remaining recipient in the same loop, so a broadcast to four reachable peers sent zero.
 - Reconnect: app-managed exponential backoff (no library auto-reconnect).
 - **Last Will**: topic `familysafe/{memberId}/presence`, payload = offline `PresenceUpdate`
   envelope (§6.2), QoS 1, **retained = true**.
 - On connect: subscribe own topics (§5), subscribe each peer's `location` (legacy) +
   `presence` topics, flush the pending-message queue, publish online presence (retained).
-- Outbound messages that fail/queue while offline: in-memory queue, max **200** entries,
-  **1 h** expiry.
+- Outbound messages that fail/queue while offline: **two** in-memory queues (since 1.13.1),
+  each with a **1 h** expiry, so a flood of positions during an outage cannot evict the one
+  message that must not be lost:
+  - **control-plane**, max **64**, drained first and never crowded out by the other queue:
+    topics ending `/group_sync`, `/sync_request`, `/join_request`, `/join_approval`,
+    `/removal_vote`, or containing `/group/` and ending `/ack`;
+  - **bulk**, max **200**: everything else. Chat and files stay here deliberately: both are
+    replicated and backfilled, so a dropped one is recoverable, whereas a missed group-state
+    update leaves a device believing something false about who is in the family, indefinitely.
+- A group broadcast that reaches **no** peer is *deferred*, not failed: it sits in the
+  control-plane queue and drains on reconnect. Do not show an error for an ordinary offline
+  moment.
+- The on-disk location outbox (positions not yet delivered) keeps the **newest 100 per
+  member** and drops the rest (since 1.13.5); a stale position is worth nothing.
 - **Clearing a retained message** = publish a zero-length payload with `retained = true`
   to the same topic.
 
@@ -195,19 +265,21 @@ against the QR invite's `inviterMemberId` (§8.4).
 
 ## 5. Topic & payload matrix
 
-`{id}` = recipient memberId unless noted. QoS 1 everywhere.
+`{id}` = recipient memberId unless noted. QoS 1 everywhere **except** `location_inbox` and
+presence publishes, which are QoS 0 (§4). The presence last-will stays QoS 1.
 
 | Topic | Payload | E2EE | Retained |
 |---|---|---|---|
 | `familysafe/{id}/location_inbox` | Envelope(§3) of `MessageEnvelope{type:"location_update"}` | ✅ per-recipient | no |
 | `familysafe/{sender}/location` | legacy — **subscribe only**, never publish | ✅ | no |
-| `familysafe/{sender}/presence` | plaintext `MessageEnvelope{type:"presence_update"}` | ❌ (LWT can't be E2EE) | **yes** |
+| `familysafe/{sender}/presence` | sealed presence, `{"v":2,"data":...}` (§6.2), encrypted under a group subkey because the last-will is published by the broker after the device is gone | ✅ group key | **yes** |
 | `familysafe/{id}/chat` | Envelope of `ChatMessagePayload` | ✅ | no |
 | `familysafe/{id}/chat/receipt` | Envelope of `DeliveryReceipt` (DELIVERED) | ✅ | no |
 | `familysafe/{id}/chat/read` | Envelope of `DeliveryReceipt` (READ) | ✅ | no |
 | `familysafe/{id}/group_sync` | Envelope of `GroupSyncMessage` | ✅ per-recipient | no |
 | `familysafe/group/{groupId}/ack` | plaintext `GroupUpdateAck` | ❌ | no |
 | `familysafe/{id}/sync_request` | plaintext `GroupStateRefreshRequest` | ❌ | no |
+| `familysafe/{id}/removal_vote` | Envelope of `RemovalVoteMessage` (§6.4, §7.5) | ✅ per-recipient | **yes** (never cleared; see §7.5 caveats) |
 | `familysafe/{inviterId}/join_request` | plaintext `JoinRequest` | ❌ (contains only public data) | **yes** (cleared after decision) |
 | `familysafe/{joinerId}/join_approval` | plaintext `JoinApprovalMessage` **or** `JoinRejectionMessage` (each carries an inner Envelope) | inner ✅ | **yes** (joiner clears once consumed — §8.3) |
 | `familysafe/{id}/replication/request` | Envelope of `ReplicationRequest` | ✅ | no |
@@ -223,7 +295,7 @@ against the QR invite's `inviterMemberId` (§8.4).
 | `familysafe/{id}/vault/repair` | plaintext `VaultChunkRequest` | ❌ (names only an opaque id) | no |
 
 Own subscriptions on connect: `chat`, `location_inbox`, `chat/receipt`, `chat/read`,
-`replication/request|data|announce`, `join_request`, `join_approval`, `sync_request`,
+`replication/request|data|announce`, `join_request`, `join_approval`, `sync_request`, `removal_vote`,
 `group_sync`, group `ack`, files `manifest`, files `chunk/#` (wildcard), `files/request`,
 `files/repair`, `files/availability`, `vault/container`, `vault/chunk/#` (wildcard),
 `vault/repair`.
@@ -416,7 +488,17 @@ receipt's sender (anti-forgery, see ChatRepository).
 // GroupSyncMessage (plaintext inside per-recipient envelope)
 { "groupId": "...", "version": 0, "groupDefinition": { ...§6.5... },
   "updaterMemberId": "...", "changeType": "MEMBER_ADDED|MEMBER_REMOVED|NAME_CHANGED|VERSION_SYNC|CONFLICT_RESOLUTION|FULL_SYNC",
-  "changedMemberId": null, "timestamp": 0, "signature": "<hex64>" }
+  "changedMemberId": null, "timestamp": 0, "signature": "<hex64>",
+  "quorumSignatures": [ { "voterMemberId": "...", "signature": "<hex Ed25519, 64 bytes>" } ] }
+// quorumSignatures (since Android 1.13.5) is present only on a quorum-authorised removal and
+// defaults to [] when absent. It is NOT covered by `signature` (§7.2): every entry is verified
+// on its own instead (§7.5). Decode with a default of empty. Older Android builds ignore the
+// field and reject the update as unauthorised.
+
+// RemovalVoteMessage: plaintext inside a per-recipient envelope, on removal_vote
+{ "groupId": "...", "targetMemberId": "...", "proposedVersion": 0,
+  "previousStateHash": "<hex>", "voterMemberId": "...",
+  "signature": "<hex Ed25519 over the REMOVE_QUORUM string, §7.5>", "timestamp": 0 }
 
 // GroupUpdateAck — plaintext broadcast on the group ack topic
 { "groupId": "...", "version": 0, "memberId": "<acker>", "timestamp": 0 }
@@ -526,12 +608,14 @@ both.
 |---|---|---|
 | 1 (default when field absent) | `SHA-256(groupId + "familysafety-files-v1")` | Legacy. Both inputs are public — the salt is a constant in the binary and the groupId appears in the topic name — so this provides **no confidentiality against anyone who can reach the broker**. Implement for read compatibility only. |
 | 2 | `GroupDefinition.fileEncryptionKey`, hex-decoded to 32 bytes | Random per group, distributed only inside the encrypted group definition. **What Android publishes today.** |
-| 3 | `SHA-256(fileEncryptionKey ‖ "files")` — the §6.2 subkey derivation with purpose `files` | Purpose separation, so recovering a file key does not also yield presence. **Implement the reader now; do not write it yet.** Android 1.12.10 and earlier map an unrecognised version to the legacy key, so a device that publishes version 3 makes its files undecryptable to every peer that has not updated. The writer flips in a later release, once readers are everywhere. |
+| 3 | `SHA-256(fileEncryptionKey ‖ "files")` — the §6.2 subkey derivation with purpose `files` | Purpose separation, so recovering a file key does not also yield presence. **Android has written this since 1.13.2 (32); the reader shipped in 1.13.0 (29).** New uploads use version 3 whenever a group key exists. Android 1.12.10 and earlier map an unrecognised version to the legacy key, fail GCM authentication and drop the chunk, so files simply stop arriving for anyone on those builds. The flip is not reversible for files already published under it. **Read 1, 2 and 3 forever; write 3.** |
 
 Rules for an implementation:
 
-- **Never encrypt with version 1.** New uploads use version 2 when
-  `fileEncryptionKey` is non-null. A group whose definition still has a null key
+- **Never encrypt with version 1.** New uploads use version **3** when
+  `fileEncryptionKey` is non-null (version 2 through Android 1.13.1). The version numbers and
+  the `"files"` purpose string are baked into every published chunk and manifest: editing
+  either compiles cleanly and makes every existing document undecryptable everywhere. A group whose definition still has a null key
   (created before 1.12.0 and never recreated) falls back to version 1 and stays exposed;
   this is a known gap, not a target state.
 - A version 2 chunk received while `fileEncryptionKey` is null cannot be decrypted.
@@ -812,6 +896,12 @@ Retained, versioned, signed, on rules identical to the file manifest:
   family's vault with random bytes, which is indistinguishable from erasing it.
 - **Ignore any version at or below the highest already seen**, and refuse anything that is not
   exactly 131072 bytes.
+- **Persist that high-water mark** (since 1.13.0, F8). Versions are wall-clock milliseconds, so
+  every container ever published outranks a mark that resets to zero on launch; keeping it in
+  memory let a captured, genuinely signed old container overwrite a device's vault after any
+  restart. Store it beside the container (not inside it: the container is fixed-size and any
+  marker would change that), and initialise it to "not yet loaded" (Android uses -1) rather
+  than 0 so an unread mark cannot be mistaken for a real zero.
 
 `data` is deliberately *not* encrypted under the group key. It is already nothing but GCM
 ciphertext and random filler, and wrapping it would only hide from the relay that a container
@@ -836,6 +926,36 @@ so answering does not imply being able to read it.
 A device that was offline when a document was added fetches it the next time someone opens the
 vault **on that device**. It cannot do better: without a code it does not know the blob is
 referenced by anything.
+
+#### Bounds on inbound vault chunks (since 1.13.0, F9)
+
+Vault chunks are stored unauthenticated on purpose, so without limits any peer could fill every
+family device with data those devices can neither read nor attribute. Refuse, do not truncate:
+
+| Limit | Android value |
+|---|---|
+| One document | `MAX_ITEM_BYTES` = 25 MiB; `totalChunks` must be in `1 … (25 MiB / 32 KiB) + 1` |
+| Documents held | 256 blobs |
+| Total vault bytes | 250 MiB (projected size after the new chunk) |
+| Free-space headroom | keep 64 MiB free |
+| Consistency | a blob whose stored chunk count disagrees with an arriving chunk's `totalChunks` is refused outright: slot offsets are `chunkIndex × stride`, so a changed count would reinterpret everything already written |
+
+Also exclude the vault directory from device-to-device backup and transfer (Android: F11,
+`data_extraction_rules.xml`; iOS equivalent: `isExcludedFromBackup`). A vault should follow the
+family, not the hardware, because a copy is a permanent offline target for guessing the
+passphrase.
+
+#### Passphrase floor
+
+Minimum **16 characters** (Android `MIN_PASSPHRASE_LENGTH`, raised from 6 before any shipping
+build carried a vault; F10). The container is published retained, so it is a fixed artifact
+anyone who can subscribe may guess against offline forever, with Argon2id INTERACTIVE as the
+only cost per guess. Length is the only lever that does not become an oracle for which
+passphrases are real, and it is blunt (`aaaaaaaaaaaaaaaa` passes). Enforce it **only where a
+passphrase is being created**, never at the entry point, and never in a way that differs
+between a full and an empty vault. The vault footer and first-write dialog state what protects
+it, unconditionally, with no dismissal and no stored "seen" flag: a note that appears for some
+vaults and not others is an oracle.
 
 #### Runtime rules
 
@@ -882,7 +1002,8 @@ incoming definition. Unknown updater ⇒ reject.
 
 ### 7.3 Transition validation (apply before accepting any remote GroupDefinition)
 Reject the update if any of:
-- `groupId`, `creatorMemberId`, or `createdAtEpochMs` changed;
+- `groupId` or `createdAtEpochMs` changed, or `creatorMemberId` changed other than by one of
+  the two transitions in §7.5;
 - updater is not in the current local roster;
 - `remote.version == current.version + 1` but `remote.previousStateHash != current.computeStateHash()`;
 - any surviving member's keys changed (key rotation unsupported);
@@ -890,8 +1011,9 @@ Reject the update if any of:
 - members were removed and the updater is neither the creator nor removing only itself;
 - any tombstone present locally is **missing** from the remote (append-only);
 - any member appears in the roster **and** in `removedMemberIds`;
-- a **new** tombstone appears and the updater is neither the creator nor tombstoning only
-  itself (same authority as the removal it records);
+- a **new** tombstone appears and the updater is neither the creator, nor tombstoning only
+  itself, nor authorised by a verified quorum (§7.5), which is the same authority as the
+  removal it records;
 - `groupName` changed and updater is not the creator.
 
 **Concurrent siblings are validated differently.** When `remote.version == local.version`
@@ -961,6 +1083,85 @@ readmits someone who was just removed.
 - Incoming refresh request: respond (full `FULL_SYNC` broadcast) only if
   `local.version >= request.minimumVersion` and groupId matches.
 
+### 7.5 Creator transfer and quorum removal (since Android 1.13.5)
+
+Until 1.13.4 `creatorMemberId` was immutable and only the creator could remove another member,
+so a family whose creator device was lost could never remove anyone or rename the group short
+of recreating the family. Two mechanisms fix that, both on the existing signed-state model.
+**Group rename stays creator-only.** `creatorMemberId` is inside the §7.1 state hash, so a
+change of creator changes the hash.
+
+**Voluntary transfer.** No new signature type. Accept a `creatorMemberId` change when the
+*current* creator is the updater (the §7.2 signature already proves it), there is **no new
+tombstone** in the same update, and the new creator is in the roster and not tombstoned.
+Android exposes this as "transfer creator" on the Members screen.
+
+**Quorum removal.** A strict majority of the current roster, excluding the target, may remove
+anyone, the creator included, without their cooperation.
+
+1. *Threshold.* `remaining = members.count - 1` (the target never votes);
+   `needed = remaining / 2 + 1`, integer division. If `remaining <= 0` there is no quorum.
+   Count only voters who are in **your own current roster** and are not the target.
+2. *Vote signature.* Ed25519-detached, by the voter, over the UTF-8 string
+   ```
+   REMOVE_QUORUM:{groupId}:{targetMemberId}:{proposedVersion}:{previousStateHash}
+   ```
+   with `proposedVersion = current.version + 1` and `previousStateHash =
+   current.computeStateHash()` as the voter sees the group. The distinct `REMOVE_QUORUM` prefix
+   stops a vote being replayed as any other removal message, and binding to version and hash
+   stops a vote cast for one proposal authorising another. Encoding is hex of the 64-byte
+   signature, like §7.2.
+3. *Casting.* Any member may propose. The proposer signs, records its own vote, and sends a
+   `RemovalVoteMessage` (§6.4) to every other member (Android sends to all members but
+   itself, the target's inbox included), each as a per-recipient E2EE envelope on
+   `familysafe/{recipient}/removal_vote`, QoS 1, **retained**.
+4. *Receiving a vote.* Require the envelope's authenticated sender to be in the roster and to
+   equal `voterMemberId`; ignore your own echoed vote; ignore a `groupId` that is not yours;
+   verify the signature against the voter's key **from your current roster**; then tally in
+   memory keyed by `(targetMemberId, proposedVersion, previousStateHash)` so votes for a stale
+   proposal never mix with a fresh one. The tally is **not persisted** and carries no authority
+   on its own.
+5. *Reaching quorum.* The device that first sees `needed` valid votes builds an ordinary
+   tombstone update: remove the target from `members`, add it to `removedMemberIds`, bump
+   `version` by 1, set `previousStateHash`, apply it locally, and broadcast a `group_sync` with
+   `changeType = MEMBER_REMOVED`, `changedMemberId = target` and the collected votes in
+   `quorumSignatures`. Several devices reaching quorum at once and each broadcasting is
+   expected and safe: it is the same shape as two members approving one join, and §7.4
+   reconciliation resolves it.
+6. *Accepting one.* On a `group_sync` carrying `quorumSignatures`, re-verify **each** entry
+   yourself, using `changedMemberId` as the target, `syncMessage.version` as `proposedVersion`
+   and **your own** current `computeStateHash()` as `previousStateHash`; pass only the voters
+   that verified to §7.3. Never trust the sender's claim about who voted. The update is
+   authorised as a quorum removal only if it adds **exactly one** new tombstone and the
+   verified voters meet the threshold above.
+7. *Removing the creator.* The successor is computed, not voted on, so every device reaches
+   the same answer independently: from the roster minus the removed member, take the member
+   with the smallest `(addedAtEpochMs, memberId)`, meaning longest-standing first and
+   `memberId` ascending as the tie-break. A remote update whose `creatorMemberId` differs is
+   accepted only if it equals that value, or is a valid voluntary transfer; anything else is
+   "creator changed".
+8. *Merging.* In the §7.4 reconcile step, if the winner's `creatorMemberId` appears in the
+   merged tombstone set, **recompute** the successor with the same function instead of
+   inheriting the winner's copy. Inheriting it would silently resurrect the authority of a
+   creator that was quorum-removed on a branch the winner has not seen yet. Treat a merge as a
+   no-op only if roster, tombstones **and** `creatorMemberId` all match the winner.
+
+Caveats an implementer should know, taken from how Android behaves rather than designed:
+
+- A relayed removal from a non-creator, non-quorum updater (for example a `FULL_SYNC` sent to a
+  peer that missed the original) is rejected, because a relayed removal is indistinguishable
+  from a forged one. Affected peers still converge through the original QoS 1 broadcast and
+  through refresh requests, which any peer at or past the needed version answers.
+- The `removal_vote` topic is retained, but the broker keeps **one retained message per
+  topic**, so a later vote to the same inbox displaces an earlier one. Correctness rests on
+  QoS 1 persistent-session delivery, not on the retained copy, and Android never clears them.
+  Expect residual retained votes on the broker.
+- No cross-platform test vector exists yet for the `REMOVE_QUORUM` signature or the successor
+  choice. Generate one from Android (`GroupTransitionValidatorTest` and `GroupStateMergeTest`
+  cover the rules) and add it to §12 before shipping this on iOS.
+- A quorum-removed device gets `RemovedFromGroup` like any other removal (§7.4): wipe and
+  return to onboarding.
+
 ---
 
 ## 8. Onboarding & join flow
@@ -979,7 +1180,9 @@ The QR encodes this Base64 string. (An `InviteData` class with a signature field
 the codebase but is *not* what the current invite path emits — match the map format above.)
 
 ### 8.3 Joiner
-1. Scan QR → decode → extract `groupId`, `inviterMemberId`.
+1. Scan QR (or accept a pasted code) → **strip every whitespace character** → Base64-decode →
+   extract `groupId`, `inviterMemberId`. Pasted codes routinely arrive with a trailing newline
+   or line-wrapped by the messaging app, and a strict decoder rejects a perfectly good code.
 2. Generate own mnemonic/keys (`requesterId = own memberId`).
 3. Ephemeral MQTT client (`familysafe_join_{id8}_{ts}`, cleanSession=false):
    subscribe `familysafe/{self}/join_approval`, then publish **retained** plaintext
@@ -1078,7 +1281,9 @@ Swift gotchas:
 - **No persistent background MQTT.** iOS suspends sockets in background. Mitigations,
   in order of value: (1) publish location whenever CoreLocation wakes the app (connect →
   drain → publish → disconnect, ~10 s background window); (2) rely on broker persistent
-  session + QoS 1 + retained presence/approvals so nothing is lost while suspended;
+  session + QoS 1 + retained presence/approvals so nothing is lost while suspended (chat, group
+  sync, joins and files only: locations are QoS 0 since 1.13.1, so a suspended device is *not*
+  queued positions and will simply see the newest ones on wake, which is the intent);
   (3) `BGAppRefreshTask` for periodic pulls; (4) later, an optional APNs relay would need
   a server — out of scope, note the tradeoff in-app ("updates may be delayed when the
   app is closed").
@@ -1089,6 +1294,20 @@ Swift gotchas:
   `UIBackgroundModes = [location, fetch, processing]`.
 - App Store review: expect scrutiny on Always-location; the privacy story (no server,
   E2EE) is the justification — write the purpose strings accordingly.
+- **A real pause (since Android 1.13.6).** Settings has a "Share my location" switch that
+  stops the phone publishing, and every automatic restart path honours it. It also silences
+  place, speed and crash alerts *from that phone*; chat still works. iOS should offer the same,
+  must not restart location updates on relaunch while paused, and should say what pausing turns
+  off. Android shipped this switch as a no-op for months before anyone noticed; the privacy
+  story depends on it being real.
+- **List every background use of location** in the permission explanation, not just sharing.
+  Android names real-time sharing, the 30-day history, place and speed alerts, and crash
+  detection. Apple's purpose strings and the App Store privacy label should say the same thing.
+- **Outside services.** Android's map loads tiles from OpenStreetMap, and a drive-time estimate
+  sends both members' precise coordinates to the public OSRM server. Neither goes through the
+  encrypted channel and both must be disclosed. If iOS uses MapKit and MKDirections instead,
+  that is a *different* disclosure (Apple), not none. Decide deliberately, and keep the privacy
+  policy, the in-app Privacy screen and the store label in agreement with the code.
 
 ---
 
@@ -1204,8 +1423,9 @@ null-vs-absent tolerance, Base64 JoinRequest keys, double-encoded MessageEnvelop
 *Done when:* hash vector passes and each §7.3 rejection rule has a failing-input test.
 
 **Phase 2 — Transport.** CocoaMQTT wrapper: connect (cleanSession=false, LWT), subscriptions
-(§5), pending queue (200/1 h), retained-clear helper, reconnect backoff, presence publish.
-*Done when:* against `broker.hivemq.com:8883`, two iOS simulator instances see each other's
+(§5), pending queues (control 64 / bulk 200, 1 h, §4), a bounded connect attempt and stale-connecting
+recovery (§4), retained-clear helper, reconnect backoff, presence publish.
+*Done when:* against the EMQX Cloud broker in §4 (credentials from the project owner), two iOS simulator instances see each other's
 presence flip online/offline (kill one → LWT observed), each reading the other's
 `protocolVersion` as the current generation rather than 1 (§6.2) — a simulator that shows
 its twin as outdated is emitting presence wrong, and against a real Android peer that
