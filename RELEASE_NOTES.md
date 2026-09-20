@@ -13,15 +13,16 @@ each entry fits; everything under it is for us.
 
 Built from the commits after `582ec70` + the version bump. Supersedes 1.13.5 (34).
 
-No wire-format change.
+Includes everything in 1.13.5 (34), including majority removal, which is the one additive
+wire change (see that entry). Nothing else on the wire changed.
 
 ### Play copy
 
 ```
-"Share my location" in Settings now really pauses sharing, and turns it back on when
-you flip it again. The location permission screen now lists everything location is
-used for, and the Privacy screen and policy now match how the app works, including
-map tiles and drive-time estimates.
+Location updates no longer go quiet for hours: a stalled relay connection can't block
+reconnecting. A majority of your family can now remove a member without the creator.
+"Share my location" in Settings really pauses sharing, the location permission screen
+lists every use of location, and the Privacy screen and policy match how the app works.
 ```
 
 ### What changed, and why it's worth a release
@@ -42,7 +43,9 @@ map tiles and drive-time estimates.
 
 Built from `b3dd517`..`59bf9fc` + the version bump. Supersedes 1.13.4 (33).
 
-No wire-format change, so devices on any recent version keep working together.
+Wire format: one additive change (majority removal, below). Devices on 1.13.4 or earlier
+keep working with this build, but they reject a majority-removal update, so that feature
+only takes effect once everyone has updated.
 
 ### Play copy
 
@@ -60,6 +63,14 @@ help in Settings.
   heartbeat, backoff and network-restored reconnects all queued behind it until the
   process died. Every attempt is now time-bounded and aborted, and the heartbeat
   force-aborts a Connecting state too old to be live.
+- **A majority of the family can remove a member without the creator** (`1571763`). Until
+  now only the creator could, and creator authority could not move, so a family whose
+  creator's device was lost could never remove anyone. Members now vote; once a strict
+  majority of the others (excluding the person being removed) has signed, the removal goes
+  through, and if the removed member was the creator the longest-standing remaining member
+  becomes creator automatically. The creator can also hand the role to someone else. Renaming
+  the group stays creator-only. New `removal_vote` topic and a `quorumSignatures` field; see
+  `ios/IOS_PORT_SPEC.md` section 7.5.
 - **Silent group-load failure** now logs an error instead of looking like "no group".
 - **Unsent-location backlog** capped at the newest 100 per member.
 - **Rate limiter** uses a monotonic clock, so a clock adjustment can't lock it out.
