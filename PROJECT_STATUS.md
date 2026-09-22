@@ -667,21 +667,31 @@ why the duplication is worth removing before they stop agreeing.
    overwrite one fixed filename rather than accumulating crackable history, and surface
    backup failures visibly rather than failing silently (the same failure shape as the
    `pm clear` incident below). **Paused pending explicit go-ahead to implement.**
-10. **Creator-removal-by-vote — requested, not started (2026-09-08).** Today only the
-    creator may remove another member, and only the creator may rename the group
-    (`GroupTransitionValidator.kt`); nobody can remove the creator, and if the creator's
-    device is gone without a self-removal broadcast, that entry is permanently stuck in the
-    roster — the same shape as the existing "Debug" ghost member in Track 3b, but for the
-    creator role itself, which also permanently disables all creator-only moderation for the
-    family. Asked for a quorum-signed alternative: any member proposes removing a target
-    (including the creator), other members broadcast signed votes, and once a majority of
-    the current roster (excluding the target) has signed, the removal is authorized without
-    the creator. Sketch not yet written up in detail or implemented — needs a new signed
-    message type, a `GroupTransitionValidator` branch alongside the existing
-    creator-or-self rule, and a decided rule for what happens to `creatorMemberId` (itself
-    otherwise immutable) when the creator is the one voted out — likely auto-promoting the
-    longest-standing remaining member, since that's independently computable from already-
-    replicated roster/join-order state without a second vote.
+10. ~~Creator-removal-by-vote~~ **Done** (2026-09-11, `1571763`). Quorum-signed removal and
+    voluntary creator transfer both shipped in 1.13.5 (34); see `RELEASE_NOTES.md` and
+    `ios/IOS_PORT_SPEC.md` §7.5 for the wire contract.
+11. **History timeline fine-tuning — requested, not started (2026-09-21).** The History
+    screen (`main/HistoryScreen.kt`) was rewritten from a raw list of GPS fixes to a day
+    timeline of stays, trips and gaps, built by `history/DayTimelineBuilder`
+    (commits `b18bfc6`, `238d129`). The thresholds are first-pass guesses from reading the
+    code, not tuned against real days:
+    - `STAY_RADIUS_M = 100.0`, `STAY_MIN_MS = 5 min` — how tight and how long a cluster of
+      fixes must be to count as a stay rather than a slow moment.
+    - `GAP_MS = 30 min` — silence longer than this becomes a "No updates" row.
+    - `MAX_ACCURACY_M = 150f` — fixes worse than this are dropped before clustering.
+    - `MIN_TRIP_M = 100.0` — movement between two stays shorter than this is GPS wander, not
+      a trip.
+    - `DayTimelineBuilder.STAY_RADIUS_M * 1.5` (in `mergeAdjacentStays`) and the matching
+      constant in `history/FrequentPlaces.CLUSTER_RADIUS_M = 150.0` — how close two stays or
+      suggested places must be to be treated as the same place.
+    - `HistoryScreen.kt`'s `DRIVE_SPEED_MS = 7f` (~16 mph) — the top speed above which a trip
+      is labelled "Drive" instead of "Trip" (walk/bike).
+    - `FrequentPlaces.MIN_DAYS = 3`, `MIN_TOTAL_MS = 30 min` — how often and how long an
+      unnamed place must recur before "Name this place" is offered.
+    Needs: watching real days against these constants (family devices, once background
+    reliability is confirmed) and adjusting; deciding whether "Drive" vs "Trip" should use
+    activity-recognition state instead of a speed threshold; deciding whether stay/trip
+    merging should be aware of the family's own zone boundaries rather than only distance.
 
 ## 2026-09-08 incident: `pm clear` destroyed a live member of the real family
 
