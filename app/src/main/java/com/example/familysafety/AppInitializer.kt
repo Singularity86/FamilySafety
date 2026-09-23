@@ -244,6 +244,11 @@ class AppInitializer @Inject constructor(
                 // that ever repaired a stalled transfer was a user tapping the file.
                 FileTransferWorker.scheduleIfNeeded(context)
 
+                // Re-confirms the family's subscription with Play roughly daily. There is no
+                // server to push a lapse event, so this is what keeps entitlement current —
+                // see EntitlementCalculator.SUBSCRIPTION_STALENESS_MS.
+                com.example.familysafety.billing.SubscriptionRefreshWorker.scheduleIfNeeded(context)
+
                 // Watch for membership changes (new members added/removed) and
                 // update MQTT subscriptions + encryption keys automatically.
                 var previousMemberIds: Set<String> = groupDef.members.map { it.memberId }.toSet()

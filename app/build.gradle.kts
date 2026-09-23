@@ -217,6 +217,10 @@ dependencies {
 
     // Map - OpenStreetMap via osmdroid (no API key required)
     implementation("org.osmdroid:osmdroid-android:6.1.18")
+
+    // Family subscription (billing/) - Play Billing for the purchase flow itself; purchase
+    // signature verification is plain java.security.Signature, no extra dependency needed.
+    implementation("com.android.billingclient:billing-ktx:7.1.1")
     
     // MQTT - core client only; the Android service wrapper (org.eclipse.paho.android.service)
     // is incompatible with Android 12+ (AlarmPingSender uses PendingIntent without
