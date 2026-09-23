@@ -1008,6 +1008,10 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        com.example.familysafety.billing.MembershipCard(viewModel = viewModel, context = context)
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Support card — optional one-time thank-you, gates nothing in the app
         OutlinedCard(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {

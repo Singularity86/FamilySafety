@@ -120,7 +120,23 @@ fun MainScreen(
     onNavigationHandled: () -> Unit = {}
 ) {
     val driveEstimateState by viewModel.driveEstimateState.collectAsState()
+    val entitlement by viewModel.entitlement.collectAsState()
+    val topLevelContext = androidx.compose.ui.platform.LocalContext.current
     val navController = rememberNavController()
+
+    var showTrialReminder by remember { mutableStateOf(true) }
+    if (showTrialReminder) {
+        com.example.familysafety.billing.TrialReminderDialog(
+            entitlement = entitlement,
+            onDismiss = { showTrialReminder = false },
+            onSubscribe = {
+                showTrialReminder = false
+                (topLevelContext as? android.app.Activity)?.let {
+                    viewModel.billingManager.launchPurchaseFlow(it)
+                }
+            }
+        )
+    }
 
     NavHost(
         navController = navController,
@@ -424,20 +440,24 @@ fun MainScreen(
                                 navigatePagerTo(2)
                             }
                         )
-                        2 -> FilesScreen(
-                            onOpenStatusBoard = { navController.navigate("file_status_board") },
-                            onOpenVault = { code ->
-                                vaultViewModel.openWithCode(code)
-                                navController.navigate("vault")
-                            },
-                            viewModel = filesViewModel
-                        )
-                        3 -> ChatScreen(
-                            memberId = "",
-                            onBack = {},
-                            viewModel = chatViewModel,
-                            showTopBar = false
-                        )
+                        2 -> com.example.familysafety.billing.GatedFeature("Files", entitlement, viewModel) {
+                            FilesScreen(
+                                onOpenStatusBoard = { navController.navigate("file_status_board") },
+                                onOpenVault = { code ->
+                                    vaultViewModel.openWithCode(code)
+                                    navController.navigate("vault")
+                                },
+                                viewModel = filesViewModel
+                            )
+                        }
+                        3 -> com.example.familysafety.billing.GatedFeature("Chat", entitlement, viewModel) {
+                            ChatScreen(
+                                memberId = "",
+                                onBack = {},
+                                viewModel = chatViewModel,
+                                showTopBar = false
+                            )
+                        }
                         4 -> SettingsScreen(
                             viewModel = viewModel,
                             onThemeChanged = onThemeChanged,
@@ -474,14 +494,16 @@ fun MainScreen(
         // Files + Zones remain as NavHost destinations even though they are
         // not in the bottom nav, so programmatic navigation still resolves them.
         composable(MainRoute.Files.route) {
-            FilesScreen(
-                onOpenStatusBoard = { navController.navigate("file_status_board") },
-                onOpenVault = { code ->
-                    vaultViewModel.openWithCode(code)
-                    navController.navigate("vault")
-                },
-                viewModel = filesViewModel
-            )
+            com.example.familysafety.billing.GatedFeature("Files", entitlement, viewModel) {
+                FilesScreen(
+                    onOpenStatusBoard = { navController.navigate("file_status_board") },
+                    onOpenVault = { code ->
+                        vaultViewModel.openWithCode(code)
+                        navController.navigate("vault")
+                    },
+                    viewModel = filesViewModel
+                )
+            }
         }
 
         // Reached only by submitting text from the Files search box. Not in the bottom nav,
@@ -537,12 +559,14 @@ fun MainScreen(
         }
 
         composable(ChatRoutes.CONVERSATION_LIST) {
-            ConversationListScreen(
-                onConversationClick = { memberId ->
-                    navController.navigate(ChatRoutes.chatDetail(memberId))
-                },
-                viewModel = chatViewModel
-            )
+            com.example.familysafety.billing.GatedFeature("Chat", entitlement, viewModel) {
+                ConversationListScreen(
+                    onConversationClick = { memberId ->
+                        navController.navigate(ChatRoutes.chatDetail(memberId))
+                    },
+                    viewModel = chatViewModel
+                )
+            }
         }
 
         composable(
@@ -550,11 +574,13 @@ fun MainScreen(
             arguments = listOf(navArgument("memberId") { type = NavType.StringType })
         ) { backStackEntry ->
             val memberId = backStackEntry.arguments?.getString("memberId") ?: return@composable
-            ChatScreen(
-                memberId = memberId,
-                onBack = { navController.popBackStack() },
-                viewModel = chatViewModel
-            )
+            com.example.familysafety.billing.GatedFeature("Chat", entitlement, viewModel) {
+                ChatScreen(
+                    memberId = memberId,
+                    onBack = { navController.popBackStack() },
+                    viewModel = chatViewModel
+                )
+            }
         }
 
         composable("security") {
@@ -582,10 +608,12 @@ fun MainScreen(
             route = HistoryRoute.PATTERN,
             arguments = listOf(navArgument("memberId") { type = NavType.StringType })
         ) {
-            HistoryScreen(
-                viewModel = hiltViewModel(),
-                onBack = { navController.popBackStack() }
-            )
+            com.example.familysafety.billing.GatedFeature("History", entitlement, viewModel) {
+                HistoryScreen(
+                    viewModel = hiltViewModel(),
+                    onBack = { navController.popBackStack() }
+                )
+            }
         }
     }
 }
