@@ -692,6 +692,36 @@ why the duplication is worth removing before they stop agreeing.
     reliability is confirmed) and adjusting; deciding whether "Drive" vs "Trip" should use
     activity-recognition state instead of a speed threshold; deciding whether stay/trip
     merging should be aware of the family's own zone boundaries rather than only distance.
+12. **Family subscription — built 2026-09-22, not shippable yet.** Gates Chat, History and
+    Files behind a 60-day free trial, then $4/month; never gates live location, alerts,
+    crash detection, or the Vault. New `billing/` package: `Entitlement` +
+    `EntitlementCalculator` (pure, unit tested), `GrantCode` (Ed25519 grant-code
+    verification, BouncyCastle — chosen specifically so it runs in a JVM test without the
+    native-library problem `LazysodiumCryptoProvider` has), `EntitlementRepository`
+    (wraps `GroupStateManager`, exposes the live `StateFlow<Entitlement>`),
+    `BillingManager` (Play Billing wrapper, on-device purchase signature verification, no
+    server), `SubscriptionRefreshWorker` (daily re-confirmation, `EntryPointAccessors`
+    style like `FileTransferWorker` — no `hilt-work` dependency added). `GroupDefinition`
+    gained three fields (`subscriberMemberId`, `subscriptionConfirmedAtEpochMs`,
+    `grantCode`), excluded from `computeStateHash` like `fileEncryptionKey`, with explicit
+    merge rules added to `GroupStateMerge` (newer subscription confirmation wins on
+    conflict, not whichever side wins the roster tiebreak). Full spec write-up:
+    `ios/IOS_PORT_SPEC.md` §6.9.
+
+    Four placeholder constants in `billing/BillingConfig.kt` block this from working at
+    all — each marked `TODO_PLACEHOLDER`, loud on purpose rather than silently trusting an
+    unset key: the Play subscription product ID (create it in Play Console first — $4/mo,
+    60-day free trial phase), the Play licensing public key, the grant-signing public key
+    (`tools/gen_grant_signing_key.py` generates the keypair; run once, keep the private
+    half in `keystore/`, already gitignored), and `PAYWALL_INTRODUCED_AT_EPOCH_MS` (set
+    exactly once, right before the release that enforces this ships — every family created
+    before that instant is grandfathered forever, so don't set it early).
+
+    Also needed before shipping: on-device purchase flow test once a real product ID
+    exists, and a cross-platform test vector for grant codes in the iOS spec's §12 (§6.9
+    notes this is still open). Both `PaywallScreen` and `MembershipCard` read the live
+    price from `ProductDetails` (falling back to the plan price only before it loads), so
+    a future Play Console price change needs no app update to match.
 
 ## 2026-09-08 incident: `pm clear` destroyed a live member of the real family
 

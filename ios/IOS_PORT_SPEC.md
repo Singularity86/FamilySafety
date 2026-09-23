@@ -1,9 +1,24 @@
 # FamilySafety — iOS Port Specification & Interop Contract
 
-**Version 1.11 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
-revised 2026-08-16 against Android `main` at 4f3c1f0 (1.12.10 plus the shared-file rebuild and
-the vault), and revised again 2026-09-19 against Android `main` at b2d0807, which is 1.13.6
-(versionCode 35).**
+**Version 1.12 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
+revised 2026-08-16 against `main` at 4f3c1f0 (1.12.10 plus the shared-file rebuild and the
+vault), revised again 2026-09-19 against `main` at b2d0807 (1.13.6, versionCode 35), and
+revised again 2026-09-22 for the family subscription (`billing/`, unreleased — no Android
+versionCode carries it yet). §6.9 and the `GroupDefinition` additions below are new in this
+revision and have not shipped; everything else is unchanged since 1.13.6.**
+
+## The family subscription (unreleased, added 2026-09-22)
+
+Android gates Chat, History and Files behind a 60-day free trial, then $4/month, with no
+server anywhere in the mechanism — see §6.9 for the wire shapes and §11 for what an iOS
+client must replicate. The short version: `GroupDefinition.createdAtEpochMs` (already
+signed, already synced) is the trial clock; `subscriberMemberId` +
+`subscriptionConfirmedAtEpochMs` are a family member's periodically-refreshed claim that
+Play still says the subscription is active; `grantCode` is a developer-signed, per-family
+override that any device can verify entirely offline. None of the three participate in
+`computeStateHash` (§7.1) — the same treatment as `fileEncryptionKey`, except that key
+changes once per group while the subscription confirmation is expected to change roughly
+daily.
 
 ## Changes since the 2026-08-16 revision (read this first if you already started)
 
@@ -517,8 +532,17 @@ receipt's sender (anti-forgery, see ChatRepository).
                  "avatarHash": null, "colorHue": null } ],
   "version": 1, "previousStateHash": null,
   "fileEncryptionKey": "<hex64chars>",
-  "removedMemberIds": ["<memberId>", "..."] }
+  "removedMemberIds": ["<memberId>", "..."],
+  "subscriberMemberId": null, "subscriptionConfirmedAtEpochMs": null, "grantCode": null }
 ```
+
+The three billing fields (added in the 2026-09-22 revision, unreleased — see §6.9) are
+optional and default to `null`/absent, so a peer that predates them simply never sends
+them and nothing breaks. All three ride the ordinary version-bump-and-broadcast path
+(`GroupStateManager.confirmSubscription` / `redeemGrantCode` on Android, the same shape as
+`updateMyDisplayName`) — they are not part of `computeStateHash`, only of the definition
+itself, so re-confirming a subscription daily changes the family's *version* but not its
+*identity hash*.
 
 `fileEncryptionKey` was added in Android 1.12.0 (18): a random 32-byte AES key, hex
 encoded, generated once when the group is created. It is **absent or null** for groups
@@ -965,6 +989,70 @@ a private cache only while another app opens the document, and wipe that cache o
 launch. No thumbnails, no photo-library or Files-app export, no notifications, and vault items
 never appear in any transfer log or status board.
 
+### 6.9 The family subscription (unreleased)
+
+Chat, History and Files are gated; everything else (live location, place/speed alerts,
+crash detection, the Vault, Settings) is never gated. No server anywhere in this mechanism.
+
+**Trial.** `entitled = now - group.createdAtEpochMs < 60 days`. Needs no wire field —
+`createdAtEpochMs` is already signed, synced state every device holds (§6.5).
+
+**Grandfathering.** Any group whose `createdAtEpochMs` predates the release that first
+enforces this is exempt forever. The cutoff is a constant baked into the app at release
+time (Android: `BillingConfig.PAYWALL_INTRODUCED_AT_EPOCH_MS`), not a wire value — an iOS
+build must use the *same* cutoff instant as whatever Android release it ships alongside, or
+the two platforms will disagree about which families are exempt.
+
+**Subscription confirmation.** The device holding the family's Play (or App Store) purchase
+periodically re-checks with the store and, if still active, writes
+`subscriberMemberId` + `subscriptionConfirmedAtEpochMs` onto the group definition and
+broadcasts it the ordinary way. Every device — including the one that wrote it — treats the
+claim as valid only while `now - subscriptionConfirmedAtEpochMs` is under a staleness
+window (Android: 4 days; `EntitlementCalculator.SUBSCRIPTION_STALENESS_MS`). There is no
+"unsubscribed" message: a lapsed, cancelled, or refunded subscription simply stops being
+re-confirmed and the family ages out on its own once the window passes. Any member's device
+may hold the subscription — it is not tied to the creator role, deliberately, matching how
+§7.5 already loosened creator-only authority for exactly this kind of single-point-of-
+failure reason.
+
+**Grant codes** are the developer's manual override — "give this family the paid features
+free," with an optional expiry. Signed offline (`tools/gen_grant_code.py` on the Android
+side; the same Ed25519 keypair works from any platform's tooling) and verified entirely
+on-device, no server round trip:
+
+```json
+// GrantCodePayload — base64 of this JSON is what a user pastes in as "the code"
+{ "expiryEpochMs": 0, "signatureHex": "<hex, 64 bytes>" }
+```
+
+The signed message is `"GRANT:{groupId}:{expiryEpochMs}"`, UTF-8 — **note that the code
+itself never states which groupId it is for.** A verifier reconstructs the message using
+*its own* current groupId and checks the signature against that; a code minted for one
+family fails to verify against any other family's groupId without needing a separate,
+checkable "this code belongs to group X" field. `expiryEpochMs = 0` means "never expires";
+anything else is compared against wall-clock time, past which the code is treated as if it
+were never entered.
+
+Verify with the developer's public key (safe to ship; embedded in the app —
+Android: `BillingConfig.GRANT_PUBLIC_KEY_HEX`), standard Ed25519 over the message above.
+Cross-platform compatibility of this exact scheme (a key generated with PyNaCl, verified
+with BouncyCastle) was confirmed empirically before this revision shipped — see the commit
+that introduced `billing/GrantCode.kt` — so any standard Ed25519 implementation on iOS
+(CryptoKit's `Curve25519.Signing`, for instance) should interoperate without surprises, but
+confirm it against a real code from `tools/gen_grant_code.py` before trusting it.
+
+**Merge.** When two devices reconcile a concurrent edit (§7.4), `subscriberMemberId` +
+`subscriptionConfirmedAtEpochMs` are **not** simply inherited from whichever side wins the
+roster tiebreak — keep whichever side has the *later* `subscriptionConfirmedAtEpochMs`,
+since the two are unrelated events that happen to collide. `grantCode` prefers whichever
+side has one at all (a valid code is a fixed fact about the family and both sides' copies,
+if both present, are expected to be identical).
+
+**Not yet decided for iOS:** whether the App Store's subscription/receipt model maps onto
+the same "periodically re-confirm, let it go stale" pattern as cleanly as Play's
+`queryPurchasesAsync` does, or needs its own staleness window. Design this deliberately
+rather than assuming parity — do not start iOS billing work from this section alone.
+
 ---
 
 ## 7. Group state machine & security rules
@@ -1308,6 +1396,10 @@ Swift gotchas:
   encrypted channel and both must be disclosed. If iOS uses MapKit and MKDirections instead,
   that is a *different* disclosure (Apple), not none. Decide deliberately, and keep the privacy
   policy, the in-app Privacy screen and the store label in agreement with the code.
+- **The family subscription** (§6.9, unreleased). Gates Chat, History and Files only — never
+  location sharing, alerts, crash detection or the Vault. StoreKit replaces Play Billing for
+  the purchase and the periodic re-confirmation, but the wire mechanism (a signed field on
+  `GroupDefinition`, no server) is platform-agnostic and iOS should use it unchanged.
 
 ---
 
