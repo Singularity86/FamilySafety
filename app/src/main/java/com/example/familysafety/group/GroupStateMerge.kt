@@ -86,9 +86,26 @@ object GroupStateMerge {
             winner.creatorMemberId
         }
 
+        // Subscription confirmation changes on its own schedule (roughly daily), independent
+        // of roster edits. A merge triggered by an unrelated conflict must not silently
+        // regress it to whichever side happened to win the roster tiebreak — keep whichever
+        // side confirmed most recently, not always the winner's.
+        val subscriptionIsOurs =
+            (ours.subscriptionConfirmedAtEpochMs ?: -1) > (winner.subscriptionConfirmedAtEpochMs ?: -1)
+        val subscriberMemberId = if (subscriptionIsOurs) ours.subscriberMemberId else winner.subscriberMemberId
+        val subscriptionConfirmedAtEpochMs =
+            if (subscriptionIsOurs) ours.subscriptionConfirmedAtEpochMs else winner.subscriptionConfirmedAtEpochMs
+
+        // A grant code is signed once for this exact family and never changes; prefer
+        // whichever side has one at all, the same rule as fileEncryptionKey below.
+        val grantCode = winner.grantCode ?: ours.grantCode
+
         val nothingToAdd = roster == winner.members &&
             tombstones == winner.removedMemberIds &&
-            creatorMemberId == winner.creatorMemberId
+            creatorMemberId == winner.creatorMemberId &&
+            subscriberMemberId == winner.subscriberMemberId &&
+            subscriptionConfirmedAtEpochMs == winner.subscriptionConfirmedAtEpochMs &&
+            grantCode == winner.grantCode
         if (nothingToAdd) return null
 
         return winner.copy(
@@ -100,7 +117,10 @@ object GroupStateMerge {
             // A group key is generated once at creation and never rotates, so both sides
             // hold the same value. Preferring the non-null one only helps the case where
             // the winner predates the key and we already learned it.
-            fileEncryptionKey = winner.fileEncryptionKey ?: ours.fileEncryptionKey
+            fileEncryptionKey = winner.fileEncryptionKey ?: ours.fileEncryptionKey,
+            subscriberMemberId = subscriberMemberId,
+            subscriptionConfirmedAtEpochMs = subscriptionConfirmedAtEpochMs,
+            grantCode = grantCode
         )
     }
 }

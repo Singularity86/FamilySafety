@@ -557,6 +557,73 @@ class GroupStateManager(
     }
 
     // =========================================================================
+    // BILLING
+    // =========================================================================
+
+    /**
+     * Records that [memberId] (normally the local member) just confirmed with Play that the
+     * family's subscription is active. Every device treats this as valid for a few days past
+     * [atEpochMs], not forever — see [com.example.familysafety.billing.EntitlementCalculator]
+     * — so a lapsed or cancelled subscription ages out on its own once re-confirmation stops.
+     */
+    suspend fun confirmSubscription(memberId: String, atEpochMs: Long): GroupOperationResult<GroupDefinition> {
+        return stateMutex.withLock {
+            val currentGroup = _groupDefinition.value
+                ?: return@withLock GroupOperationResult.Failure(GroupError.NotGroupMember)
+
+            val updatedGroup = currentGroup.copy(
+                subscriberMemberId = memberId,
+                subscriptionConfirmedAtEpochMs = atEpochMs,
+                version = currentGroup.version + 1,
+                previousStateHash = currentGroup.computeStateHash()
+            )
+
+            try {
+                persistence.saveGroupDefinition(updatedGroup)
+            } catch (e: Exception) {
+                return@withLock GroupOperationResult.Failure(GroupError.StorageError)
+            }
+
+            val old = _groupDefinition.value!!
+            _groupDefinition.value = updatedGroup
+            _events.emit(GroupStateEvent.GroupUpdated(old, updatedGroup))
+
+            GroupOperationResult.Success(updatedGroup)
+        }
+    }
+
+    /**
+     * Stores a developer-issued grant code against this family. The caller
+     * ([com.example.familysafety.billing.EntitlementRepository] via the redeem UI) has
+     * already verified the code's signature against this family's own groupId before
+     * calling — this just persists and broadcasts it, the same as any other field.
+     */
+    suspend fun redeemGrantCode(code: String): GroupOperationResult<GroupDefinition> {
+        return stateMutex.withLock {
+            val currentGroup = _groupDefinition.value
+                ?: return@withLock GroupOperationResult.Failure(GroupError.NotGroupMember)
+
+            val updatedGroup = currentGroup.copy(
+                grantCode = code,
+                version = currentGroup.version + 1,
+                previousStateHash = currentGroup.computeStateHash()
+            )
+
+            try {
+                persistence.saveGroupDefinition(updatedGroup)
+            } catch (e: Exception) {
+                return@withLock GroupOperationResult.Failure(GroupError.StorageError)
+            }
+
+            val old = _groupDefinition.value!!
+            _groupDefinition.value = updatedGroup
+            _events.emit(GroupStateEvent.GroupUpdated(old, updatedGroup))
+
+            GroupOperationResult.Success(updatedGroup)
+        }
+    }
+
+    // =========================================================================
     // RUNTIME STATE MANAGEMENT
     // =========================================================================
 

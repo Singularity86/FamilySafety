@@ -144,7 +144,19 @@ data class GroupDefinition(
     val version: Long,
     val previousStateHash: String? = null,
     val fileEncryptionKey: String? = null,
-    val removedMemberIds: Set<String> = emptySet()
+    val removedMemberIds: Set<String> = emptySet(),
+    /** Whoever most recently confirmed the family's Play subscription is active. */
+    val subscriberMemberId: String? = null,
+    /**
+     * When [subscriberMemberId] last checked with Play and found the subscription active.
+     * Every device treats this as valid for [com.example.familysafety.billing.
+     * EntitlementCalculator.SUBSCRIPTION_STALENESS_MS], not forever — a subscription that
+     * stops being re-confirmed (cancelled, refunded, or the paying device is simply gone)
+     * ages out on its own, with no explicit "revoke" message needed.
+     */
+    val subscriptionConfirmedAtEpochMs: Long? = null,
+    /** A developer-issued grant code (`billing/GrantCode.kt`), if this family has one. */
+    val grantCode: String? = null
 ) {
     /**
      * Computes deterministic hash of this group state for hash chain integrity.
@@ -153,6 +165,14 @@ data class GroupDefinition(
      * Deliberately excludes fileEncryptionKey: the hash covers who is in the group, and
      * folding a secret into it would both change every existing group's hash (breaking
      * the chain across the upgrade) and leak nothing useful in return.
+     *
+     * The billing fields (subscriberMemberId, subscriptionConfirmedAtEpochMs, grantCode) are
+     * excluded for the same reason fileEncryptionKey is: they are facts about the family, not
+     * membership decisions. They still travel through the ordinary version-bump-and-broadcast
+     * path (see GroupStateManager.confirmSubscription / redeemGrantCode), the same way
+     * updateMyDisplayName and updateMyColorHue already update non-hashed fields — only the
+     * *hash* ignores them, so re-confirming a subscription daily doesn't change what the
+     * roster's identity hash looks like, even though it does bump the version.
      *
      * Tombstones ARE covered — they are a security decision, and anything outside this hash
      * is outside the signature, so a stripped tombstone would silently readmit a removed

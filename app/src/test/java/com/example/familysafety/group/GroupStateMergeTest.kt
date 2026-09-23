@@ -265,4 +265,62 @@ class GroupStateMergeTest {
         assertEquals(dave.ed25519PublicKey, daveRecord!!.ed25519PublicKey)
         assertEquals(dave.x25519PublicKey, daveRecord.x25519PublicKey)
     }
+
+    @Test
+    fun aFresherSubscriptionConfirmationSurvivesEvenOnTheLosingSide() {
+        // The subscription check is on the losing side of the roster tiebreak but is the more
+        // recently confirmed one — losing the roster comparison must not regress it.
+        val winner = baseGroup(creator, bob).copy(
+            subscriberMemberId = bob.memberId,
+            subscriptionConfirmedAtEpochMs = 1_000L
+        )
+        val ours = baseGroup(creator, bob, carol).copy(
+            subscriberMemberId = carol.memberId,
+            subscriptionConfirmedAtEpochMs = 2_000L
+        )
+
+        val merged = GroupStateMerge.merge(winner = winner, ours = ours)!!
+        assertEquals(carol.memberId, merged.subscriberMemberId)
+        assertEquals(2_000L, merged.subscriptionConfirmedAtEpochMs)
+    }
+
+    @Test
+    fun aStaleSubscriptionConfirmationDoesNotOverwriteTheWinners() {
+        val winner = baseGroup(creator, bob).copy(
+            subscriberMemberId = bob.memberId,
+            subscriptionConfirmedAtEpochMs = 5_000L
+        )
+        val ours = baseGroup(creator, bob, carol).copy(
+            subscriberMemberId = carol.memberId,
+            subscriptionConfirmedAtEpochMs = 1_000L
+        )
+
+        val merged = GroupStateMerge.merge(winner = winner, ours = ours)!!
+        assertEquals(bob.memberId, merged.subscriberMemberId)
+        assertEquals(5_000L, merged.subscriptionConfirmedAtEpochMs)
+    }
+
+    @Test
+    fun aFresherSubscriptionAloneStillProducesARealMergeNotANoOp() {
+        // Otherwise a confirmation that only the losing side knows about would be silently
+        // dropped by the "nothing to add" short-circuit.
+        val winner = baseGroup(creator, bob)
+        val ours = baseGroup(creator, bob).copy(
+            subscriberMemberId = bob.memberId,
+            subscriptionConfirmedAtEpochMs = 1_000L
+        )
+
+        val merged = GroupStateMerge.merge(winner = winner, ours = ours)
+        assertNotNull(merged)
+        assertEquals(1_000L, merged!!.subscriptionConfirmedAtEpochMs)
+    }
+
+    @Test
+    fun aGrantCodeSurvivesAMergeWithAPeerThatDoesNotHaveItYet() {
+        val winner = baseGroup(creator, bob)
+        val ours = baseGroup(creator, bob).copy(grantCode = "code-for-this-family")
+
+        val merged = GroupStateMerge.merge(winner = winner, ours = ours)!!
+        assertEquals("code-for-this-family", merged.grantCode)
+    }
 }
