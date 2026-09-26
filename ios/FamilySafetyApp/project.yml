@@ -1,0 +1,27 @@
+name: FamilySafetyApp
+options:
+  bundleIdPrefix: com.example.familysafety
+  deploymentTarget:
+    iOS: "16.0"
+packages:
+  FamilySafetyCore:
+    path: ../FamilySafety
+targets:
+  FamilySafetyApp:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+    dependencies:
+      - package: FamilySafetyCore
+        product: FamilySafetyCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.familysafety.harness
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_CFBundleDisplayName: FamilySafety Harness
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        SWIFT_VERSION: "5.10"
