@@ -1,6 +1,20 @@
 import CryptoKit
 import Foundation
 
+/// `memberId = lowercase_hex(SHA-256(ed25519PublicKey)[0..15])` (§2.3) — shared by identity
+/// derivation, added-member self-authentication (§7.3), and join-request validation (§8.4).
+public enum MemberIdDerivation {
+    public static func deriveMemberId(fromEd25519PublicKeyBytes bytes: [UInt8]) -> String {
+        Hex.encode(Array(SHA256.hash(data: Data(bytes)).prefix(16)))
+    }
+
+    /// Returns nil if `ed25519PublicKeyHex` isn't valid hex.
+    public static func deriveMemberId(fromEd25519PublicKeyHex hex: String) -> String? {
+        guard let keyBytes = Hex.decode(hex) else { return nil }
+        return deriveMemberId(fromEd25519PublicKeyBytes: keyBytes)
+    }
+}
+
 /// Mirrors FamilyMember in Models.kt.
 public struct FamilyMember: Codable, Hashable {
     public let memberId: String
@@ -36,7 +50,7 @@ public struct FamilyMember: Codable, Hashable {
 /// The complete family group definition — the persisted, signed group state that all
 /// members must agree upon. Mirrors GroupDefinition in Models.kt. `members` is a plain
 /// array (Android uses a Set; order carries no meaning — computeStateHash sorts it).
-public struct GroupDefinition: Codable {
+public struct GroupDefinition: Codable, Equatable {
     public let groupId: String
     public let groupName: String
     public let createdAtEpochMs: Int64
@@ -44,6 +58,12 @@ public struct GroupDefinition: Codable {
     public let members: [FamilyMember]
     public let version: Int64
     public let previousStateHash: String?
+    /// Random 32-byte AES key, hex encoded. Absent/nil for groups created before Android
+    /// 1.12.0. Deliberately excluded from computeStateHash (§7.1) — it is secret material.
+    public let fileEncryptionKey: String?
+    /// Append-only tombstones (Android 1.12.7+). Defaults to empty for groups that have
+    /// never removed anyone, which also keeps computeStateHash unchanged for them (§7.1).
+    public let removedMemberIds: [String]
 
     public init(
         groupId: String,
@@ -52,7 +72,9 @@ public struct GroupDefinition: Codable {
         creatorMemberId: String,
         members: [FamilyMember],
         version: Int64,
-        previousStateHash: String? = nil
+        previousStateHash: String? = nil,
+        fileEncryptionKey: String? = nil,
+        removedMemberIds: [String] = []
     ) {
         self.groupId = groupId
         self.groupName = groupName
@@ -61,6 +83,27 @@ public struct GroupDefinition: Codable {
         self.members = members
         self.version = version
         self.previousStateHash = previousStateHash
+        self.fileEncryptionKey = fileEncryptionKey
+        self.removedMemberIds = removedMemberIds
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case groupId, groupName, createdAtEpochMs, creatorMemberId, members, version
+        case previousStateHash, fileEncryptionKey, removedMemberIds
+    }
+
+    /// Tolerates senders that predate this field entirely (absent, not just null).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        groupId = try c.decode(String.self, forKey: .groupId)
+        groupName = try c.decode(String.self, forKey: .groupName)
+        createdAtEpochMs = try c.decode(Int64.self, forKey: .createdAtEpochMs)
+        creatorMemberId = try c.decode(String.self, forKey: .creatorMemberId)
+        members = try c.decode([FamilyMember].self, forKey: .members)
+        version = try c.decode(Int64.self, forKey: .version)
+        previousStateHash = try c.decodeIfPresent(String.self, forKey: .previousStateHash)
+        fileEncryptionKey = try c.decodeIfPresent(String.self, forKey: .fileEncryptionKey)
+        removedMemberIds = try c.decodeIfPresent([String].self, forKey: .removedMemberIds) ?? []
     }
 
     /// Deterministic hash of this group state, used for hash-chain integrity; members
@@ -87,6 +130,16 @@ public struct GroupDefinition: Codable {
             canonical += member.x25519PublicKey
             canonical += ";"
         }
+        // Only appended when non-empty, so a group that has never removed anyone hashes
+        // exactly as it did before this field existed (§7.1).
+        if !removedMemberIds.isEmpty {
+            canonical += "|"
+            for tombstone in removedMemberIds.sorted() {
+                canonical += "removed:"
+                canonical += tombstone
+                canonical += ";"
+            }
+        }
         let digest = SHA256.hash(data: Data(canonical.utf8))
         return Hex.encode(Array(digest))
     }
@@ -97,6 +150,10 @@ public struct GroupDefinition: Codable {
 
     public func containsMember(_ memberId: String) -> Bool {
         members.contains { $0.memberId == memberId }
+    }
+
+    public func isTombstoned(_ memberId: String) -> Bool {
+        removedMemberIds.contains(memberId)
     }
 }
 

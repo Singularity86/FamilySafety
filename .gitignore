@@ -21,3 +21,7 @@ bugreport_extracted/
 
 # Play upload keystore - NEVER commit; back up outside the repo
 keystore/
+
+# Swift Package Manager build artifacts (iOS port)
+ios/FamilySafety/.build/
+ios/FamilySafety/.swiftpm/
