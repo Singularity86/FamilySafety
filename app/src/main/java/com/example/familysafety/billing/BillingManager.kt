@@ -9,6 +9,7 @@ import com.android.billingclient.api.BillingClientStateListener
 import com.android.billingclient.api.BillingFlowParams
 import com.android.billingclient.api.BillingResult
 import com.android.billingclient.api.Purchase
+import com.android.billingclient.api.PendingPurchasesParams
 import com.android.billingclient.api.PurchasesUpdatedListener
 import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryPurchasesParams
@@ -59,7 +60,10 @@ class BillingManager @Inject constructor(
 
     private val billingClient: BillingClient = BillingClient.newBuilder(context)
         .setListener(this)
-        .enablePendingPurchases()
+        // Neither toggle applies to us: this app only sells the one auto-renewing
+        // subscription, never a one-time product or a prepaid plan. The Builder still
+        // requires *a* PendingPurchasesParams since 8.0.0 removed the no-arg overload.
+        .enablePendingPurchases(PendingPurchasesParams.newBuilder().build())
         .build()
 
     private val _productDetails = MutableStateFlow<ProductDetails?>(null)

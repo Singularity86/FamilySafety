@@ -41,7 +41,7 @@ android {
         applicationId = "jibaro.spacepirate.love"
         minSdk = 26
         targetSdk = 36
-        versionCode = 36
+        versionCode = 37
         versionName = "1.14.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -220,7 +220,7 @@ dependencies {
 
     // Family subscription (billing/) - Play Billing for the purchase flow itself; purchase
     // signature verification is plain java.security.Signature, no extra dependency needed.
-    implementation("com.android.billingclient:billing-ktx:7.1.1")
+    implementation("com.android.billingclient:billing-ktx:8.0.0")
     
     // MQTT - core client only; the Android service wrapper (org.eclipse.paho.android.service)
     // is incompatible with Android 12+ (AlarmPingSender uses PendingIntent without
