@@ -1,14 +1,14 @@
 package com.example.familysafety.billing
 
 /**
- * Three of these four are still placeholders. This build is not shippable until they're all
+ * Two of these four are still placeholders. This build is not shippable until they're all
  * filled in for real — the app will compile and run, but no purchase will verify and every
  * grant code will fail, which is deliberately loud rather than silently trusting an unset key.
  */
 object BillingConfig {
 
-    /** Play Console → Monetize → Products → Subscriptions. Must match exactly. */
-    const val SUBSCRIPTION_PRODUCT_ID = "TODO_PLACEHOLDER_family_monthly"
+    /** Play Console → Monetize → Products → Subscriptions → "Family Safety Membership". */
+    const val SUBSCRIPTION_PRODUCT_ID = "monthly.jibaro.familysafety.subscription"
 
     /**
      * Play Console → Monetize → Setup → Monetization setup → Licensing. The app's public
