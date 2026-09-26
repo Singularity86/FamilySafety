@@ -1,11 +1,9 @@
 package com.example.familysafety.billing
 
-import android.app.Activity
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
 
 /**
  * Shown once per cold start of [com.example.familysafety.main.MainScreen] — its visibility
@@ -39,8 +37,3 @@ fun TrialReminderDialog(
     }
 }
 
-@Composable
-fun rememberSubscribeAction(billingManager: BillingManager): () -> Unit {
-    val context = LocalContext.current
-    return { (context as? Activity)?.let { billingManager.launchPurchaseFlow(it) } }
-}

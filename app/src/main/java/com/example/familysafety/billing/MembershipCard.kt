@@ -1,6 +1,5 @@
 package com.example.familysafety.billing
 
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -20,6 +19,7 @@ import kotlinx.coroutines.launch
 fun MembershipCard(viewModel: MainViewModel, context: Context) {
     val entitlement by viewModel.entitlement.collectAsState()
     val productDetails by viewModel.billingManager.productDetails.collectAsState()
+    val subscribeAction = rememberConfirmedSubscribeAction(entitlement, viewModel.billingManager)
     var code by remember { mutableStateOf("") }
     var redeemMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -44,9 +44,7 @@ fun MembershipCard(viewModel: MainViewModel, context: Context) {
                 }
                 is Entitlement.Trial, Entitlement.Expired -> {
                     Button(
-                        onClick = {
-                            (context as? Activity)?.let { viewModel.billingManager.launchPurchaseFlow(it) }
-                        },
+                        onClick = subscribeAction,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         // Reads the live Play price so a change in Play Console never

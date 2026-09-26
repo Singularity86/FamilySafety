@@ -121,19 +121,22 @@ fun MainScreen(
 ) {
     val driveEstimateState by viewModel.driveEstimateState.collectAsState()
     val entitlement by viewModel.entitlement.collectAsState()
-    val topLevelContext = androidx.compose.ui.platform.LocalContext.current
     val navController = rememberNavController()
 
     var showTrialReminder by remember { mutableStateOf(true) }
+    // Shared with MembershipCard: confirms before billing an eager early subscriber, since
+    // there is no Play-side trial offer to defer the charge on its own — see
+    // billing/EarlySubscribeConfirm.kt.
+    val confirmedSubscribe = com.example.familysafety.billing.rememberConfirmedSubscribeAction(
+        entitlement, viewModel.billingManager
+    )
     if (showTrialReminder) {
         com.example.familysafety.billing.TrialReminderDialog(
             entitlement = entitlement,
             onDismiss = { showTrialReminder = false },
             onSubscribe = {
                 showTrialReminder = false
-                (topLevelContext as? android.app.Activity)?.let {
-                    viewModel.billingManager.launchPurchaseFlow(it)
-                }
+                confirmedSubscribe()
             }
         )
     }
