@@ -9,6 +9,27 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.14.0 (36) — early family subscription groundwork (internal only)
+
+Built from `feature/family-subscription`. Supersedes 1.13.6 (35). Uploaded to a testing
+track only, to register a binary with Play Console so a subscription product can be
+created there — not a real release.
+
+Adds the billing/entitlement machinery (`billing/`): trial and subscription state on
+`GroupDefinition`, a Play Billing wrapper, grant-code redemption, and gates on Chat,
+History and Files. **Inert in this build** — three of four `BillingConfig` values are
+still placeholders, and the paywall cutoff timestamp is unset, so every family is
+currently grandfathered and nothing actually gates. Do not treat this build as ready for
+real testers until those are filled in. See `PROJECT_STATUS.md` item 12.
+
+### Play copy
+
+```
+Internal build for Play Console setup. No user-facing changes from 1.13.6.
+```
+
+---
+
 ## 1.13.6 (35) — a real pause switch, and privacy text that matches the app
 
 Built from the commits after `582ec70` + the version bump. Supersedes 1.13.5 (34).
