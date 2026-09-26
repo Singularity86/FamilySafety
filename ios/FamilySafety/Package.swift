@@ -55,6 +55,15 @@ let package = Package(
         .testTarget(
             name: "FamilySafetyCoreTests",
             dependencies: ["FamilySafetyCore"]
+        ),
+        // Manual, throwaway two-process harness for the §14 Phase 2 live-broker
+        // acceptance test (two clients seeing each other's presence flip online/offline
+        // over the real broker, LWT observed on an abrupt kill). NOT part of the app;
+        // takes broker credentials from MQTT_USERNAME/MQTT_PASSWORD env vars only — never
+        // reads or writes them to disk. Run with `swift run PresenceHarness`.
+        .executableTarget(
+            name: "PresenceHarness",
+            dependencies: ["FamilySafetyCore"]
         )
     ]
 )

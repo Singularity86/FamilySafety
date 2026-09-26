@@ -67,6 +67,26 @@ public struct PresenceUpdate: Codable, Equatable {
     public static func signingPayload(memberId: String, isOnline: Bool, timestamp: Int64) -> String {
         "presence:\(memberId):\(isOnline ? "true" : "false"):\(timestamp)"
     }
+
+    /// Builds a signed `PresenceUpdate` for `memberId` (§6.2) — the sender side of the
+    /// signature scheme `verifySignature` checks on receive.
+    public static func signed(
+        memberId: String, isOnline: Bool, timestamp: Int64,
+        ed25519SecretKey64: [UInt8], protocolVersion: Int = ProtocolVersion.current
+    ) throws -> PresenceUpdate {
+        let payload = signingPayload(memberId: memberId, isOnline: isOnline, timestamp: timestamp)
+        let signature = try SodiumRaw.signDetached(message: Array(payload.utf8), secretKey: ed25519SecretKey64)
+        return PresenceUpdate(memberId: memberId, isOnline: isOnline, timestamp: timestamp, signature: Hex.encode(signature), protocolVersion: protocolVersion)
+    }
+
+    /// Verifies `signature` against the sender's roster `ed25519PublicKey` (§6.2). False
+    /// (never throws) if there's no signature to check — unsigned presence from a sender
+    /// predating Android 1.12.3 is a caller-level policy decision, not an error here.
+    public func verifySignature(publicKey: [UInt8]) -> Bool {
+        guard let signature, let signatureBytes = Hex.decode(signature) else { return false }
+        let payload = Self.signingPayload(memberId: memberId, isOnline: isOnline, timestamp: timestamp)
+        return SodiumRaw.signVerifyDetached(signature: signatureBytes, message: Array(payload.utf8), publicKey: publicKey)
+    }
 }
 
 /// What actually rides the presence topic since Android 1.12.5 — the bare `PresenceUpdate`
