@@ -351,6 +351,83 @@ final class GroupTransitionValidatorTests: XCTestCase {
         }
     }
 
+    // MARK: - Creator succession on quorum removal (§7.5 point 7)
+
+    func test_acceptsQuorumCreatorRemovalWithCorrectSuccessor() throws {
+        let alice = try identity("alice") // creator, target
+        let bob = try identity("bob")
+        let carol = try identity("carol")
+        let dave = try identity("dave")
+        let erin = try identity("erin")
+        let current = group(
+            members: [
+                member(alice, name: "Alice", addedAt: 1000),
+                member(bob, name: "Bob", addedAt: 2000),
+                member(carol, name: "Carol", addedAt: 3000),
+                member(dave, name: "Dave", addedAt: 4000),
+                member(erin, name: "Erin", addedAt: 5000)
+            ],
+            creator: alice, version: 1
+        )
+        // remaining = 4 (excludes Alice), needed = 4/2+1 = 3.
+        let proposedVersion: Int64 = 2
+        let prevHash = current.computeStateHash()
+        let votes = try [
+            quorumVote(voter: bob, target: alice.memberId, groupId: groupId, proposedVersion: proposedVersion, previousStateHash: prevHash),
+            quorumVote(voter: carol, target: alice.memberId, groupId: groupId, proposedVersion: proposedVersion, previousStateHash: prevHash),
+            quorumVote(voter: dave, target: alice.memberId, groupId: groupId, proposedVersion: proposedVersion, previousStateHash: prevHash)
+        ]
+        // Successor = smallest (addedAtEpochMs, memberId) among the survivors -> Bob (2000).
+        let remote = GroupDefinition(
+            groupId: groupId, groupName: current.groupName, createdAtEpochMs: createdAt,
+            creatorMemberId: bob.memberId,
+            members: [member(bob, name: "Bob", addedAt: 2000), member(carol, name: "Carol", addedAt: 3000), member(dave, name: "Dave", addedAt: 4000), member(erin, name: "Erin", addedAt: 5000)],
+            version: proposedVersion, previousStateHash: prevHash, removedMemberIds: [alice.memberId]
+        )
+        XCTAssertNoThrow(try GroupTransitionValidator.validate(
+            current: current, remote: remote, updaterMemberId: carol.memberId,
+            quorumVotes: [alice.memberId: votes]
+        ))
+    }
+
+    func test_rejectsQuorumCreatorRemovalWithWrongSuccessor() throws {
+        let alice = try identity("alice") // creator, target
+        let bob = try identity("bob")
+        let carol = try identity("carol")
+        let dave = try identity("dave")
+        let erin = try identity("erin")
+        let current = group(
+            members: [
+                member(alice, name: "Alice", addedAt: 1000),
+                member(bob, name: "Bob", addedAt: 2000),
+                member(carol, name: "Carol", addedAt: 3000),
+                member(dave, name: "Dave", addedAt: 4000),
+                member(erin, name: "Erin", addedAt: 5000)
+            ],
+            creator: alice, version: 1
+        )
+        let proposedVersion: Int64 = 2
+        let prevHash = current.computeStateHash()
+        let votes = try [
+            quorumVote(voter: bob, target: alice.memberId, groupId: groupId, proposedVersion: proposedVersion, previousStateHash: prevHash),
+            quorumVote(voter: carol, target: alice.memberId, groupId: groupId, proposedVersion: proposedVersion, previousStateHash: prevHash),
+            quorumVote(voter: dave, target: alice.memberId, groupId: groupId, proposedVersion: proposedVersion, previousStateHash: prevHash)
+        ]
+        // Wrong successor: should be Bob (smallest addedAtEpochMs among survivors), not Carol.
+        let remote = GroupDefinition(
+            groupId: groupId, groupName: current.groupName, createdAtEpochMs: createdAt,
+            creatorMemberId: carol.memberId,
+            members: [member(bob, name: "Bob", addedAt: 2000), member(carol, name: "Carol", addedAt: 3000), member(dave, name: "Dave", addedAt: 4000), member(erin, name: "Erin", addedAt: 5000)],
+            version: proposedVersion, previousStateHash: prevHash, removedMemberIds: [alice.memberId]
+        )
+        XCTAssertThrowsError(try GroupTransitionValidator.validate(
+            current: current, remote: remote, updaterMemberId: carol.memberId,
+            quorumVotes: [alice.memberId: votes]
+        )) {
+            XCTAssertEqual($0 as? GroupTransitionRejection, .unauthorizedCreatorChange)
+        }
+    }
+
     func test_rejectsCreatorTransferBundledWithTombstone() throws {
         let alice = try identity("alice")
         let bob = try identity("bob")

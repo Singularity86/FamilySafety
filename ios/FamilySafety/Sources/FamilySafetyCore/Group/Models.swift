@@ -131,17 +131,31 @@ public struct GroupDefinition: Codable, Equatable {
             canonical += ";"
         }
         // Only appended when non-empty, so a group that has never removed anyone hashes
-        // exactly as it did before this field existed (§7.1).
+        // exactly as it did before this field existed (§7.1). "removed:" is a ONE-TIME
+        // prefix before the whole list, not repeated per id — matches
+        // GroupDefinition.computeStateHash on Android exactly (confirmed against source,
+        // since the spec prose here reads ambiguously).
         if !removedMemberIds.isEmpty {
-            canonical += "|"
+            canonical += "|removed:"
             for tombstone in removedMemberIds.sorted() {
-                canonical += "removed:"
                 canonical += tombstone
                 canonical += ";"
             }
         }
         let digest = SHA256.hash(data: Data(canonical.utf8))
         return Hex.encode(Array(digest))
+    }
+
+    /// Deterministic replacement creator when the current one is removed (§7.5 point 7):
+    /// the remaining member with the smallest `(addedAtEpochMs, memberId)` — longest-
+    /// standing first, memberId ascending as the tie-break. Never voted on — every device
+    /// computes this independently from the same roster and reaches the same answer.
+    /// Mirrors GroupDefinition.computeSuccessorCreator on Android exactly.
+    public static func computeSuccessorCreator(members: [FamilyMember], excludedIds: Set<String>) -> String? {
+        let survivor = members
+            .filter { !excludedIds.contains($0.memberId) }
+            .min { ($0.addedAtEpochMs, $0.memberId) < ($1.addedAtEpochMs, $1.memberId) }
+        return survivor?.memberId
     }
 
     public func findMember(byId memberId: String) -> FamilyMember? {

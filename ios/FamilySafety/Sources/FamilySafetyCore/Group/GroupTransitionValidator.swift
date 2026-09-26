@@ -158,16 +158,32 @@ public enum GroupTransitionValidator {
             }
         }
 
-        // Creator change: only the current creator may transfer it voluntarily, to a
-        // roster member who isn't tombstoned, with no new tombstone riding along in the
-        // same update (§7.5) — quorum removal of the creator is a separate, later step
-        // taken by whoever reaches quorum, not a same-update creator swap.
+        // Creator change. Two, and only two, legal paths (§7.5 points 1 and 7):
         if remote.creatorMemberId != current.creatorMemberId {
-            guard updaterMemberId == current.creatorMemberId,
-                  newTombstones.isEmpty,
-                  remoteMemberIds.contains(remote.creatorMemberId),
-                  !remoteRemoved.contains(remote.creatorMemberId) else {
-                throw GroupTransitionRejection.unauthorizedCreatorChange
+            if newTombstones.contains(current.creatorMemberId) {
+                // The creator is being removed in this very update (by themselves, by
+                // the creator's own authority, or by quorum — already authorized above).
+                // The successor is COMPUTED, never voted on or chosen by the updater, so
+                // every device reaches the same answer independently. Removing the
+                // creator must be the update's only new tombstone: a second one would
+                // mean two different remaining rosters could disagree about who the
+                // deterministic successor even is.
+                guard newTombstones == [current.creatorMemberId],
+                      remote.creatorMemberId == GroupDefinition.computeSuccessorCreator(
+                          members: current.members, excludedIds: newTombstones
+                      ) else {
+                    throw GroupTransitionRejection.unauthorizedCreatorChange
+                }
+            } else {
+                // Voluntary transfer: only the current creator may hand it off, to a
+                // roster member who isn't tombstoned, with no new tombstone riding along
+                // in the same update (that would be ambiguous with the successor path).
+                guard updaterMemberId == current.creatorMemberId,
+                      newTombstones.isEmpty,
+                      remoteMemberIds.contains(remote.creatorMemberId),
+                      !remoteRemoved.contains(remote.creatorMemberId) else {
+                    throw GroupTransitionRejection.unauthorizedCreatorChange
+                }
             }
         }
     }

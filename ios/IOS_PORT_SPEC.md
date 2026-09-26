@@ -976,10 +976,15 @@ SHA-256 (lowercase hex) of the UTF-8 canonical string:
   then for each member sorted ASCENDING by memberId:
 {memberId},{ed25519PublicKey},{x25519PublicKey};
 ```
-then, **only when `removedMemberIds` is non-empty**, append:
+then, **only when `removedMemberIds` is non-empty**, append `|removed:` ONCE, followed by
+each tombstone sorted ASCENDING, each ending with `;`:
 ```
-|removed:{memberId};   for each tombstone sorted ASCENDING, each ending with ';'
+|removed:{memberId};{memberId};...
 ```
+(`removed:` is a one-time prefix before the whole list, not repeated per id — confirmed
+against `GroupDefinition.computeStateHash` on Android; an iOS implementation that repeats
+the prefix per tombstone produces a different hash from Android for any group with two or
+more removed members, and disagrees about the state hash silently.)
 (no newlines; every member entry ends with `;` including the last; `previousStateHash`,
 `fileEncryptionKey`, displayName, avatar, etc. are **not** hashed).
 
