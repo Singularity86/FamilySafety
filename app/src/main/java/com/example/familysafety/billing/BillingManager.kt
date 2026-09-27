@@ -60,10 +60,12 @@ class BillingManager @Inject constructor(
 
     private val billingClient: BillingClient = BillingClient.newBuilder(context)
         .setListener(this)
-        // Neither toggle applies to us: this app only sells the one auto-renewing
-        // subscription, never a one-time product or a prepaid plan. The Builder still
-        // requires *a* PendingPurchasesParams since 8.0.0 removed the no-arg overload.
-        .enablePendingPurchases(PendingPurchasesParams.newBuilder().build())
+        // This app only sells the one auto-renewing subscription, never a one-time product,
+        // but 8.0.0 throws IllegalArgumentException("Pending purchases for one-time products
+        // must be supported.") from an empty PendingPurchasesParams — enableOneTimeProducts()
+        // is mandatory now, not opt-in, regardless of whether the app has any. Confirmed by
+        // an actual crash log, not the library's docs.
+        .enablePendingPurchases(PendingPurchasesParams.newBuilder().enableOneTimeProducts().build())
         .build()
 
     private val _productDetails = MutableStateFlow<ProductDetails?>(null)
