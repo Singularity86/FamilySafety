@@ -1,9 +1,7 @@
 package com.example.familysafety.billing
 
 /**
- * Two of these four are still placeholders. This build is not shippable until they're all
- * filled in for real — the app will compile and run, but no purchase will verify and every
- * grant code will fail, which is deliberately loud rather than silently trusting an unset key.
+ * All four values are real as of the 2026-09-26 release that first enforces the paywall.
  */
 object BillingConfig {
 
@@ -25,13 +23,14 @@ object BillingConfig {
      * `tools/gen_grant_signing_key.py`. Also safe to ship. The matching private key never
      * leaves the developer's machine — see that script's header.
      */
-    const val GRANT_PUBLIC_KEY_HEX = "TODO_PLACEHOLDER_GRANT_PUBLIC_KEY_HEX"
+    const val GRANT_PUBLIC_KEY_HEX = "dbbc75e3815d546de11fabbbdf03138c275bc2d407b3818905b06668d2fcff2f"
 
     /**
-     * Epoch millis of the release that first enforces the paywall. Set exactly once, right
-     * before that release ships, and never change it afterward — every family created before
-     * this instant is grandfathered permanently, and moving it retroactively ungrandfathers
-     * real families.
+     * Epoch millis of the release that first enforces the paywall. Set exactly once, on
+     * 2026-09-26, and must never change afterward — every family created before this instant
+     * (every family that exists as of this release, including the developer's own) is
+     * grandfathered permanently. A family created from this instant onward gets the 60-day
+     * trial, then needs a subscription or grant code.
      */
-    const val PAYWALL_INTRODUCED_AT_EPOCH_MS = Long.MAX_VALUE
+    const val PAYWALL_INTRODUCED_AT_EPOCH_MS = 1790483432067L
 }

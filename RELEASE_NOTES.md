@@ -9,23 +9,35 @@ each entry fits; everything under it is for us.
 
 ---
 
-## 1.14.0 (36) — early family subscription groundwork (internal only)
+## 1.14.0 (39) — the family subscription goes live
 
-Built from `feature/family-subscription`. Supersedes 1.13.6 (35). Uploaded to a testing
-track only, to register a binary with Play Console so a subscription product can be
-created there — not a real release.
+Supersedes 1.13.6 (35) and its own three predecessors on this branch: 36 (uploaded only to
+register a binary with Play Console, billing fully inert), 37 (crashed on every launch past
+onboarding — see below, never distributed), 38 (fixed that crash, still inert). 39 is the
+first build where the paywall can actually gate anything.
 
 Adds the billing/entitlement machinery (`billing/`): trial and subscription state on
 `GroupDefinition`, a Play Billing wrapper, grant-code redemption, and gates on Chat,
-History and Files. **Inert in this build** — three of four `BillingConfig` values are
-still placeholders, and the paywall cutoff timestamp is unset, so every family is
-currently grandfathered and nothing actually gates. Do not treat this build as ready for
-real testers until those are filled in. See `PROJECT_STATUS.md` item 12.
+History and Files. Live location sharing, alerts, crash detection and the Vault are never
+gated. **Every family that exists as of this release — including every real family already
+using the app — is grandfathered permanently**: `PAYWALL_INTRODUCED_AT_EPOCH_MS` is fixed
+to the instant this was built, and the rule is `createdAtEpochMs < that instant`. Only a
+family created from this release onward gets the 60-day free trial, then needs a
+subscription ($4/month) or a developer-issued grant code to keep Chat, History and Files.
+
+The 37 crash: `BillingManager`'s constructor called `PendingPurchasesParams.newBuilder()
+.build()` with neither toggle set. Play Billing Library 8.0.0 throws
+`IllegalArgumentException("Pending purchases for one-time products must be supported.")` in
+that case, undocumented as far as we found — caught from a real crash log, not the
+library's release notes. Fixed by calling `enableOneTimeProducts()` unconditionally, even
+though this app sells only the one subscription.
 
 ### Play copy
 
 ```
-Internal build for Play Console setup. No user-facing changes from 1.13.6.
+Adds an optional family membership ($4/month after a 60-day free trial) for Chat, Location
+History, and File Sharing. Live location sharing and safety alerts are always free.
+Existing families are unaffected.
 ```
 
 ---
