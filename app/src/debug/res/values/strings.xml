@@ -8,5 +8,5 @@
   the debug one is the only thing that tells them apart at a glance.
 -->
 <resources>
-    <string name="app_name">FS DEBUG</string>
+    <string name="app_name">Family Safety</string>
 </resources>
