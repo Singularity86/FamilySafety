@@ -69,11 +69,47 @@ class ReplicationManager @Inject constructor(
     companion object {
         private const val TAG = "ReplicationManager"
         private const val REQUEST_TIMEOUT_MS = 30_000L
-        /** Cadence of periodic data-availability announcements (driven by AppInitializer). */
-        const val SYNC_INTERVAL_MS = 5 * 60 * 1000L // 5 minutes
-        /** Minimum spacing between full syncs so reconnect flaps don't spam the group. */
-        private const val MIN_FULL_SYNC_INTERVAL_MS = 60_000L
+        /**
+         * Cadence of periodic data-availability announcements (driven by AppInitializer).
+         *
+         * Was 5 minutes. Every device announces to every other one, encrypted per
+         * recipient, so a family of N sends N×(N−1) of these per tick — 132 for twelve
+         * people, each a few KB — around the clock. Live traffic already delivers almost
+         * everything and the reconnect back-fill catches the rest, so this is a slow
+         * safety net, not a delivery path.
+         */
+        const val SYNC_INTERVAL_MS = 30 * 60 * 1000L // 30 minutes
+        /**
+         * Minimum spacing between full syncs so reconnect flaps don't spam the group.
+         * Was 60 s; phones reconnect many times an hour on mobile networks.
+         */
+        private const val MIN_FULL_SYNC_INTERVAL_MS = 15 * 60_000L
         private const val MAX_ITEMS_PER_REQUEST = 500
+
+        /**
+         * Which peers to ask for [targetMemberId]'s location history.
+         *
+         * A member is the authoritative holder of their own history, so they are asked
+         * alone. Asking everyone meant every peer holding the same points answered with
+         * the same points — the family paid for N−1 copies of one gap. If the member is
+         * offline, other peers' periodic announcements still lead us to the data.
+         * Only our own history, which by definition we cannot ask ourselves for, goes
+         * to everyone.
+         */
+        fun locationSourcesFor(targetMemberId: String, peerIds: List<String>): List<String> =
+            if (targetMemberId in peerIds) listOf(targetMemberId) else peerIds
+
+        /**
+         * Which peers to ask for a conversation's messages. A direct chat
+         * ("idA:idB") only exists on its two participants, so only the other one is
+         * asked; anything else (the group chat) goes to everyone.
+         */
+        fun chatSourcesFor(conversationId: String, peerIds: List<String>): List<String> {
+            val participants = conversationId.split(":")
+            if (participants.size != 2) return peerIds
+            val counterpart = participants.firstOrNull { it in peerIds }
+            return if (counterpart != null) listOf(counterpart) else peerIds
+        }
     }
 
     private var lastFullSyncAtMs = 0L
@@ -151,12 +187,11 @@ class ReplicationManager @Inject constructor(
             limit = MAX_ITEMS_PER_REQUEST
         )
 
-        // Send to all other members (they'll respond if they have data)
-        group.members
-            .filter { it.memberId != requesterId }
-            .forEach { peer ->
-                sendReplicationRequest(peer, request)
-            }
+        val peers = group.members.filter { it.memberId != requesterId }
+        val sources = locationSourcesFor(targetMemberId, peers.map { it.memberId })
+        peers.filter { it.memberId in sources }.forEach { peer ->
+            sendReplicationRequest(peer, request)
+        }
     }
 
     /**
@@ -180,11 +215,32 @@ class ReplicationManager @Inject constructor(
                 limit = MAX_ITEMS_PER_REQUEST
             )
 
-            group.members
-                .filter { it.memberId != requesterId }
-                .forEach { peer ->
-                    sendReplicationRequest(peer, request)
-                }
+            val peers = group.members.filter { it.memberId != requesterId }
+            val sources = chatSourcesFor(conversationId, peers.map { it.memberId })
+            peers.filter { it.memberId in sources }.forEach { peer ->
+                sendReplicationRequest(peer, request)
+            }
+        }
+    }
+
+    /**
+     * Whether a request for the same data is already out and unanswered.
+     *
+     * Several peers announce within minutes of each other, and each announcement showing
+     * newer data than ours triggered its own request — so the same gap was requested from,
+     * and answered by, every announcer. One outstanding request per item is enough.
+     */
+    private fun hasPendingRequestFor(
+        dataType: ReplicationDataType,
+        targetMemberId: String? = null,
+        conversationId: String? = null
+    ): Boolean {
+        val now = System.currentTimeMillis()
+        return pendingRequests.values.any {
+            now - it.timestamp < REQUEST_TIMEOUT_MS &&
+                it.request.dataType == dataType &&
+                it.request.targetMemberId == targetMemberId &&
+                it.request.conversationId == conversationId
         }
     }
 
@@ -558,7 +614,9 @@ class ReplicationManager @Inject constructor(
             announcement.locationDataSummary.forEach { summary ->
                 val ourNewest = locationHistoryRepository.getNewestTimestamp(summary.memberId)
 
-                if (ourNewest == null || summary.newestTimestamp > ourNewest) {
+                if ((ourNewest == null || summary.newestTimestamp > ourNewest) &&
+                    !hasPendingRequestFor(ReplicationDataType.LOCATION_HISTORY, targetMemberId = summary.memberId)
+                ) {
                     // Peer has newer data - request it
                     val request = ReplicationRequest(
                         requestId = UUID.randomUUID().toString(),
@@ -575,7 +633,9 @@ class ReplicationManager @Inject constructor(
             announcement.chatDataSummary.forEach { summary ->
                 val ourNewest = chatMessageDao.getNewestTimestamp(summary.conversationId)
 
-                if (ourNewest == null || summary.newestTimestamp > ourNewest) {
+                if ((ourNewest == null || summary.newestTimestamp > ourNewest) &&
+                    !hasPendingRequestFor(ReplicationDataType.CHAT_MESSAGES, conversationId = summary.conversationId)
+                ) {
                     val request = ReplicationRequest(
                         requestId = UUID.randomUUID().toString(),
                         requesterId = localMemberId,

@@ -93,6 +93,68 @@ class MqttTransport @Inject constructor(
     companion object {
         private const val TAG = "MqttTransport"
         private const val DECRYPT_SYNC_COOLDOWN_MS = 60_000L
+        private const val SUBSCRIBE_TIMEOUT_MS = 15_000L
+        private const val SESSION_PREFS = "mqtt_session"
+        private const val PREF_SUBSCRIBED_FINGERPRINT = "subscribed_fingerprint"
+
+        /** Every filter this device subscribes to for itself and its group. */
+        fun ownTopicFilters(memberId: String, groupId: String): List<String> = listOf(
+            MqttConfig.getChatTopic(memberId),
+            // Per-recipient encrypted location inbox
+            MqttConfig.getLocationInboxTopic(memberId),
+            MqttConfig.getChatReceiptTopic(memberId),
+            MqttConfig.getChatReadTopic(memberId),
+            MqttConfig.getReplicationRequestTopic(memberId),
+            MqttConfig.getReplicationDataTopic(memberId),
+            MqttConfig.getReplicationAnnounceInboxTopic(memberId),
+            // Join requests (received by approvers) and approvals (received by joiners)
+            MqttConfig.getJoinRequestTopic(memberId),
+            MqttConfig.getJoinApprovalTopic(memberId),
+            MqttConfig.getSyncRequestTopic(memberId),
+            // Quorum-removal votes addressed to us
+            MqttConfig.getRemovalVoteTopic(memberId),
+            MqttConfig.getGroupSyncInboxTopic(memberId),
+            MqttConfig.getGroupAckTopic(groupId),
+            // File transfer manifest (retained broadcast for the group)
+            MqttConfig.getFileManifestTopic(groupId),
+            MqttConfig.getFileChunkWildcardTopic(groupId),
+            MqttConfig.getFileRequestTopic(memberId),
+            MqttConfig.getFileRepairTopic(memberId),
+            MqttConfig.getFileAvailabilityTopic(memberId),
+            // The vault container, retained for the group. Subscribed unconditionally: a
+            // device that subscribed only once a vault existed would announce that one does.
+            MqttConfig.getVaultContainerTopic(groupId),
+            // Vault document bytes, stored opaquely whether or not this device holds a code.
+            MqttConfig.getVaultChunkWildcardTopic(groupId),
+            MqttConfig.getVaultRepairTopic(memberId)
+        )
+
+        /**
+         * Filters for one other family member. The legacy location topic is kept so peers on
+         * older builds still work; new builds publish to our location_inbox instead.
+         */
+        fun memberTopicFilters(otherMemberId: String): List<String> = listOf(
+            MqttConfig.getLocationTopic(otherMemberId),
+            MqttConfig.getPresenceTopic(otherMemberId)
+        )
+
+        /** Order-independent digest of a subscription set on a given broker. */
+        fun subscriptionFingerprint(brokerUrl: String, topics: Collection<String>): String {
+            val canonical = (listOf(brokerUrl) + topics.toSortedSet()).joinToString("\n")
+            return java.security.MessageDigest.getInstance("SHA-256")
+                .digest(canonical.toByteArray())
+                .joinToString("") { "%02x".format(it) }
+        }
+
+        /**
+         * Whether a fresh connection needs SUBSCRIBE. Only a session the broker kept,
+         * holding exactly the filters we last confirmed, can skip it.
+         */
+        fun shouldResubscribe(
+            sessionPresent: Boolean,
+            storedFingerprint: String?,
+            currentFingerprint: String
+        ): Boolean = !sessionPresent || storedFingerprint != currentFingerprint
 
         /** Paho's own timeout plus margin; a single connect attempt must never outlive this. */
         const val CONNECT_ATTEMPT_TIMEOUT_MS = MqttConfig.CONNECTION_TIMEOUT * 1000L + 5_000L
@@ -242,7 +304,7 @@ class MqttTransport @Inject constructor(
                         }
                         attemptClient?.connect(connOpts, null, object : IMqttActionListener {
                             override fun onSuccess(asyncActionToken: IMqttToken?) {
-                                continuation.resume(Unit)
+                                continuation.resume(asyncActionToken?.sessionPresent == true)
                             }
                             override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
                                 // Paho reports "already connected" and "connect in progress"
@@ -254,7 +316,9 @@ class MqttTransport @Inject constructor(
                                     code == MqttException.REASON_CODE_CONNECT_IN_PROGRESS.toInt()
                                 ) {
                                     Timber.d("$TAG: connect already satisfied (reason $code)")
-                                    continuation.resume(Unit)
+                                    // Session state unknown here; false forces a resubscribe,
+                                    // which is the safe direction.
+                                    continuation.resume(false)
                                     return
                                 }
                                 continuation.resumeWith(Result.failure(exception ?: Exception("MQTT connection failed")))
@@ -275,8 +339,10 @@ class MqttTransport @Inject constructor(
                         familyMemberKeys.keys.toList()
                     }
 
-                    subscribeToOwnTopics()
-                    subscribeToFamilyMembers(memberIdsForSubscriptions)
+                    restoreSubscriptions(
+                        sessionPresent = connectResult.getOrDefault(false),
+                        memberIds = memberIdsForSubscriptions
+                    )
                     processPendingMessages()
                     
                     // Announce online
@@ -327,91 +393,88 @@ class MqttTransport @Inject constructor(
         })
     }
 
+    /**
+     * Subscribe after a connect — but only when the broker does not already hold our
+     * subscriptions.
+     *
+     * The session is persistent (cleanSession = false), so after a reconnect the broker
+     * still has every subscription and has been queueing QoS 1 traffic for us. Sending
+     * SUBSCRIBE again anyway is not free: MQTT requires the broker to re-send every
+     * retained message matching a re-subscribed filter. That is the vault container
+     * (128 KiB, ~175 KB as Base64), the file manifest and a presence message per member,
+     * on every reconnect, on every phone. Reconnects happen constantly on mobile — Doze,
+     * Wi-Fi/cellular handoffs, the heartbeat reviving a dropped socket — and this replay
+     * was the bulk of the family's monthly broker traffic.
+     *
+     * Skipped only when the broker reports the session present AND the topic set is the
+     * one we last subscribed successfully. A new member, a new group or a new app version
+     * with new topics changes the fingerprint and forces a full subscribe.
+     */
+    private suspend fun restoreSubscriptions(sessionPresent: Boolean, memberIds: List<String>) {
+        val id = memberId ?: return
+        val gId = groupId ?: return
+        val topics = ownTopicFilters(id, gId) +
+            memberIds.filter { it != id }.flatMap { memberTopicFilters(it) }
+        val fingerprint = subscriptionFingerprint(MqttConfig.BROKER_URL, topics)
+        val prefs = context.getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE)
+
+        if (!shouldResubscribe(sessionPresent, prefs.getString(PREF_SUBSCRIBED_FINGERPRINT, null), fingerprint)) {
+            Timber.i("$TAG: broker kept our session — skipping resubscribe (no retained replay)")
+            return
+        }
+
+        // Cleared first: if the process dies mid-subscribe, the next connect must not
+        // trust a fingerprint for subscriptions that may never have reached the broker.
+        prefs.edit().remove(PREF_SUBSCRIBED_FINGERPRINT).apply()
+        if (subscribeAwait(topics)) {
+            prefs.edit().putString(PREF_SUBSCRIBED_FINGERPRINT, fingerprint).apply()
+            Timber.i("$TAG: Subscribed to ${topics.size} topics (sessionPresent=$sessionPresent)")
+        } else {
+            Timber.w("$TAG: subscribe incomplete — will resubscribe on next connect")
+        }
+    }
+
+    /** One SUBSCRIBE for [topics], resolved true only if the broker granted every filter. */
+    private suspend fun subscribeAwait(topics: List<String>): Boolean {
+        val client = mqttClient ?: return false
+        return withTimeoutOrNull(SUBSCRIBE_TIMEOUT_MS) {
+            suspendCancellableCoroutine { continuation ->
+                try {
+                    client.subscribe(
+                        topics.toTypedArray(),
+                        IntArray(topics.size) { MqttConfig.DEFAULT_QOS },
+                        null,
+                        object : IMqttActionListener {
+                            override fun onSuccess(asyncActionToken: IMqttToken?) {
+                                // 0x80 in the SUBACK is a per-filter refusal, reported as success.
+                                val granted = asyncActionToken?.grantedQos
+                                continuation.resume(granted == null || granted.none { it == 0x80 })
+                            }
+
+                            override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                                Timber.e(exception, "$TAG: subscribe failed")
+                                continuation.resume(false)
+                            }
+                        }
+                    )
+                } catch (e: Exception) {
+                    Timber.e(e, "$TAG: subscribe threw")
+                    continuation.resume(false)
+                }
+            }
+        } ?: false
+    }
+
     private suspend fun subscribeToOwnTopics() {
         val id = memberId ?: return
         val gId = groupId ?: return
-        
-        val topics = mutableListOf<String>()
-        val qosLevels = mutableListOf<Int>()
-
-        // Chat inbox
-        topics.add(MqttConfig.getChatTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-
-        // Per-recipient encrypted location inbox
-        topics.add(MqttConfig.getLocationInboxTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-
-        // Chat receipts/read receipts
-        topics.add(MqttConfig.getChatReceiptTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-        topics.add(MqttConfig.getChatReadTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-
-        // Replication requests/data
-        topics.add(MqttConfig.getReplicationRequestTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-        topics.add(MqttConfig.getReplicationDataTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-        topics.add(MqttConfig.getReplicationAnnounceInboxTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-
-        // Join requests (received by approvers) and approvals (received by joiners)
-        topics.add(MqttConfig.getJoinRequestTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-        topics.add(MqttConfig.getJoinApprovalTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-        topics.add(MqttConfig.getSyncRequestTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-
-        // Quorum-removal votes addressed to us
-        topics.add(MqttConfig.getRemovalVoteTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-
-        // Per-member encrypted group sync inbox
-        topics.add(MqttConfig.getGroupSyncInboxTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-        
-        // Group ack topic
-        topics.add(MqttConfig.getGroupAckTopic(gId))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-        
-        // File transfer manifest (retained broadcast for the group)
-        topics.add(MqttConfig.getFileManifestTopic(gId))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-        
-        // File chunks (wildcard)
-        topics.add(MqttConfig.getFileChunkWildcardTopic(gId))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-        
-        // File re-broadcast requests addressed to us
-        topics.add(MqttConfig.getFileRequestTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-
-        // Targeted requests for specific missing chunks, addressed to us
-        topics.add(MqttConfig.getFileRepairTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-
-        // Peers telling us which files they hold
-        topics.add(MqttConfig.getFileAvailabilityTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-
-        // The vault container, retained for the group. Subscribed unconditionally: a device
-        // that subscribed only once a vault existed would announce that one does.
-        topics.add(MqttConfig.getVaultContainerTopic(gId))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-
-        // Vault document bytes (wildcard), stored opaquely whether or not this device holds
-        // a code that can read them.
-        topics.add(MqttConfig.getVaultChunkWildcardTopic(gId))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
-
-        // Requests for vault chunks addressed to us
-        topics.add(MqttConfig.getVaultRepairTopic(id))
-        qosLevels.add(MqttConfig.DEFAULT_QOS)
+        val topics = ownTopicFilters(id, gId)
 
         try {
-            mqttClient?.subscribe(topics.toTypedArray(), qosLevels.toIntArray())
+            mqttClient?.subscribe(
+                topics.toTypedArray(),
+                IntArray(topics.size) { MqttConfig.DEFAULT_QOS }
+            )
             Timber.i("$TAG: Subscribed to own topics")
         } catch (e: Exception) {
             Timber.e(e, "$TAG: Failed to subscribe to own topics")
@@ -426,14 +489,10 @@ class MqttTransport @Inject constructor(
 
     private suspend fun subscribeToMember(otherMemberId: String) {
         withContext(Dispatchers.IO) {
-            // Legacy location topic kept so peers on older builds still work;
-            // new builds publish to our location_inbox instead.
-            val locationTopic = MqttConfig.getLocationTopic(otherMemberId)
-            val presenceTopic = MqttConfig.getPresenceTopic(otherMemberId)
-
+            val topics = memberTopicFilters(otherMemberId)
             mqttClient?.subscribe(
-                arrayOf(locationTopic, presenceTopic),
-                intArrayOf(MqttConfig.DEFAULT_QOS, MqttConfig.DEFAULT_QOS),
+                topics.toTypedArray(),
+                IntArray(topics.size) { MqttConfig.DEFAULT_QOS },
                 null,
                 object : IMqttActionListener {
                     override fun onSuccess(asyncActionToken: IMqttToken?) {
