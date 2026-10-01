@@ -127,6 +127,18 @@ class ReplicationManager @Inject constructor(
             directParticipants(conversationId)?.contains(memberId) ?: true
     }
 
+    /**
+     * [mayHoldConversation], and additionally: a non-private conversation must be *this*
+     * family's chat. A chat from a previous family (one that was re-created) has no screen
+     * that can show it, yet any phone still holding it announced it and every other phone
+     * pulled it in as unread — badge counts with nothing behind them.
+     */
+    private fun mayShareConversation(conversationId: String, memberId: String): Boolean {
+        if (!mayHoldConversation(conversationId, memberId)) return false
+        if (directParticipants(conversationId) != null) return true
+        return conversationId == groupStateManager.groupDefinition.value?.groupId
+    }
+
     private var lastFullSyncAtMs = 0L
 
     // =========================================================================
@@ -219,7 +231,7 @@ class ReplicationManager @Inject constructor(
         // from an older build, and asking for more of it would ask for someone else's
         // private messages.
         val conversationIds = chatMessageDao.getAllConversationIds()
-            .filter { mayHoldConversation(it, requesterId) }
+            .filter { mayShareConversation(it, requesterId) }
 
         conversationIds.forEach { conversationId ->
             val newestTimestamp = chatMessageDao.getNewestTimestamp(conversationId) ?: 0L
@@ -417,7 +429,7 @@ class ReplicationManager @Inject constructor(
         senderMemberId: String
     ) {
         val conversationId = request.conversationId ?: return
-        if (!mayHoldConversation(conversationId, senderMemberId)) {
+        if (!mayShareConversation(conversationId, senderMemberId)) {
             Timber.w("$TAG: ${senderMemberId.take(8)} asked for a private conversation it is not in — refusing")
             return
         }
@@ -530,8 +542,8 @@ class ReplicationManager @Inject constructor(
                         // A private message is only accepted from, and only stored by, its
                         // two participants. Peers on older builds still broadcast them.
                         val messages = allMessages.filter {
-                            mayHoldConversation(it.conversationId, localId) &&
-                                mayHoldConversation(it.conversationId, senderMemberId)
+                            mayShareConversation(it.conversationId, localId) &&
+                                mayShareConversation(it.conversationId, senderMemberId)
                         }
                         if (messages.isEmpty()) return@let
                         val entities = messages.map { it.toChatMessageEntity(senderMemberId, localId) }
@@ -606,7 +618,7 @@ class ReplicationManager @Inject constructor(
                         announcerId = localMemberId,
                         locationDataSummary = locationSummary,
                         chatDataSummary = chatSummary.filter {
-                            mayHoldConversation(it.conversationId, peer.memberId)
+                            mayShareConversation(it.conversationId, peer.memberId)
                         }
                     )
                     val plaintext = json.encodeToString(announcement)
@@ -662,8 +674,8 @@ class ReplicationManager @Inject constructor(
             }
 
             announcement.chatDataSummary.forEach { summary ->
-                if (!mayHoldConversation(summary.conversationId, localMemberId) ||
-                    !mayHoldConversation(summary.conversationId, senderMemberId)
+                if (!mayShareConversation(summary.conversationId, localMemberId) ||
+                    !mayShareConversation(summary.conversationId, senderMemberId)
                 ) return@forEach
                 val ourNewest = chatMessageDao.getNewestTimestamp(summary.conversationId)
 

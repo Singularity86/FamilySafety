@@ -142,7 +142,8 @@ interface ChatMessageDao {
         SELECT COUNT(*) FROM chat_messages
         WHERE isOutgoing = 0 AND isReadLocally = 0
         AND (conversationId = :groupId
-             OR conversationId LIKE '%' || :localMemberId || '%')
+             OR conversationId LIKE :localMemberId || ':%'
+             OR conversationId LIKE '%:' || :localMemberId)
     """)
     fun observeTotalUnreadCountFor(localMemberId: String, groupId: String?): Flow<Int>
 

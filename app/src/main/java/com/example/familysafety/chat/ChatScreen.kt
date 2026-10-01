@@ -113,6 +113,7 @@ fun ChatScreen(
 
     // Scroll to bottom when new messages arrive
     LaunchedEffect(messages.size) {
+        viewModel.onMessagesShown()
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
         }

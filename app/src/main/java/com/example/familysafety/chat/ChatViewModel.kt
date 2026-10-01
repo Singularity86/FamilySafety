@@ -85,6 +85,9 @@ class ChatViewModel @Inject constructor(
     // SINGLE CONVERSATION STATE
     // =========================================================================
 
+    /** True while the open conversation's screen is visible (between ON_START and ON_STOP). */
+    private var isOnScreen = false
+
     private val _currentConversationId = MutableStateFlow<String?>(null)
     val currentConversationId: StateFlow<String?> = _currentConversationId.asStateFlow()
 
@@ -152,6 +155,7 @@ class ChatViewModel @Inject constructor(
                 .groupId
             _currentConversationId.value = groupId
             _currentRecipient.value = null
+            isOnScreen = true
             chatRepository.setActiveConversation(groupId)
         }
     }
@@ -173,6 +177,7 @@ class ChatViewModel @Inject constructor(
             val conversationId = chatRepository.getConversationId(memberId)
             _currentConversationId.value = conversationId
             _currentRecipient.value = member
+            isOnScreen = true
             chatRepository.setActiveConversation(conversationId)
         }
     }
@@ -183,13 +188,28 @@ class ChatViewModel @Inject constructor(
      * clearing what this screen shows.
      */
     fun pauseConversation() {
+        isOnScreen = false
         chatRepository.setActiveConversation(null)
+    }
+
+    /**
+     * New messages appeared in the conversation on screen. Messages that arrive by
+     * replication (back-fill after a reconnect, or a peer's backup copy landing before
+     * the original) are stored unread, and only entering the conversation used to mark
+     * anything read — so they sat behind the badge while plainly visible.
+     */
+    fun onMessagesShown() {
+        if (!isOnScreen) return
+        val conversationId = _currentConversationId.value ?: return
+        if (currentMessages.value.none { !it.isOutgoing && !it.isReadLocally }) return
+        chatRepository.setActiveConversation(conversationId)
     }
 
     /**
      * Close current conversation.
      */
     fun closeConversation() {
+        isOnScreen = false
         _currentConversationId.value = null
         _currentRecipient.value = null
         _messageInput.value = ""

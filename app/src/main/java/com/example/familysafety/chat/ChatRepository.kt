@@ -19,6 +19,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -65,10 +68,16 @@ class ChatRepository @Inject constructor(
      * are backup data, not our conversation list.
      */
     fun observeConversations(): Flow<List<ConversationSummary>> {
-        return chatMessageDao.observeAllConversationIds()
-            .map { conversationIds ->
-                val localMemberId = groupStateManager.localMember.value?.memberId ?: ""
-                val groupId = groupStateManager.groupDefinition.value?.groupId
+        // Re-evaluated when the group loads as well as when messages change. Reading the
+        // group once up front left the list empty after a cold start until the next
+        // message happened to arrive.
+        return combine(
+            chatMessageDao.observeAllConversationIds(),
+            groupStateManager.localMember,
+            groupStateManager.groupDefinition
+        ) { conversationIds, localMember, group ->
+                val localMemberId = localMember?.memberId ?: return@combine emptyList()
+                val groupId = group?.groupId
                 conversationIds
                     .filter { conversationId ->
                         conversationId == groupId ||
@@ -109,10 +118,23 @@ class ChatRepository @Inject constructor(
     /**
      * Observe total unread count for conversations this user participates in.
      */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun observeTotalUnreadCount(): Flow<Int> {
-        val localMemberId = groupStateManager.localMember.value?.memberId ?: ""
-        val groupId = groupStateManager.groupDefinition.value?.groupId
-        return chatMessageDao.observeTotalUnreadCountFor(localMemberId, groupId)
+        // This used to read the member and group once, when the Chat badge was first built
+        // — which on a cold start is before the group has loaded. With an empty member ID
+        // the query's `LIKE '%' || '' || '%'` matches every row, so the badge counted every
+        // unread message in the database: stray copies of other people's conversations,
+        // chats from a previous family, messages no screen can show. A number with nothing
+        // behind it, until the app was fully restarted with the group already in memory.
+        return combine(
+            groupStateManager.localMember,
+            groupStateManager.groupDefinition
+        ) { member, group -> member?.memberId to group?.groupId }
+            .distinctUntilChanged()
+            .flatMapLatest { (localMemberId, groupId) ->
+                if (localMemberId.isNullOrEmpty()) flowOf(0)
+                else chatMessageDao.observeTotalUnreadCountFor(localMemberId, groupId)
+            }
     }
 
     // =========================================================================
