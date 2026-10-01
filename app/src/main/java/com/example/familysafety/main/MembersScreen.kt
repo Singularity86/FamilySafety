@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
@@ -43,6 +44,7 @@ fun MembersScreen(
     onNavigateToInvite: () -> Unit = {},
     onNavigateToHistory: (memberId: String) -> Unit = {},
     onNavigateToFiles: () -> Unit = {},
+    onMessageMember: (memberId: String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val familyMembers by viewModel.familyMembers.collectAsState()
@@ -112,6 +114,7 @@ fun MembersScreen(
                             viewModel.requestDriveEstimate(member.memberId)
                         },
                         onShowHistory = { onNavigateToHistory(member.memberId) },
+                        onMessage = { onMessageMember(member.memberId) },
                         onRemove = { viewModel.removeMember(member.memberId) },
                         canRemove = isCreator,
                         onProposeRemoval = { viewModel.proposeRemoval(member.memberId) },
@@ -264,6 +267,7 @@ private fun MemberCard(
     onShowOnMap: () -> Unit = {},
     onShowDriveEstimate: () -> Unit = {},
     onShowHistory: () -> Unit = {},
+    onMessage: () -> Unit = {},
     onRemove: () -> Unit = {},
     canRemove: Boolean = false,
     onProposeRemoval: () -> Unit = {},
@@ -507,6 +511,16 @@ private fun MemberCard(
                         contentDescription = "Show drive time to ${member.displayName}",
                         modifier = Modifier.size(20.dp),
                         tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                if (!isMe) {
+                    IconButton(onClick = onMessage, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Chat,
+                            contentDescription = "Message ${member.displayName} privately",
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                 }

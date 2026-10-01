@@ -105,11 +105,26 @@ class ReplicationManager @Inject constructor(
          * asked; anything else (the group chat) goes to everyone.
          */
         fun chatSourcesFor(conversationId: String, peerIds: List<String>): List<String> {
-            val participants = conversationId.split(":")
-            if (participants.size != 2) return peerIds
-            val counterpart = participants.firstOrNull { it in peerIds }
-            return if (counterpart != null) listOf(counterpart) else peerIds
+            val participants = directParticipants(conversationId) ?: return peerIds
+            return peerIds.filter { it in participants }
         }
+
+        /**
+         * The two members of a private conversation ("idA:idB"), or null for the group
+         * chat, whose ID is the group's UUID.
+         */
+        fun directParticipants(conversationId: String): List<String>? =
+            conversationId.split(":").takeIf { it.size == 2 && it.all(String::isNotEmpty) }
+
+        /**
+         * Whether [memberId] may hold [conversationId]. Everyone may hold the group chat;
+         * a private conversation belongs to its two participants and nobody else — not
+         * as a backup, not on request. Each participant already holds the whole thread,
+         * so a third copy adds no durability, only someone else's private messages on a
+         * phone they were never meant to be on.
+         */
+        fun mayHoldConversation(conversationId: String, memberId: String): Boolean =
+            directParticipants(conversationId)?.contains(memberId) ?: true
     }
 
     private var lastFullSyncAtMs = 0L
@@ -200,8 +215,11 @@ class ReplicationManager @Inject constructor(
     private suspend fun requestChatData(requesterId: String) {
         val group = groupStateManager.groupDefinition.value ?: return
 
-        // Get all conversation IDs we have
+        // Only conversations we take part in. Anything else here is a stray backup copy
+        // from an older build, and asking for more of it would ask for someone else's
+        // private messages.
         val conversationIds = chatMessageDao.getAllConversationIds()
+            .filter { mayHoldConversation(it, requesterId) }
 
         conversationIds.forEach { conversationId ->
             val newestTimestamp = chatMessageDao.getNewestTimestamp(conversationId) ?: 0L
@@ -399,6 +417,10 @@ class ReplicationManager @Inject constructor(
         senderMemberId: String
     ) {
         val conversationId = request.conversationId ?: return
+        if (!mayHoldConversation(conversationId, senderMemberId)) {
+            Timber.w("$TAG: ${senderMemberId.take(8)} asked for a private conversation it is not in — refusing")
+            return
+        }
         val sender = groupStateManager.groupDefinition.value
             ?.findMemberById(senderMemberId) ?: return
 
@@ -503,8 +525,15 @@ class ReplicationManager @Inject constructor(
                     }
                 }
                 ReplicationDataType.CHAT_MESSAGES -> {
-                    response.messages?.let { messages ->
-                        val localId = groupStateManager.localMember.value?.memberId
+                    response.messages?.let { allMessages ->
+                        val localId = groupStateManager.localMember.value?.memberId ?: return@let
+                        // A private message is only accepted from, and only stored by, its
+                        // two participants. Peers on older builds still broadcast them.
+                        val messages = allMessages.filter {
+                            mayHoldConversation(it.conversationId, localId) &&
+                                mayHoldConversation(it.conversationId, senderMemberId)
+                        }
+                        if (messages.isEmpty()) return@let
                         val entities = messages.map { it.toChatMessageEntity(senderMemberId, localId) }
                         chatMessageDao.insertAll(entities)
                         Timber.d("$TAG: Stored ${messages.size} replicated messages")
@@ -565,20 +594,22 @@ class ReplicationManager @Inject constructor(
                 } else null
             }
 
-            val announcement = DataAvailabilityAnnouncement(
-                announcerId = localMemberId,
-                locationDataSummary = locationSummary,
-                chatDataSummary = chatSummary
-            )
-
-            val plaintext = json.encodeToString(announcement)
-
             // NaCl box is per-pair: one ciphertext can't be decrypted by every member.
             // Send the announcement to each peer's announcement inbox individually,
             // encrypted under their key, rather than to a shared group topic in plaintext.
+            // Each peer only hears about conversations it belongs to — even the existence
+            // and size of two other people's private thread is theirs.
             group.members
                 .filter { it.memberId != localMemberId }
                 .forEach { peer ->
+                    val announcement = DataAvailabilityAnnouncement(
+                        announcerId = localMemberId,
+                        locationDataSummary = locationSummary,
+                        chatDataSummary = chatSummary.filter {
+                            mayHoldConversation(it.conversationId, peer.memberId)
+                        }
+                    )
+                    val plaintext = json.encodeToString(announcement)
                     val payload = encryptForPeer(plaintext, peer) ?: return@forEach
                     val topic = MqttConfig.getReplicationAnnounceInboxTopic(peer.memberId)
                     transportProvider.sendMessage(
@@ -631,6 +662,9 @@ class ReplicationManager @Inject constructor(
             }
 
             announcement.chatDataSummary.forEach { summary ->
+                if (!mayHoldConversation(summary.conversationId, localMemberId) ||
+                    !mayHoldConversation(summary.conversationId, senderMemberId)
+                ) return@forEach
                 val ourNewest = chatMessageDao.getNewestTimestamp(summary.conversationId)
 
                 if ((ourNewest == null || summary.newestTimestamp > ourNewest) &&
@@ -696,6 +730,8 @@ class ReplicationManager @Inject constructor(
      * Replicate a new chat message to all peers.
      */
     suspend fun replicateChatMessage(message: com.example.familysafety.storage.ChatMessageEntity) {
+        // Private messages are never backed up to third parties; see mayHoldConversation.
+        if (directParticipants(message.conversationId) != null) return
         val group = groupStateManager.groupDefinition.value ?: return
         val localMemberId = groupStateManager.localMember.value?.memberId ?: return
 

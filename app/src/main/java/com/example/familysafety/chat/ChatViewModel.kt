@@ -39,13 +39,16 @@ class ChatViewModel @Inject constructor(
     // CONVERSATION LIST STATE
     // =========================================================================
 
+    private val allSummaries = chatRepository.observeConversations()
+
     /**
-     * All conversations with summaries.
+     * Private (one-to-one) conversations, newest first. A conversation with someone who
+     * has since left the family is dropped: there is no one to reply to.
      */
-    val conversations: StateFlow<List<ConversationWithMember>> = chatRepository
-        .observeConversations()
+    val conversations: StateFlow<List<ConversationWithMember>> = allSummaries
         .combine(groupStateManager.groupDefinition) { conversations, group ->
             conversations.mapNotNull { summary ->
+                if (summary.conversationId == group?.groupId) return@mapNotNull null
                 val member = group?.findMemberById(summary.otherMemberId)
                 if (member != null) {
                     ConversationWithMember(summary, member)
@@ -53,6 +56,13 @@ class ChatViewModel @Inject constructor(
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** Last message and unread count of the family chat, or null before its first message. */
+    val groupConversation: StateFlow<ConversationSummary?> = allSummaries
+        .combine(groupStateManager.groupDefinition) { conversations, group ->
+            conversations.firstOrNull { it.conversationId == group?.groupId }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     /**
      * Total unread message count.
@@ -150,18 +160,30 @@ class ChatViewModel @Inject constructor(
      * Open a conversation with a member.
      */
     fun openConversation(memberId: String) {
-        val member = groupStateManager.groupDefinition.value?.findMemberById(memberId)
-        if (member == null) {
-            viewModelScope.launch {
+        viewModelScope.launch {
+            // Same wait as the group chat: opened from a notification on a cold start,
+            // the group may not be loaded yet, and that is not "member not found".
+            val group = groupStateManager.groupDefinition.filterNotNull().first()
+            val member = group.findMemberById(memberId)
+            if (member == null) {
                 _events.emit(ChatEvent.Error("Member not found"))
+                return@launch
             }
-            return
-        }
 
-        val conversationId = chatRepository.getConversationId(memberId)
-        _currentConversationId.value = conversationId
-        _currentRecipient.value = member
-        chatRepository.setActiveConversation(conversationId)
+            val conversationId = chatRepository.getConversationId(memberId)
+            _currentConversationId.value = conversationId
+            _currentRecipient.value = member
+            chatRepository.setActiveConversation(conversationId)
+        }
+    }
+
+    /**
+     * The screen left the foreground while a conversation stays selected. Releases the
+     * repository's "on screen" flag so new messages notify and stay unread, without
+     * clearing what this screen shows.
+     */
+    fun pauseConversation() {
+        chatRepository.setActiveConversation(null)
     }
 
     /**

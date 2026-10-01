@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,12 +19,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
@@ -45,77 +45,176 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.familysafety.group.FamilyMember
+import com.example.familysafety.storage.ConversationSummary
 import com.example.familysafety.storage.MessageType
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * Screen showing list of conversations.
+ * The Chat tab: the family chat pinned on top, then private one-to-one conversations.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConversationListScreen(
-    onConversationClick: (String) -> Unit,
-    viewModel: ChatViewModel = hiltViewModel()
+    onOpenGroupChat: () -> Unit,
+    onOpenConversation: (memberId: String) -> Unit,
+    viewModel: ChatViewModel = hiltViewModel(),
+    showTopBar: Boolean = true
 ) {
     val conversations by viewModel.conversations.collectAsState()
+    val groupConversation by viewModel.groupConversation.collectAsState()
     val availableMembers by viewModel.availableMembers.collectAsState()
     var showNewChatDialog by remember { mutableStateOf(false) }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Messages") }
-            )
-        },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { showNewChatDialog = true }
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "New chat")
-            }
+        topBar = if (showTopBar) {
+            { TopAppBar(title = { Text("Messages") }) }
+        } else {
+            {}
         }
     ) { paddingValues ->
-        if (conversations.isEmpty()) {
-            // Empty state
-            EmptyConversationsState(
-                onStartChat = { showNewChatDialog = true },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
-            )
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
-            ) {
-                items(conversations) { conversation ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues),
+            contentPadding = PaddingValues(vertical = 8.dp)
+        ) {
+            item {
+                GroupChatItem(summary = groupConversation, onClick = onOpenGroupChat)
+            }
+
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 20.dp, end = 8.dp, top = 16.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Private messages",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = { showNewChatDialog = true },
+                        enabled = availableMembers.isNotEmpty()
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("New")
+                    }
+                }
+            }
+
+            if (conversations.isEmpty()) {
+                item {
+                    Text(
+                        text = "Only you and the person you message can read a private " +
+                            "conversation. Start one here or from someone's card in Family.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                    )
+                }
+            } else {
+                items(conversations, key = { it.summary.conversationId }) { conversation ->
                     ConversationItem(
                         conversation = conversation,
-                        onClick = {
-                            viewModel.openConversation(conversation.member.memberId)
-                            onConversationClick(conversation.member.memberId)
-                        }
+                        onClick = { onOpenConversation(conversation.member.memberId) }
                     )
                 }
             }
         }
     }
 
-    // New chat dialog
     if (showNewChatDialog) {
         NewChatDialog(
             members = availableMembers,
             existingConversations = conversations.map { it.member.memberId }.toSet(),
             onMemberSelected = { memberId ->
                 showNewChatDialog = false
-                viewModel.openConversation(memberId)
-                onConversationClick(memberId)
+                onOpenConversation(memberId)
             },
             onDismiss = { showNewChatDialog = false }
         )
+    }
+}
+
+@Composable
+private fun GroupChatItem(
+    summary: ConversationSummary?,
+    onClick: () -> Unit
+) {
+    val unread = summary?.unreadCount ?: 0
+    OutlinedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Groups,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimary
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Family Chat",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = if (unread > 0) FontWeight.Bold else FontWeight.Normal
+                    )
+                    if (summary != null) {
+                        Text(
+                            text = formatTimestamp(summary.lastMessageTimestamp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = summary?.lastMessage ?: "Everyone in the family",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (unread > 0) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        UnreadBadge(count = unread)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -231,49 +330,6 @@ private fun UnreadBadge(count: Int) {
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onPrimary
         )
-    }
-}
-
-@Composable
-private fun EmptyConversationsState(
-    onStartChat: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Icon(
-            Icons.Default.Chat,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "No conversations yet",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = "Start a chat with a family member",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        TextButton(onClick = onStartChat) {
-            Icon(Icons.Default.Add, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Start a conversation")
-        }
     }
 }
 
