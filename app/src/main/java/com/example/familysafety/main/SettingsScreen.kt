@@ -56,6 +56,7 @@ import com.example.familysafety.ui.theme.UnitPreference
 import com.example.familysafety.ui.theme.UnitSystem
 import kotlinx.coroutines.launch
 import com.example.familysafety.ui.theme.NumericFamily
+import com.example.familysafety.ui.theme.ButtonShape
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
@@ -185,6 +186,7 @@ fun SettingsScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Button(
+                        shape = ButtonShape,
                         onClick = {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                                 context.startActivity(
@@ -232,7 +234,7 @@ fun SettingsScreen(
                         )
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedButton(onClick = { OemBatteryHelper.openBatterySettings(context) }) {
+                    OutlinedButton(shape = ButtonShape, onClick = { OemBatteryHelper.openBatterySettings(context) }) {
                         Text("Open phone settings")
                     }
                 }
@@ -494,6 +496,7 @@ fun SettingsScreen(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedButton(
+                    shape = ButtonShape,
                     onClick = onReplayTutorial,
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -1029,6 +1032,7 @@ fun SettingsScreen(
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
                 OutlinedButton(
+                    shape = ButtonShape,
                     onClick = {
                         context.startActivity(
                             Intent(Intent.ACTION_VIEW, Uri.parse("https://cash.app/\$OERev"))

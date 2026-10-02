@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import com.example.familysafety.ui.theme.statusColors
 import com.example.familysafety.invite.JoinRequest
 import com.example.familysafety.ui.components.ShimmerBox
+import com.example.familysafety.ui.theme.ChipShape
 
 
 @Composable
@@ -454,7 +455,7 @@ private fun MemberCard(
                         if (isMe) {
                             Surface(
                                 color = MaterialTheme.colorScheme.primaryContainer,
-                                shape = MaterialTheme.shapes.extraSmall
+                                shape = ChipShape
                             ) {
                                 Text(
                                     text = "You",

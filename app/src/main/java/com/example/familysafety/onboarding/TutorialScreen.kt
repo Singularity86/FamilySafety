@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.GlossaryTerm
+import com.example.familysafety.ui.theme.ButtonShape
 
 private data class TutorialSlide(
     val title: String,
@@ -157,9 +158,10 @@ fun TutorialScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (page > 0) {
-                    OutlinedButton(onClick = { page-- }) { Text("Back") }
+                    OutlinedButton(shape = ButtonShape, onClick = { page-- }) { Text("Back") }
                 }
                 Button(
+                    shape = ButtonShape,
                     onClick = {
                         if (isLast) finish() else page++
                     }

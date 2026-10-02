@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.theme.*
 import com.example.familysafety.location.LocationPermissionHelper
 import com.example.familysafety.util.OemBatteryHelper
+import com.example.familysafety.ui.theme.ButtonShape
 
 /**
  * Explains battery optimization exemption with OEM-specific guidance and launches
@@ -114,6 +115,7 @@ fun BatteryOptimizationScreen(
 
             // Secondary action: open OEM battery settings directly
             OutlinedButton(
+                shape = ButtonShape,
                 onClick = { OemBatteryHelper.openBatterySettings(context) },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)
@@ -139,6 +141,7 @@ fun BatteryOptimizationScreen(
                 )
                 Spacer(modifier = Modifier.height(Spacing.xs))
                 OutlinedButton(
+                    shape = ButtonShape,
                     onClick = {
                         try {
                             context.startActivity(
@@ -177,6 +180,7 @@ fun BatteryOptimizationScreen(
                 }
                 Spacer(modifier = Modifier.width(Spacing.sm))
                 Button(
+                    shape = ButtonShape,
                     onClick = {
                         try {
                             launcher.launch(

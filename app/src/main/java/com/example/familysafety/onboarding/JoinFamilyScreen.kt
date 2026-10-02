@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import androidx.activity.ComponentActivity
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.launch
+import com.example.familysafety.ui.theme.ButtonShape
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -160,6 +161,7 @@ fun JoinFamilyScreen(
             }
 
             Button(
+                shape = ButtonShape,
                 onClick = submit,
                 modifier = Modifier
                     .fillMaxWidth()

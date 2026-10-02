@@ -24,6 +24,7 @@ import com.example.familysafety.sync.GroupSyncManager
 import com.example.familysafety.transport.MqttTransport
 import com.example.familysafety.ui.theme.statusColors
 import com.example.familysafety.ui.theme.NumericFamily
+import com.example.familysafety.ui.theme.ButtonShape
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -307,6 +308,7 @@ private fun ThisDeviceCard(
                 }
             }
             OutlinedButton(
+                shape = ButtonShape,
                 onClick = {
                     clipboard.setText(AnnotatedString(buildDiagnostics()))
                     copied = true
@@ -507,6 +509,7 @@ private fun GroupIntegrityCard(
             Spacer(Modifier.height(10.dp))
 
             OutlinedButton(
+                shape = ButtonShape,
                 onClick = { viewModel.requestGroupStateRefresh() },
                 enabled = keySyncRequestState !is MainViewModel.KeySyncRequestState.Sending,
                 modifier = Modifier.fillMaxWidth()

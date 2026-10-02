@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.theme.Spacing
+import com.example.familysafety.ui.theme.ButtonShape
 
 @SuppressLint("InlinedApi")
 @Composable
@@ -78,6 +79,7 @@ fun PermissionRationaleCard(
                 }
                 Spacer(modifier = Modifier.width(Spacing.sm))
                 Button(
+                    shape = ButtonShape,
                     onClick = onRequestPermission,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary,

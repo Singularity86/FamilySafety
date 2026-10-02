@@ -11,6 +11,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.GlossaryTerm
 import com.example.familysafety.ui.glossaryDefinitions
+import com.example.familysafety.ui.theme.ButtonShape
 
 private data class Tip(
     val body: String,
@@ -125,7 +126,7 @@ fun TipWindow(
             }
         },
         confirmButton = {
-            Button(onClick = onDismiss) { Text("Got it") }
+            Button(shape = ButtonShape, onClick = onDismiss) { Text("Got it") }
         },
         dismissButton = {
             Column(horizontalAlignment = Alignment.End) {

@@ -22,7 +22,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import com.example.familysafety.ui.theme.ChipShape
+import com.example.familysafety.ui.theme.ButtonShape
 import com.example.familysafety.ui.theme.Spacing
 
 @Composable
@@ -40,7 +40,7 @@ fun MetalActionButton(
     Surface(
         onClick = onClick,
         modifier = modifier,
-        shape = ChipShape,
+        shape = ButtonShape,
         color = Color.Transparent,
         contentColor = colorScheme.onSurface,
         tonalElevation = 3.dp,
@@ -49,7 +49,7 @@ fun MetalActionButton(
     ) {
         Box(
             modifier = Modifier
-                .clip(ChipShape)
+                .clip(ButtonShape)
                 .background(
                     Brush.verticalGradient(
                         0f to topSheen,

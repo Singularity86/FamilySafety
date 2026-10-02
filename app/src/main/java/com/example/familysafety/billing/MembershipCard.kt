@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.main.MainViewModel
 import kotlinx.coroutines.launch
+import com.example.familysafety.ui.theme.ButtonShape
 
 /**
  * Settings' "how is this family's access doing" card: current status, a way to subscribe or
@@ -38,12 +39,14 @@ fun MembershipCard(viewModel: MainViewModel, context: Context) {
             when (entitlement) {
                 is Entitlement.Subscribed -> {
                     OutlinedButton(
+                        shape = ButtonShape,
                         onClick = { context.startActivity(manageSubscriptionIntent(context)) },
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("Manage subscription") }
                 }
                 is Entitlement.Trial, Entitlement.Expired -> {
                     Button(
+                        shape = ButtonShape,
                         onClick = subscribeAction,
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -71,6 +74,7 @@ fun MembershipCard(viewModel: MainViewModel, context: Context) {
             )
             Spacer(Modifier.height(8.dp))
             Button(
+                shape = ButtonShape,
                 onClick = {
                     scope.launch {
                         val result = viewModel.entitlementRepository.redeemGrantCode(code)

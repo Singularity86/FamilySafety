@@ -62,6 +62,8 @@ import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 import timber.log.Timber
+import com.example.familysafety.ui.theme.ChipShape
+import com.example.familysafety.ui.theme.ButtonShape
 
 /** Beyond this age, a member marker is dimmed to signal it's no longer fresh. */
 private const val STALE_LOCATION_THRESHOLD_MS = 30 * 60_000L
@@ -127,7 +129,7 @@ fun MapScreen(
             )
             Spacer(modifier = Modifier.height(24.dp))
             if (permanentlyDenied) {
-                Button(onClick = {
+                Button(shape = ButtonShape, onClick = {
                     context.startActivity(
                         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                             data = Uri.fromParts("package", context.packageName, null)
@@ -141,7 +143,7 @@ fun MapScreen(
                     Text("I've granted it, refresh")
                 }
             } else {
-                Button(onClick = {
+                Button(shape = ButtonShape, onClick = {
                     permissionLauncher.launch(
                         arrayOf(
                             Manifest.permission.ACCESS_FINE_LOCATION,
@@ -487,7 +489,7 @@ fun MapScreen(
                     if (isLarge && !tooMany) {
                         Surface(
                             color = statusColors.warningIndicator.copy(alpha = 0.16f),
-                            shape = MaterialTheme.shapes.extraSmall
+                            shape = ChipShape
                         ) {
                             Text(
                                 text = "Large download — make sure you're on Wi-Fi.",
@@ -501,6 +503,7 @@ fun MapScreen(
             },
             confirmButton = {
                 Button(
+                    shape = ButtonShape,
                     enabled = !tooMany,
                     onClick = {
                         showDownloadDialog = false
@@ -565,7 +568,7 @@ fun MapScreen(
                 .padding(end = 2.dp)
                 .width(18.dp)
                 .height(72.dp),
-            shape = RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp),
+            shape = RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp),
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.58f),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
@@ -705,7 +708,7 @@ fun MapScreen(
                     }
                 },
                 confirmButton = {
-                    Button(onClick = { showClusterTutorial = false }) { Text("Got it") }
+                    Button(shape = ButtonShape, onClick = { showClusterTutorial = false }) { Text("Got it") }
                 }
             )
         }

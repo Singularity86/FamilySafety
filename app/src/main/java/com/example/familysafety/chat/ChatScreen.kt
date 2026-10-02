@@ -66,6 +66,8 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import com.example.familysafety.ui.theme.ChipShape
+import com.example.familysafety.ui.theme.ControlShape
 
 /**
  * Screen showing messages in a single conversation.
@@ -217,7 +219,7 @@ private fun DateHeader(dateKey: String) {
         contentAlignment = Alignment.Center
     ) {
         Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = ChipShape,
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         ) {
             Text(
@@ -471,7 +473,7 @@ private fun MessageInput(
                     focusedIndicatorColor = Color.Transparent,
                     unfocusedIndicatorColor = Color.Transparent
                 ),
-                shape = RoundedCornerShape(24.dp),
+                shape = ControlShape,
                 maxLines = 4
             )
 

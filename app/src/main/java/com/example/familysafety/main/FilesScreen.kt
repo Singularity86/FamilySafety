@@ -9,7 +9,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.filled.CloudDownload
@@ -44,6 +43,8 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.example.familysafety.ui.theme.ChipShape
+import androidx.compose.ui.graphics.StrokeCap
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -308,8 +309,9 @@ private fun StorageBar(usedBytes: Long, maxBytes: Long) {
             progress = { fraction },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(3.dp)),
+                .height(6.dp),
+            // Square: a bar is a line, not an object (see Shape.kt).
+            strokeCap = StrokeCap.Butt,
             color = if (isNearFull) statusColors.warningIndicator
                     else MaterialTheme.colorScheme.primary
         )
@@ -465,7 +467,7 @@ private fun FileCard(
                         // invisible. The scrim makes them readable over anything.
                         .background(
                             Color.Black.copy(alpha = 0.45f),
-                            RoundedCornerShape(6.dp)
+                            ChipShape
                         )
                         .padding(horizontal = 5.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(3.dp)
