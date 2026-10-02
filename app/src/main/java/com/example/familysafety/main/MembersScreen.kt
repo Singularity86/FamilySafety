@@ -128,7 +128,7 @@ fun MembersScreen(
             }
         }
 
-        MetalActionButton(
+        FloatingActionLabelButton(
             onClick = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onNavigateToInvite()

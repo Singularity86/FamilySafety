@@ -92,7 +92,7 @@ fun FilesScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             if (uploadProgress == null) {
-                MetalActionButton(
+                FloatingActionLabelButton(
                     label = "Add File",
                     icon = Icons.Default.Add,
                     onClick = { filePicker.launch("*/*") }
