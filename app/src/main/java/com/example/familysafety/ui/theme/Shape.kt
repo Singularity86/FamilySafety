@@ -18,8 +18,10 @@ import androidx.compose.ui.unit.dp
 //
 // Chat bubbles keep their own asymmetric shape: they are messages, not controls.
 //
-// Nested corners: when a rounded thing sits inside another with padding p, its radius
-// should be the outer radius minus p, or the curves pinch.
+// Nested corners: when a rounded thing sits within p of another's corner and p is smaller
+// than the outer radius r, give it radius r - p (or flush, p = 0: the same r) so the curves
+// run parallel instead of pinching. Once p >= r the corners are too far apart to interact
+// and the inner thing simply takes its own role's radius.
 
 val ControlShape = RoundedCornerShape(10.dp)
 val OverlayShape = RoundedCornerShape(20.dp)

@@ -188,6 +188,7 @@ fun FilesScreen(
             // Upload progress banner
             uploadProgress?.let { progress ->
                 LinearProgressIndicator(
+                    strokeCap = StrokeCap.Butt,
                     progress = { progress.fraction },
                     modifier = Modifier
                         .fillMaxWidth()

@@ -64,6 +64,8 @@ import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 import timber.log.Timber
 import com.example.familysafety.ui.theme.ChipShape
 import com.example.familysafety.ui.theme.ButtonShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.StrokeCap
 
 /** Beyond this age, a member marker is dimmed to signal it's no longer fresh. */
 private const val STALE_LOCATION_THRESHOLD_MS = 30 * 60_000L
@@ -652,6 +654,7 @@ fun MapScreen(
                     }
                     val fraction = if (downloadTotal > 0) downloadProgress.toFloat() / downloadTotal else 0f
                     LinearProgressIndicator(
+                        strokeCap = StrokeCap.Butt,
                         progress = { fraction },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -661,6 +664,7 @@ fun MapScreen(
             }
         } else if (bottomControlsVisible) {
             SmallFloatingActionButton(
+                shape = CircleShape,
                 onClick = { showDownloadDialog = true },
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -673,6 +677,7 @@ fun MapScreen(
 
         if (bottomControlsVisible) {
             SmallFloatingActionButton(
+                shape = CircleShape,
                 onClick = onNavigateToZones,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)

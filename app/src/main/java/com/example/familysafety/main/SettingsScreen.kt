@@ -57,6 +57,7 @@ import com.example.familysafety.ui.theme.UnitSystem
 import kotlinx.coroutines.launch
 import com.example.familysafety.ui.theme.NumericFamily
 import com.example.familysafety.ui.theme.ButtonShape
+import com.example.familysafety.ui.theme.OverlayShape
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
@@ -1058,6 +1059,7 @@ fun SettingsScreen(
     if (showBgRationaleCard) {
         Dialog(onDismissRequest = { showBgRationaleCard = false }) {
             PermissionRationaleCard(
+                shape = OverlayShape,
                 permission = Manifest.permission.ACCESS_BACKGROUND_LOCATION,
                 title = PermissionCopy.BackgroundLocation.title,
                 rationale = PermissionCopy.BackgroundLocation.rationale,

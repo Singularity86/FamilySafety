@@ -13,6 +13,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.theme.Spacing
 import com.example.familysafety.ui.theme.ButtonShape
+import com.example.familysafety.ui.theme.CardShape
+import androidx.compose.ui.graphics.Shape
 
 @SuppressLint("InlinedApi")
 @Composable
@@ -23,7 +25,9 @@ fun PermissionRationaleCard(
     onRequestPermission: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
-    coaching: String? = null
+    coaching: String? = null,
+    /** [OverlayShape] when shown in a dialog; the card corner when inline on a screen. */
+    shape: Shape = CardShape
 ) {
     val icon: ImageVector = when (permission) {
         Manifest.permission.CAMERA                     -> Icons.Default.CameraAlt
@@ -35,7 +39,7 @@ fun PermissionRationaleCard(
         else                                           -> Icons.Default.Security
     }
 
-    OutlinedCard(modifier = modifier) {
+    OutlinedCard(modifier = modifier, shape = shape) {
         Column(modifier = Modifier.padding(Spacing.lg)) {
             Icon(
                 imageVector = icon,

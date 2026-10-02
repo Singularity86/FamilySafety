@@ -23,6 +23,7 @@ import com.example.familysafety.ui.theme.*
 import com.example.familysafety.location.LocationPermissionHelper
 import com.example.familysafety.util.OemBatteryHelper
 import com.example.familysafety.ui.theme.ButtonShape
+import com.example.familysafety.ui.theme.OverlayShape
 
 /**
  * Explains battery optimization exemption with OEM-specific guidance and launches
@@ -57,7 +58,8 @@ fun BatteryOptimizationScreen(
 
     val instructions = remember { OemBatteryHelper.getInstructions() }
 
-    OutlinedCard {
+    // Only ever shown inside a dialog, so it takes the overlay corner.
+    OutlinedCard(shape = OverlayShape) {
         Column(modifier = Modifier.padding(Spacing.lg)) {
             Icon(
                 imageVector = Icons.Default.BatteryAlert,
