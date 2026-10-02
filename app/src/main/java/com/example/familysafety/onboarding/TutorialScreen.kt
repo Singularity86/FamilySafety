@@ -16,7 +16,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.GlossaryTerm
@@ -180,7 +179,7 @@ private fun SlideContent(slide: TutorialSlide) {
     ) {
         Text(
             text = slide.title,
-            style = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Monospace),
+            style = MaterialTheme.typography.headlineSmall,
             textAlign = TextAlign.Center
         )
         // Render body with glossary terms replaced by tappable GlossaryTerm composables

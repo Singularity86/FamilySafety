@@ -93,3 +93,7 @@ myFlow.test {
 
 - `Icons.Filled.ArrowBack` → use `Icons.AutoMirrored.Filled.ArrowBack`
 - `@OptIn(ExperimentalCoroutinesApi::class)` needed on coroutine test utilities
+
+## Working With the Owner
+
+- **"Send it"** means: execute the part of the plan discussed in your most recent response — no more, no less. Don't ask for confirmation; don't expand scope beyond what that response proposed.

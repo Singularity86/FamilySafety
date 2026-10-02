@@ -15,7 +15,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.BuildConfig
@@ -24,6 +23,7 @@ import com.example.familysafety.group.GroupDefinition
 import com.example.familysafety.sync.GroupSyncManager
 import com.example.familysafety.transport.MqttTransport
 import com.example.familysafety.ui.theme.statusColors
+import com.example.familysafety.ui.theme.NumericFamily
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -446,7 +446,7 @@ private fun CopyableValue(label: String, value: String, onCopy: (() -> Unit)?) {
             Text(
                 value,
                 style = MaterialTheme.typography.bodyMedium,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = NumericFamily,
                 modifier = Modifier.weight(1f)
             )
             if (onCopy != null) {
@@ -603,7 +603,7 @@ private fun IntegrityRow(label: String, value: String) {
         Text(
             value,
             style = MaterialTheme.typography.bodyMedium,
-            fontFamily = FontFamily.Monospace
+            fontFamily = NumericFamily
         )
     }
 }
@@ -678,7 +678,7 @@ private fun MemberKeysCard(
                         Text(
                             member.ed25519PublicKey.take(16).chunked(4).joinToString(" "),
                             style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = NumericFamily,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         if (stats != null && hasActiveFailure) {

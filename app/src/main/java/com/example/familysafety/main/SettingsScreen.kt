@@ -35,7 +35,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -56,6 +55,7 @@ import com.example.familysafety.ui.theme.ThemePreference
 import com.example.familysafety.ui.theme.UnitPreference
 import com.example.familysafety.ui.theme.UnitSystem
 import kotlinx.coroutines.launch
+import com.example.familysafety.ui.theme.NumericFamily
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
@@ -1353,7 +1353,7 @@ fun SettingsScreen(
                                         Text(
                                             text = word,
                                             style = MaterialTheme.typography.bodyMedium.copy(
-                                                fontFamily = FontFamily.Monospace,
+                                                fontFamily = NumericFamily,
                                                 fontWeight = FontWeight.Medium
                                             )
                                         )
