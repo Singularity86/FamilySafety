@@ -24,6 +24,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import com.example.familysafety.avatar.AvatarRepository
+import android.graphics.Bitmap
 
 /**
  * ViewModel for chat functionality.
@@ -32,8 +34,13 @@ import javax.inject.Inject
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     private val chatRepository: ChatRepository,
-    private val groupStateManager: GroupStateManager
+    private val groupStateManager: GroupStateManager,
+    avatarRepository: AvatarRepository
 ) : ViewModel() {
+
+    /** Profile photos by member ID, the same source the Family screen draws from. */
+    val memberAvatars: StateFlow<Map<String, Bitmap?>> = avatarRepository.memberAvatars
+
 
     // =========================================================================
     // CONVERSATION LIST STATE

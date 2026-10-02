@@ -51,6 +51,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import com.example.familysafety.main.MemberAvatar
+import android.graphics.Bitmap
 
 /**
  * The Chat tab: the family chat pinned on top, then private one-to-one conversations.
@@ -66,6 +67,7 @@ fun ConversationListScreen(
     val conversations by viewModel.conversations.collectAsState()
     val groupConversation by viewModel.groupConversation.collectAsState()
     val availableMembers by viewModel.availableMembers.collectAsState()
+    val memberAvatars by viewModel.memberAvatars.collectAsState()
     var showNewChatDialog by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -123,6 +125,7 @@ fun ConversationListScreen(
                 items(conversations, key = { it.summary.conversationId }) { conversation ->
                     ConversationItem(
                         conversation = conversation,
+                        avatar = memberAvatars[conversation.member.memberId],
                         onClick = { onOpenConversation(conversation.member.memberId) }
                     )
                 }
@@ -133,6 +136,7 @@ fun ConversationListScreen(
     if (showNewChatDialog) {
         NewChatDialog(
             members = availableMembers,
+            avatars = memberAvatars,
             existingConversations = conversations.map { it.member.memberId }.toSet(),
             onMemberSelected = { memberId ->
                 showNewChatDialog = false
@@ -224,6 +228,7 @@ private fun GroupChatItem(
 @Composable
 private fun ConversationItem(
     conversation: ConversationWithMember,
+    avatar: Bitmap?,
     onClick: () -> Unit
 ) {
     // Rows, not cards: a conversation list reads as one list, and the person's colour on the
@@ -238,6 +243,7 @@ private fun ConversationItem(
             MemberAvatar(
                 displayName = conversation.member.displayName,
                 memberId = conversation.member.memberId,
+                bitmap = avatar,
                 colorHue = conversation.member.colorHue,
                 size = 48.dp
             )
@@ -333,6 +339,7 @@ private fun UnreadBadge(count: Int) {
 @Composable
 private fun NewChatDialog(
     members: List<FamilyMember>,
+    avatars: Map<String, Bitmap?>,
     existingConversations: Set<String>,
     onMemberSelected: (String) -> Unit,
     onDismiss: () -> Unit
@@ -358,6 +365,7 @@ private fun NewChatDialog(
                             MemberAvatar(
                                 displayName = member.displayName,
                                 memberId = member.memberId,
+                                bitmap = avatars[member.memberId],
                                 colorHue = member.colorHue,
                                 size = 40.dp
                             )

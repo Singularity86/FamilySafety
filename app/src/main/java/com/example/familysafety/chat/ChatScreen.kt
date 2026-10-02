@@ -90,6 +90,7 @@ fun ChatScreen(
     val isGroupChat by viewModel.isGroupConversation.collectAsState()
     val memberNames by viewModel.memberNames.collectAsState()
     val memberColorHues by viewModel.memberColorHues.collectAsState()
+    val memberAvatars by viewModel.memberAvatars.collectAsState()
 
     val listState = rememberLazyListState()
 
@@ -135,6 +136,7 @@ fun ChatScreen(
                                 MemberAvatar(
                                     displayName = recipient.displayName,
                                     memberId = recipient.memberId,
+                                    bitmap = memberAvatars[recipient.memberId],
                                     colorHue = recipient.colorHue,
                                     size = 36.dp
                                 )
