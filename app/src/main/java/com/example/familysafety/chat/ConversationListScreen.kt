@@ -26,7 +26,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -50,6 +50,7 @@ import com.example.familysafety.storage.MessageType
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.example.familysafety.main.MemberAvatar
 
 /**
  * The Chat tab: the family chat pinned on top, then private one-to-one conversations.
@@ -148,16 +149,13 @@ private fun GroupChatItem(
     onClick: () -> Unit
 ) {
     val unread = summary?.unreadCount ?: 0
-    OutlinedCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
-            .clickable(onClick = onClick)
-    ) {
+    // Rows, not cards: a conversation list reads as one list, and the person's colour on the
+    // avatar is the only colour in each row.
+    Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
@@ -215,6 +213,11 @@ private fun GroupChatItem(
                 }
             }
         }
+        // Inset to the text so the line separates conversations, not avatars.
+        HorizontalDivider(
+            modifier = Modifier.padding(start = 76.dp),
+            color = MaterialTheme.colorScheme.outlineVariant
+        )
     }
 }
 
@@ -223,32 +226,21 @@ private fun ConversationItem(
     conversation: ConversationWithMember,
     onClick: () -> Unit
 ) {
-    OutlinedCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
-            .clickable(onClick = onClick)
-    ) {
+    // Rows, not cards: a conversation list reads as one list, and the person's colour on the
+    // avatar is the only colour in each row.
+    Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Avatar
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = conversation.member.displayName.take(1).uppercase(),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            }
+            MemberAvatar(
+                displayName = conversation.member.displayName,
+                memberId = conversation.member.memberId,
+                colorHue = conversation.member.colorHue,
+                size = 48.dp
+            )
 
             Spacer(modifier = Modifier.width(12.dp))
 
@@ -313,6 +305,11 @@ private fun ConversationItem(
                 }
             }
         }
+        // Inset to the text so the line separates conversations, not avatars.
+        HorizontalDivider(
+            modifier = Modifier.padding(start = 76.dp),
+            color = MaterialTheme.colorScheme.outlineVariant
+        )
     }
 }
 
@@ -358,19 +355,12 @@ private fun NewChatDialog(
                                 .padding(vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.secondaryContainer),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    Icons.Default.Person,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSecondaryContainer
-                                )
-                            }
+                            MemberAvatar(
+                                displayName = member.displayName,
+                                memberId = member.memberId,
+                                colorHue = member.colorHue,
+                                size = 40.dp
+                            )
 
                             Spacer(modifier = Modifier.width(12.dp))
 

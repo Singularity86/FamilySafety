@@ -68,6 +68,9 @@ import java.util.Date
 import java.util.Locale
 import com.example.familysafety.ui.theme.ChipShape
 import com.example.familysafety.ui.theme.ControlShape
+import com.example.familysafety.ui.theme.PersonPalette
+import com.example.familysafety.ui.theme.themedText
+import com.example.familysafety.main.MemberAvatar
 
 /**
  * Screen showing messages in a single conversation.
@@ -127,18 +130,28 @@ fun ChatScreen(
                 TopAppBar(
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primaryContainer),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = if (isGroupChat) "G" else (currentRecipient?.displayName ?: "?").take(1).uppercase(),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                            val recipient = currentRecipient
+                            if (!isGroupChat && recipient != null) {
+                                MemberAvatar(
+                                    displayName = recipient.displayName,
+                                    memberId = recipient.memberId,
+                                    colorHue = recipient.colorHue,
+                                    size = 36.dp
                                 )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.primaryContainer),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "G",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
                             }
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
@@ -232,11 +245,6 @@ private fun DateHeader(dateKey: String) {
     }
 }
 
-/** HSL color matching MemberAvatar, with optional override hue. */
-private fun memberBubbleColor(memberId: String, colorHue: Float? = null): Color {
-    val hue = colorHue ?: ((memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
-    return Color.hsl(hue, 0.55f, 0.45f)
-}
 
 @Composable
 private fun MessageBubble(
@@ -266,7 +274,7 @@ private fun MessageBubble(
         MaterialTheme.colorScheme.onSurfaceVariant
     }
     // Sender identity in group chat still reads via the label color.
-    val labelColor = memberBubbleColor(message.senderId, senderColorHue)
+    val labelColor = PersonPalette.forMember(message.senderId, senderColorHue).themedText()
 
     Row(
         modifier = Modifier.fillMaxWidth(),

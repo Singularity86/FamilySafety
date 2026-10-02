@@ -58,6 +58,9 @@ import kotlinx.coroutines.launch
 import com.example.familysafety.ui.theme.NumericFamily
 import com.example.familysafety.ui.theme.ButtonShape
 import com.example.familysafety.ui.theme.OverlayShape
+import com.example.familysafety.ui.theme.PersonPalette
+import com.example.familysafety.ui.theme.PersonPatternsPreference
+import com.example.familysafety.ui.theme.OnPersonColor
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
@@ -346,7 +349,7 @@ fun SettingsScreen(
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
                 ColorSwatchPicker(
-                    selectedHue = myColorHue ?: memberHueFromId(myMemberId),
+                    selectedHue = myColorHue ?: PersonPalette.hueFromId(myMemberId),
                     onHueSelected = { viewModel.updateMyColorHue(it) }
                 )
             }
@@ -391,6 +394,29 @@ fun SettingsScreen(
                             }
                         )
                     }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                val patternsOn = PersonPatternsPreference.enabled()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text(
+                            text = "Colour-blind patterns",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Give each person a pattern as well as a colour, on avatars and map pins. Only changes this phone.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = patternsOn,
+                        onCheckedChange = { PersonPatternsPreference.set(context, it) }
+                    )
                 }
             }
         }
@@ -1421,33 +1447,42 @@ private fun PermissionStatusRow(label: String, granted: Boolean, onGrant: () -> 
     }
 }
 
-/** Preset hues evenly spaced around the color wheel (same saturation/lightness as avatars). */
-private val presetHues = listOf(0f, 30f, 60f, 90f, 140f, 180f, 210f, 240f, 270f, 300f, 330f)
-
-/** Derive the auto hue from memberId (mirrors MemberAvatar logic). */
-fun memberHueFromId(memberId: String): Float =
-    ((memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
-
+/**
+ * The twelve person colours to choose from. Choosing one stores its hue, the same field and
+ * format as before, so older builds keep showing a colour close to it.
+ */
 @Composable
 private fun ColorSwatchPicker(
     selectedHue: Float,
     onHueSelected: (Float) -> Unit
 ) {
+    val selected = PersonPalette.forHue(selectedHue)
+    val patterns = PersonPatternsPreference.enabled()
     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        items(presetHues) { hue ->
-            val color = Color.hsl(hue, 0.55f, 0.45f)
-            val isSelected = kotlin.math.abs(hue - selectedHue) < 5f
+        items(PersonPalette.colors) { personColor ->
+            val isSelected = personColor == selected
             Box(
+                contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .background(color)
+                    .background(personColor.fill)
+                    .then(if (patterns) Modifier.personPatternRing(personColor) else Modifier)
                     .then(
-                        if (isSelected) Modifier.border(3.dp, Color.White, CircleShape)
+                        if (isSelected) Modifier.border(3.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
                         else Modifier
                     )
-                    .clickable { onHueSelected(hue) }
-            )
+                    .clickable(onClickLabel = personColor.name) { onHueSelected(personColor.storedHue) }
+            ) {
+                if (isSelected) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "${personColor.name}, selected",
+                        tint = OnPersonColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
         }
     }
 }

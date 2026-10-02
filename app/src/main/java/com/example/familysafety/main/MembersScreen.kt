@@ -36,6 +36,14 @@ import com.example.familysafety.ui.theme.statusColors
 import com.example.familysafety.invite.JoinRequest
 import com.example.familysafety.ui.components.ShimmerBox
 import com.example.familysafety.ui.theme.ChipShape
+import com.example.familysafety.ui.theme.PersonPalette
+import com.example.familysafety.ui.theme.PersonColor
+import com.example.familysafety.ui.theme.OnPersonColor
+import com.example.familysafety.ui.theme.PersonPatternsPreference
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.foundation.clickable
 
 
 @Composable
@@ -69,7 +77,6 @@ fun MembersScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(top = 16.dp, bottom = 88.dp)
         ) {
             item {
@@ -236,22 +243,49 @@ internal fun MemberAvatar(
         .joinToString("") { it.first().uppercaseChar().toString() }
         .ifEmpty { "?" }
 
-    val hue = colorHue ?: ((memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
-    val bgColor = Color.hsl(hue, 0.55f, 0.45f)
+    val personColor = PersonPalette.forMember(memberId, colorHue)
+    val patterns = PersonPatternsPreference.enabled()
 
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
             .size(size)
             .clip(CircleShape)
-            .background(bgColor)
+            .background(personColor.fill)
+            .then(if (patterns) Modifier.personPatternRing(personColor) else Modifier)
     ) {
         Text(
             text = initials,
-            color = Color.White,
+            color = OnPersonColor,
             fontSize = (size.value * 0.38f).sp,
             fontWeight = FontWeight.SemiBold
         )
+    }
+}
+
+/**
+ * The person's pattern in a ring at the avatar's edge, for the colour-blind setting. A ring
+ * rather than a full fill so the lines never run behind the initial.
+ */
+internal fun Modifier.personPatternRing(personColor: PersonColor): Modifier = drawBehind {
+    val r = size.minDimension / 2f
+    val ring = (r * 0.34f).coerceAtLeast(3.dp.toPx())
+    val c = center
+    val clip = android.graphics.Path().apply {
+        fillType = android.graphics.Path.FillType.EVEN_ODD
+        addCircle(c.x, c.y, r, android.graphics.Path.Direction.CW)
+        addCircle(c.x, c.y, r - ring, android.graphics.Path.Direction.CW)
+    }
+    drawIntoCanvas { canvas ->
+        val native = canvas.nativeCanvas
+        native.save()
+        native.clipPath(clip)
+        personColor.pattern.draw(
+            native,
+            android.graphics.RectF(0f, 0f, size.width, size.height),
+            cell = (r * 0.44f).coerceAtLeast(6.dp.toPx())
+        )
+        native.restore()
     }
 }
 
@@ -421,13 +455,16 @@ private fun MemberCard(
         )
     }
 
-    OutlinedCard(
-        modifier = modifier.fillMaxWidth(),
-        onClick = { showDialog = true }
+    // A row, not a card: members are a list of people, not separate objects to pick up.
+    // The person's colour on the avatar is the only colour in the row.
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { showDialog = true }
     ) {
         Row(
             modifier = Modifier
-                .padding(16.dp)
+                .padding(vertical = 12.dp)
                 .fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
@@ -575,6 +612,7 @@ private fun MemberCard(
                 }
             }
         }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 

@@ -60,6 +60,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import com.example.familysafety.ui.theme.PersonPalette
 
 private const val RETENTION_DAYS = 30
 private const val DRIVE_SPEED_MS = 7f
@@ -82,9 +83,10 @@ fun HistoryScreen(
     val selectedDayStart by viewModel._selectedDayStart.collectAsState()
     val totalRecordCount by viewModel.totalRecordCount.collectAsState()
 
-    val colorHue = member?.colorHue
-        ?: ((viewModel.memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
-    val accentColor = ColorUtils.HSLToColor(floatArrayOf(colorHue, 0.70f, 0.50f))
+    // The darker shade of the person's colour: the trail is drawn over the street map, whose
+    // tiles are light in both app themes.
+    val accentColor = PersonPalette.forMember(viewModel.memberId, member?.colorHue)
+        .textOnLight.toArgb()
 
     val dayLabel = remember(selectedDayStart) {
         SimpleDateFormat("EEEE, MMM d", Locale.getDefault()).format(Date(selectedDayStart))
