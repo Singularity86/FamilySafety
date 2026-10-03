@@ -194,6 +194,64 @@ final class WireMessagesTests: XCTestCase {
         XCTAssertNil(decoded.changedMemberId)
     }
 
+    // MARK: - §6.9 Family subscription fields on GroupDefinition
+
+    func test_groupDefinition_billingFieldsAbsentWhenNotSet() throws {
+        let alice = try identity("alice")
+        let group = GroupDefinition(
+            groupId: "g", groupName: "n", createdAtEpochMs: 1, creatorMemberId: alice.memberId,
+            members: [], version: 1
+        )
+        XCTAssertNil(group.subscriberMemberId)
+        XCTAssertNil(group.subscriptionConfirmedAtEpochMs)
+        XCTAssertNil(group.grantCode)
+    }
+
+    func test_groupDefinition_billingFieldsRoundTrip() throws {
+        let alice = try identity("alice")
+        let group = GroupDefinition(
+            groupId: "g", groupName: "n", createdAtEpochMs: 1, creatorMemberId: alice.memberId,
+            members: [], version: 1,
+            subscriberMemberId: alice.memberId,
+            subscriptionConfirmedAtEpochMs: 1_700_000_000_000,
+            grantCode: "deadbeef"
+        )
+        let decoded = try JSONDecoder().decode(GroupDefinition.self, from: try JSONEncoder().encode(group))
+        XCTAssertEqual(decoded, group)
+    }
+
+    func test_groupDefinition_toleratesSenderPredatingBillingFields() throws {
+        // A peer on an older build simply omits these keys entirely (not null) — must
+        // decode to nil, not throw.
+        let json = """
+        {"groupId":"g","groupName":"n","createdAtEpochMs":1,"creatorMemberId":"c",
+         "members":[],"version":1}
+        """
+        let decoded = try JSONDecoder().decode(GroupDefinition.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.subscriberMemberId)
+        XCTAssertNil(decoded.subscriptionConfirmedAtEpochMs)
+        XCTAssertNil(decoded.grantCode)
+    }
+
+    func test_groupDefinition_billingFieldsDoNotAffectStateHash() throws {
+        let alice = try identity("alice")
+        let base = GroupDefinition(
+            groupId: "g", groupName: "n", createdAtEpochMs: 1, creatorMemberId: alice.memberId,
+            members: [], version: 1
+        )
+        let withBilling = GroupDefinition(
+            groupId: "g", groupName: "n", createdAtEpochMs: 1, creatorMemberId: alice.memberId,
+            members: [], version: 1,
+            subscriberMemberId: alice.memberId,
+            subscriptionConfirmedAtEpochMs: 1_700_000_000_000,
+            grantCode: "deadbeef"
+        )
+        // Re-confirming a subscription daily must bump the version without ever changing
+        // the roster's identity hash (§6.9) — a hash that moved here would mean a device
+        // that only re-confirmed a subscription would fail every peer's chain check.
+        XCTAssertEqual(base.computeStateHash(), withBilling.computeStateHash())
+    }
+
     // MARK: - §6.6 Replication
 
     func test_replicationRequestResponse_roundTrip() throws {

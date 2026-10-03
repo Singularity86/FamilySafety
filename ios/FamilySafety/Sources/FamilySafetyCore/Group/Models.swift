@@ -64,6 +64,17 @@ public struct GroupDefinition: Codable, Equatable {
     /// Append-only tombstones (Android 1.12.7+). Defaults to empty for groups that have
     /// never removed anyone, which also keeps computeStateHash unchanged for them (§7.1).
     public let removedMemberIds: [String]
+    /// Whoever most recently confirmed the family's subscription is active (§6.9,
+    /// unreleased on Android as of this field's addition). Excluded from
+    /// computeStateHash — a fact about the family, not a membership decision.
+    public let subscriberMemberId: String?
+    /// When `subscriberMemberId` last confirmed. Valid only while under a staleness
+    /// window the caller enforces (Android: 4 days) — there is no explicit "unsubscribed"
+    /// message; a lapsed subscription simply stops being re-confirmed and ages out.
+    public let subscriptionConfirmedAtEpochMs: Int64?
+    /// A developer-issued grant code (base64 `GrantCodePayload`, §6.9), if this family has
+    /// one. Verified entirely on-device against an embedded public key — no server.
+    public let grantCode: String?
 
     public init(
         groupId: String,
@@ -74,7 +85,10 @@ public struct GroupDefinition: Codable, Equatable {
         version: Int64,
         previousStateHash: String? = nil,
         fileEncryptionKey: String? = nil,
-        removedMemberIds: [String] = []
+        removedMemberIds: [String] = [],
+        subscriberMemberId: String? = nil,
+        subscriptionConfirmedAtEpochMs: Int64? = nil,
+        grantCode: String? = nil
     ) {
         self.groupId = groupId
         self.groupName = groupName
@@ -85,11 +99,15 @@ public struct GroupDefinition: Codable, Equatable {
         self.previousStateHash = previousStateHash
         self.fileEncryptionKey = fileEncryptionKey
         self.removedMemberIds = removedMemberIds
+        self.subscriberMemberId = subscriberMemberId
+        self.subscriptionConfirmedAtEpochMs = subscriptionConfirmedAtEpochMs
+        self.grantCode = grantCode
     }
 
     private enum CodingKeys: String, CodingKey {
         case groupId, groupName, createdAtEpochMs, creatorMemberId, members, version
         case previousStateHash, fileEncryptionKey, removedMemberIds
+        case subscriberMemberId, subscriptionConfirmedAtEpochMs, grantCode
     }
 
     /// Tolerates senders that predate this field entirely (absent, not just null).
@@ -104,13 +122,21 @@ public struct GroupDefinition: Codable, Equatable {
         previousStateHash = try c.decodeIfPresent(String.self, forKey: .previousStateHash)
         fileEncryptionKey = try c.decodeIfPresent(String.self, forKey: .fileEncryptionKey)
         removedMemberIds = try c.decodeIfPresent([String].self, forKey: .removedMemberIds) ?? []
+        subscriberMemberId = try c.decodeIfPresent(String.self, forKey: .subscriberMemberId)
+        subscriptionConfirmedAtEpochMs = try c.decodeIfPresent(Int64.self, forKey: .subscriptionConfirmedAtEpochMs)
+        grantCode = try c.decodeIfPresent(String.self, forKey: .grantCode)
     }
 
     /// Deterministic hash of this group state, used for hash-chain integrity; members
     /// sign this hash to approve membership changes. MUST match
     /// GroupDefinition.computeStateHash() on Android byte-for-byte — see
     /// IOS_PORT_SPEC.md §7.1. Only memberId + both public keys are hashed, sorted
-    /// ascending by memberId; displayName/avatar/etc. are not included.
+    /// ascending by memberId; displayName/avatar/etc. are not included. Deliberately
+    /// excludes fileEncryptionKey and the three billing fields (subscriberMemberId,
+    /// subscriptionConfirmedAtEpochMs, grantCode, §6.9) — facts about the family, not
+    /// membership decisions; they still travel via the ordinary version-bump broadcast,
+    /// just outside the hash, so re-confirming a subscription daily doesn't change the
+    /// roster's identity hash.
     public func computeStateHash() -> String {
         var canonical = groupId
         canonical += "|"
