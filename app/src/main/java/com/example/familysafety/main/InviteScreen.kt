@@ -21,13 +21,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.example.familysafety.ui.theme.NumericFamily
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -152,7 +152,7 @@ fun InviteScreen(
                             Text(
                                 text = code,
                                 style = MaterialTheme.typography.bodySmall.copy(
-                                    fontFamily = FontFamily.Monospace
+                                    fontFamily = NumericFamily
                                 ),
                                 modifier = Modifier
                                     .fillMaxWidth()

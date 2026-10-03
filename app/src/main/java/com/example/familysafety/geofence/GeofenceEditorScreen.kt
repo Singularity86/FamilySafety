@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlin.math.exp
 import kotlin.math.ln
+import com.example.familysafety.ui.theme.ButtonShape
 
 private val PRESET_HUES = listOf(0f, 30f, 60f, 90f, 140f, 180f, 210f, 240f, 270f, 300f, 330f)
 
@@ -215,6 +216,7 @@ fun GeofenceEditorScreen(
                     }
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(
+                        shape = ButtonShape,
                         onClick = {
                             myLocation?.let {
                                 latitude = it.latitude

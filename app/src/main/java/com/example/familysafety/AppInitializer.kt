@@ -47,6 +47,9 @@ import timber.log.Timber
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 
 /**
  * Handles app initialization and wiring up dependencies.
@@ -244,6 +247,11 @@ class AppInitializer @Inject constructor(
                 // that ever repaired a stalled transfer was a user tapping the file.
                 FileTransferWorker.scheduleIfNeeded(context)
 
+                // Re-confirms the family's subscription with Play roughly daily. There is no
+                // server to push a lapse event, so this is what keeps entitlement current —
+                // see EntitlementCalculator.SUBSCRIPTION_STALENESS_MS.
+                com.example.familysafety.billing.SubscriptionRefreshWorker.scheduleIfNeeded(context)
+
                 // Watch for membership changes (new members added/removed) and
                 // update MQTT subscriptions + encryption keys automatically.
                 var previousMemberIds: Set<String> = groupDef.members.map { it.memberId }.toSet()
@@ -390,7 +398,12 @@ class AppInitializer @Inject constructor(
                 .apply { if (pendingIntent != null) setContentIntent(pendingIntent) }
                 .build()
 
-            NotificationManagerCompat.from(context).notify(REMOVED_NOTIFICATION_ID, notification)
+            // Android 13+ drops notifications without the permission; check rather than rely on it.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED) {
+                NotificationManagerCompat.from(context).notify(REMOVED_NOTIFICATION_ID, notification)
+            }
         } catch (e: Exception) {
             Timber.e(e, "$TAG: failed to post removal notification")
         }

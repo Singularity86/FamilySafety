@@ -10,6 +10,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
+import com.example.familysafety.ui.theme.ButtonShape
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,6 +72,7 @@ fun EnterNameScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Button(
+                shape = ButtonShape,
                 onClick = {
                     viewModel.setDisplayName(name)
                     onNext()

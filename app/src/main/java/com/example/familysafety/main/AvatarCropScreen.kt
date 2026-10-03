@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.example.familysafety.ui.theme.ButtonShape
 
 @Composable
 fun AvatarCropScreen(
@@ -177,6 +178,7 @@ fun AvatarCropScreen(
             }
             Spacer(Modifier.weight(1f))
             Button(
+                shape = ButtonShape,
                 onClick = {
                     val b = imageBitmap ?: return@Button
                     val cropped = computeCropBitmap(b, scale, offset, containerSize)

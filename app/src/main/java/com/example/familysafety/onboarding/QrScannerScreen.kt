@@ -6,7 +6,6 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
@@ -25,7 +24,10 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.common.InputImage
 import com.example.familysafety.ui.components.PermissionRationaleCard
 import com.example.familysafety.ui.theme.Spacing
+import com.example.familysafety.ui.theme.ControlShape
 
+// ImageProxy.image is a CameraX opt-in API; reading the frame for ML Kit is its intended use.
+@androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
 fun QrScannerScreen(
@@ -137,7 +139,7 @@ fun QrScannerScreen(
                         .border(
                             width = 3.dp,
                             color = MaterialTheme.colorScheme.primary,
-                            shape = RoundedCornerShape(16.dp)
+                            shape = ControlShape
                         )
                 )
 

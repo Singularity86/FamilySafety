@@ -692,6 +692,47 @@ why the duplication is worth removing before they stop agreeing.
     reliability is confirmed) and adjusting; deciding whether "Drive" vs "Trip" should use
     activity-recognition state instead of a speed threshold; deciding whether stay/trip
     merging should be aware of the family's own zone boundaries rather than only distance.
+12. **Family subscription — live as of 1.14.0 (39), 2026-09-26.** Gates Chat, History and
+    Files behind a 60-day free trial, then $4/month; never gates live location, alerts,
+    crash detection, or the Vault. New `billing/` package: `Entitlement` +
+    `EntitlementCalculator` (pure, unit tested), `GrantCode` (Ed25519 grant-code
+    verification, BouncyCastle — chosen specifically so it runs in a JVM test without the
+    native-library problem `LazysodiumCryptoProvider` has), `EntitlementRepository`
+    (wraps `GroupStateManager`, exposes the live `StateFlow<Entitlement>`),
+    `BillingManager` (Play Billing wrapper, on-device purchase signature verification, no
+    server), `SubscriptionRefreshWorker` (daily re-confirmation, `EntryPointAccessors`
+    style like `FileTransferWorker` — no `hilt-work` dependency added), and
+    `EarlySubscribeConfirm` (confirms before billing someone who subscribes mid-trial,
+    since there is no Play-side trial offer — see below — and Play cannot be told how
+    many free days a family has left). `GroupDefinition` gained three fields
+    (`subscriberMemberId`, `subscriptionConfirmedAtEpochMs`, `grantCode`), excluded from
+    `computeStateHash` like `fileEncryptionKey`, with explicit merge rules added to
+    `GroupStateMerge` (newer subscription confirmation wins on conflict, not whichever
+    side wins the roster tiebreak). Full spec write-up: `ios/IOS_PORT_SPEC.md` §6.9.
+
+    All four `BillingConfig` values are real: product ID
+    `monthly.jibaro.familysafety.subscription` ($4/month base plan, no Play-side trial
+    offer — deliberately deactivated, since a second trial on top of the app's own 60-day
+    one would let an early subscriber go up to ~120 days before being charged, and a late
+    one would get another 60 free days on the exact purchase that was meant to end that);
+    the real Play licensing key; the grant-signing public key (private half in
+    `keystore/grant-signing-key`, generated 2026-09-26, gitignored, back it up — losing it
+    means no new codes ever, existing ones keep working; leaking it means anyone who knows
+    a family's groupId could forge them a permanent grant);
+    `PAYWALL_INTRODUCED_AT_EPOCH_MS = 1790483432067` (2026-09-26) — every family that
+    existed before that instant, including every real family already using the app, is
+    grandfathered permanently.
+
+    A real bug shipped and was caught before release: Billing Library 8.0.0 (required by
+    Play over 7.1.1) throws from an empty `PendingPurchasesParams`, crashing every launch
+    past onboarding. Found from an actual crash log, not the library's docs. Fixed by
+    calling `enableOneTimeProducts()` unconditionally.
+
+    Still open: no on-device *purchase* has actually been completed (crash-free launch and
+    grant-code redemption are confirmed; the Play purchase sheet itself is not, and needs a
+    license tester); and the iOS spec's §12 cross-platform test vector for grant codes
+    (§6.9 notes this). Both `PaywallScreen` and `MembershipCard` read the live price from
+    `ProductDetails`, so a future Play Console price change needs no app update to match.
 
 ## 2026-09-08 incident: `pm clear` destroyed a live member of the real family
 

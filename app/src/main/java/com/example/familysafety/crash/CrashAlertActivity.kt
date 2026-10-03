@@ -11,7 +11,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
@@ -32,6 +31,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import javax.inject.Inject
+import com.example.familysafety.ui.theme.ButtonShape
 
 @AndroidEntryPoint
 class CrashAlertActivity : ComponentActivity() {
@@ -185,7 +185,7 @@ private fun CrashAlertScreen(
                     containerColor = Color.White,
                     contentColor = Color(0xFFB71C1C)
                 ),
-                shape = RoundedCornerShape(16.dp)
+                shape = ButtonShape
             ) {
                 Icon(
                     imageVector = Icons.Default.CheckCircle,

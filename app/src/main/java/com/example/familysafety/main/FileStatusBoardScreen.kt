@@ -35,6 +35,7 @@ import com.example.familysafety.storage.FileTransferLogEntity
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.compose.ui.graphics.StrokeCap
 
 /**
  * Every shared file, what state it is in, and how many devices hold it.
@@ -187,6 +188,7 @@ private fun FileStatusCard(
 
             if (row.status == FileStatus.DOWNLOADING || row.status == FileStatus.WAITING_FOR_PEER) {
                 LinearProgressIndicator(
+                    strokeCap = StrokeCap.Butt,
                     progress = { row.progressFraction },
                     modifier = Modifier.fillMaxWidth()
                 )

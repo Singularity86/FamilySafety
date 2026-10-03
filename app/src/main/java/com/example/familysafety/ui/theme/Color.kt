@@ -8,10 +8,15 @@ val Surface0      = Color(0xFF101A15)   // default background
 val Surface1      = Color(0xFF16231C)   // card background
 val Surface2      = Color(0xFF1D2C24)   // elevated surfaces
 
-// Light surfaces (unchanged)
-val SurfaceLight0 = Color(0xFFF4F7FB)
+// Light surfaces: the same pine, thinned to a whitewash.
+//
+// Every neutral in this file — light grounds, text, borders, in both themes — leans toward
+// the pine of the dark ground. They used to be Tailwind's "slate" greys (cool blue-grey;
+// the light border was slate-200 exactly), which put a cold office grey under a pine and
+// amber app and is the most recognisable default look of generated UIs.
+val SurfaceLight0 = Color(0xFFF2F5F0)
 val SurfaceLight1 = Color(0xFFFFFFFF)
-val SurfaceLight2 = Color(0xFFEAF0F7)
+val SurfaceLight2 = Color(0xFFE7EDE6)
 
 // Accent
 val PorchAmber    = Color(0xFFE8C858)   // primary actions, brand accent — softened toward gold (was #E9A23C, hue 35° read as orange)
@@ -25,23 +30,24 @@ val White         = Color(0xFFFFFFFF)
 // only 3:1 of non-text, and a colour dark enough for 11sp label text reads as mud on an 8dp
 // dot. So light splits each signal in two. Contrast below is quoted against SurfaceLight0,
 // the darker of the two light grounds and therefore the binding one — cards sit on
-// SurfaceLight1 (pure white) and clear these numbers with room to spare.
+// SurfaceLight1 (pure white) and clear these numbers with room to spare. Re-check these
+// whenever SurfaceLight0 changes.
 val SuccessGreen  = Color(0xFF35B378)   // healthy/connected/protected states — distinct from AmberWarning on purpose
 val AmberWarning  = Color(0xFFE2B45F)   // warnings, relay state
 val RedDanger     = Color(0xFFFF5B66)   // genuine danger only
 
 // Light, text (>= 4.5:1)
-val SuccessTextLight = Color(0xFF1B7E4D)   // 4.72:1
+val SuccessTextLight = Color(0xFF1B7E4D)   // 4.61:1
 // Amber is the awkward one: brown is just dark yellow, so hitting the text bar by dropping
 // lightness alone turns it to mud. These keep the blue channel at zero — full chroma at the
 // luminance the bar demands — which reads as burnt amber rather than brown.
-val WarningTextLight = Color(0xFFA36000)   // 4.62:1
-val DangerTextLight  = Color(0xFFC32B36)   // 5.25:1
+val WarningTextLight = Color(0xFFA36000)   // 4.51:1
+val DangerTextLight  = Color(0xFFC32B36)   // 5.13:1
 
 // Light, indicators — dots, bars, icon tints (>= 3:1)
-val SuccessIndicatorLight = Color(0xFF219A5E)  // 3.34:1
-val WarningIndicatorLight = Color(0xFFC77800)  // 3.19:1
-val DangerIndicatorLight  = Color(0xFFE03E4A)  // 3.94:1
+val SuccessIndicatorLight = Color(0xFF219A5E)  // 3.26:1
+val WarningIndicatorLight = Color(0xFFC77800)  // 3.12:1
+val DangerIndicatorLight  = Color(0xFFE03E4A)  // 3.85:1
 
 // Tonal containers.
 //
@@ -77,35 +83,41 @@ val SurfaceContainerDark        = Color(0xFF16231C)
 val SurfaceContainerHighDark    = Color(0xFF1D2C24)
 val SurfaceContainerHighestDark = Color(0xFF24352C)
 
-val SurfaceDimLight              = Color(0xFFDDE3EA)
+val SurfaceDimLight              = Color(0xFFD9E0D8)
 val SurfaceBrightLight           = Color(0xFFFFFFFF)
 val SurfaceContainerLowestLight  = Color(0xFFFFFFFF)
-val SurfaceContainerLowLight     = Color(0xFFF7F9FC)
-val SurfaceContainerLight        = Color(0xFFF1F5F9)
-val SurfaceContainerHighLight    = Color(0xFFEAF0F7)
-val SurfaceContainerHighestLight = Color(0xFFE3EBF3)
+val SurfaceContainerLowLight     = Color(0xFFF7F9F6)
+val SurfaceContainerLight        = Color(0xFFEFF3EE)
+val SurfaceContainerHighLight    = Color(0xFFE7EDE6)
+val SurfaceContainerHighestLight = Color(0xFFE0E7DF)
 
 // Inverse pair, used by snackbars.
 val InverseSurfaceDark    = Color(0xFFE8EDE9)
 val InverseOnSurfaceDark  = Color(0xFF16231C)
 val InverseSurfaceLight   = Color(0xFF1D2C24)
-val InverseOnSurfaceLight = Color(0xFFF4F7FB)
+val InverseOnSurfaceLight = Color(0xFFF2F5F0)
 
-// Text
-val TextPrimary   = Color(0xFFF3F5FA)
-val TextSecondary = Color(0xFF95A0B3)
-val TextDisabled  = Color(0xFF4A5468)
+// Text. Contrast quoted against the card surface (Surface1 / SurfaceLight0).
+val TextPrimary   = Color(0xFFEEF2EC)   // 14.4:1
+val TextSecondary = Color(0xFFA3B2A8)   // 7.3:1
+val TextDisabled  = Color(0xFF5E6E63)   // 3.0:1 — disabled text is exempt, but stays findable
 
-val TextPrimaryLight   = Color(0xFF182131)
-val TextSecondaryLight = Color(0xFF5F6B7A)
-val TextDisabledLight   = Color(0xFF9AA6B4)
+val TextPrimaryLight   = Color(0xFF15231B)   // 14.8:1
+val TextSecondaryLight = Color(0xFF536358)   // 5.8:1
+val TextDisabledLight  = Color(0xFF97A69B)   // 2.3:1, exempt
 
-// Borders / subtle chrome
-val OutlineMuted  = Color(0xFF263042)
-val OutlineSoft   = Color(0xFF1E2633)
+// Borders.
+//
+// Two jobs, two strengths. Material draws `outline` (OutlineMuted) as the border of text
+// fields and outlined buttons — the only thing that shows where a control is, so it has to
+// clear WCAG's 3:1 for control boundaries on every surface. Both old values sat near 1.3:1.
+// `outlineVariant` (OutlineSoft) is the hairline on cards and dividers, which separates
+// things that are already distinct and is meant to stay quiet.
+val OutlineMuted  = Color(0xFF64796B)   // ≥ 3.1:1 on Surface0–2
+val OutlineSoft   = Color(0xFF2C3D33)
 
-val OutlineMutedLight = Color(0xFFD2DAE4)
-val OutlineSoftLight  = Color(0xFFE2E8F0)
+val OutlineMutedLight = Color(0xFF7A8C7F)   // ≥ 3.0:1 on SurfaceLight0–2
+val OutlineSoftLight  = Color(0xFFD3DDD4)
 
 // Semantic aliases (reference constants above, no duplicate hex)
 val ColorSuccess  = SuccessGreen

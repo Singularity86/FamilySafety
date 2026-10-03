@@ -41,8 +41,8 @@ android {
         applicationId = "jibaro.spacepirate.love"
         minSdk = 26
         targetSdk = 36
-        versionCode = 35
-        versionName = "1.13.6"
+        versionCode = 40
+        versionName = "1.15.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -217,6 +217,10 @@ dependencies {
 
     // Map - OpenStreetMap via osmdroid (no API key required)
     implementation("org.osmdroid:osmdroid-android:6.1.18")
+
+    // Family subscription (billing/) - Play Billing for the purchase flow itself; purchase
+    // signature verification is plain java.security.Signature, no extra dependency needed.
+    implementation("com.android.billingclient:billing-ktx:8.0.0")
     
     // MQTT - core client only; the Android service wrapper (org.eclipse.paho.android.service)
     // is incompatible with Android 12+ (AlarmPingSender uses PendingIntent without

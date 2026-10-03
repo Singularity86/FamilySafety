@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import com.example.familysafety.ui.theme.ButtonShape
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,6 +81,7 @@ fun CreateFamilyScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Button(
+                shape = ButtonShape,
                 onClick = {
                     scope.launch {
                         viewModel.setFamilyName(familyName)

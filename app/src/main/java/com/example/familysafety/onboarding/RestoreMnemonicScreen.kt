@@ -14,6 +14,7 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import com.example.familysafety.ui.theme.ButtonShape
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -125,6 +126,7 @@ fun RestoreMnemonicScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Button(
+                shape = ButtonShape,
                 onClick = submit,
                 modifier = Modifier
                     .fillMaxWidth()

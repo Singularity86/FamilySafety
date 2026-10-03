@@ -55,8 +55,17 @@ class MainViewModel @Inject constructor(
     private val securityEventRepository: SecurityEventRepository,
     private val networkMonitor: NetworkMonitor,
     private val routingService: RoutingService,
+    val entitlementRepository: com.example.familysafety.billing.EntitlementRepository,
+    val billingManager: com.example.familysafety.billing.BillingManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
+
+    val entitlement: StateFlow<com.example.familysafety.billing.Entitlement> =
+        entitlementRepository.entitlement
+
+    init {
+        viewModelScope.launch { billingManager.loadProductDetails() }
+    }
 
     enum class ConnectionMode { LAN, MIXED, RELAY, OFFLINE }
 

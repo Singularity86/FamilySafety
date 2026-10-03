@@ -92,6 +92,10 @@ object ChatRoutes {
     const val CHAT_DETAIL       = "chat/conversation/{memberId}"
 
     fun chatDetail(memberId: String) = "chat/conversation/$memberId"
+
+    /** A route that opens one conversation (as opposed to the conversation list). */
+    fun isThread(route: String): Boolean =
+        route == GROUP_CHAT || (route.startsWith(chatDetail("")) && route.length > chatDetail("").length)
 }
 
 // 4 pager pages — label/icon for bottom nav
@@ -120,7 +124,42 @@ fun MainScreen(
     onNavigationHandled: () -> Unit = {}
 ) {
     val driveEstimateState by viewModel.driveEstimateState.collectAsState()
+    val entitlement by viewModel.entitlement.collectAsState()
     val navController = rememberNavController()
+
+    var showTrialReminder by remember { mutableStateOf(true) }
+    // Shared with MembershipCard: confirms before billing an eager early subscriber, since
+    // there is no Play-side trial offer to defer the charge on its own — see
+    // billing/EarlySubscribeConfirm.kt.
+    val confirmedSubscribe = com.example.familysafety.billing.rememberConfirmedSubscribeAction(
+        entitlement, viewModel.billingManager
+    )
+    if (showTrialReminder) {
+        com.example.familysafety.billing.TrialReminderDialog(
+            entitlement = entitlement,
+            onDismiss = { showTrialReminder = false },
+            onSubscribe = {
+                showTrialReminder = false
+                confirmedSubscribe()
+            }
+        )
+    }
+
+    // A chat notification names a specific conversation. Handled here rather than in the
+    // pager's effect, which is not composed while another thread is already open on top —
+    // there the tap would do nothing. The thread replaces whatever detail screen is open,
+    // so backing out lands on the home pager. Cleared once handled so a second tap on a
+    // notification for the same thread is not swallowed as an unchanged key.
+    LaunchedEffect(navigateTo) {
+        val route = navigateTo ?: return@LaunchedEffect
+        if (ChatRoutes.isThread(route)) {
+            navController.navigate(route) {
+                popUpTo(MainRoute.Map.route)
+                launchSingleTop = true
+            }
+            onNavigationHandled()
+        }
+    }
 
     NavHost(
         navController = navController,
@@ -422,22 +461,31 @@ fun MainScreen(
                             },
                             onNavigateToFiles = {
                                 navigatePagerTo(2)
+                            },
+                            onMessageMember = { memberId ->
+                                navController.navigate(ChatRoutes.chatDetail(memberId))
                             }
                         )
-                        2 -> FilesScreen(
-                            onOpenStatusBoard = { navController.navigate("file_status_board") },
-                            onOpenVault = { code ->
-                                vaultViewModel.openWithCode(code)
-                                navController.navigate("vault")
-                            },
-                            viewModel = filesViewModel
-                        )
-                        3 -> ChatScreen(
-                            memberId = "",
-                            onBack = {},
-                            viewModel = chatViewModel,
-                            showTopBar = false
-                        )
+                        2 -> com.example.familysafety.billing.GatedFeature("Files", entitlement, viewModel) {
+                            FilesScreen(
+                                onOpenStatusBoard = { navController.navigate("file_status_board") },
+                                onOpenVault = { code ->
+                                    vaultViewModel.openWithCode(code)
+                                    navController.navigate("vault")
+                                },
+                                viewModel = filesViewModel
+                            )
+                        }
+                        3 -> com.example.familysafety.billing.GatedFeature("Chat", entitlement, viewModel) {
+                            ConversationListScreen(
+                                onOpenGroupChat = { navController.navigate(ChatRoutes.GROUP_CHAT) },
+                                onOpenConversation = { memberId ->
+                                    navController.navigate(ChatRoutes.chatDetail(memberId))
+                                },
+                                viewModel = chatViewModel,
+                                showTopBar = false
+                            )
+                        }
                         4 -> SettingsScreen(
                             viewModel = viewModel,
                             onThemeChanged = onThemeChanged,
@@ -474,14 +522,16 @@ fun MainScreen(
         // Files + Zones remain as NavHost destinations even though they are
         // not in the bottom nav, so programmatic navigation still resolves them.
         composable(MainRoute.Files.route) {
-            FilesScreen(
-                onOpenStatusBoard = { navController.navigate("file_status_board") },
-                onOpenVault = { code ->
-                    vaultViewModel.openWithCode(code)
-                    navController.navigate("vault")
-                },
-                viewModel = filesViewModel
-            )
+            com.example.familysafety.billing.GatedFeature("Files", entitlement, viewModel) {
+                FilesScreen(
+                    onOpenStatusBoard = { navController.navigate("file_status_board") },
+                    onOpenVault = { code ->
+                        vaultViewModel.openWithCode(code)
+                        navController.navigate("vault")
+                    },
+                    viewModel = filesViewModel
+                )
+            }
         }
 
         // Reached only by submitting text from the Files search box. Not in the bottom nav,
@@ -537,12 +587,26 @@ fun MainScreen(
         }
 
         composable(ChatRoutes.CONVERSATION_LIST) {
-            ConversationListScreen(
-                onConversationClick = { memberId ->
-                    navController.navigate(ChatRoutes.chatDetail(memberId))
-                },
-                viewModel = chatViewModel
-            )
+            com.example.familysafety.billing.GatedFeature("Chat", entitlement, viewModel) {
+                ConversationListScreen(
+                    onOpenGroupChat = { navController.navigate(ChatRoutes.GROUP_CHAT) },
+                    onOpenConversation = { memberId ->
+                        navController.navigate(ChatRoutes.chatDetail(memberId))
+                    },
+                    viewModel = chatViewModel
+                )
+            }
+        }
+
+        // Each open conversation gets its own ChatViewModel (scoped to its back-stack
+        // entry), so a thread on top never changes what the Chat tab underneath holds.
+        composable(ChatRoutes.GROUP_CHAT) {
+            com.example.familysafety.billing.GatedFeature("Chat", entitlement, viewModel) {
+                ChatScreen(
+                    memberId = "",
+                    onBack = { navController.popBackStack() }
+                )
+            }
         }
 
         composable(
@@ -550,11 +614,12 @@ fun MainScreen(
             arguments = listOf(navArgument("memberId") { type = NavType.StringType })
         ) { backStackEntry ->
             val memberId = backStackEntry.arguments?.getString("memberId") ?: return@composable
-            ChatScreen(
-                memberId = memberId,
-                onBack = { navController.popBackStack() },
-                viewModel = chatViewModel
-            )
+            com.example.familysafety.billing.GatedFeature("Chat", entitlement, viewModel) {
+                ChatScreen(
+                    memberId = memberId,
+                    onBack = { navController.popBackStack() }
+                )
+            }
         }
 
         composable("security") {
@@ -582,10 +647,12 @@ fun MainScreen(
             route = HistoryRoute.PATTERN,
             arguments = listOf(navArgument("memberId") { type = NavType.StringType })
         ) {
-            HistoryScreen(
-                viewModel = hiltViewModel(),
-                onBack = { navController.popBackStack() }
-            )
+            com.example.familysafety.billing.GatedFeature("History", entitlement, viewModel) {
+                HistoryScreen(
+                    viewModel = hiltViewModel(),
+                    onBack = { navController.popBackStack() }
+                )
+            }
         }
     }
 }

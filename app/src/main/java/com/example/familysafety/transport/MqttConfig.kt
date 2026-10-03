@@ -10,7 +10,18 @@ object MqttConfig {
     
     const val DEFAULT_QOS = QOS_AT_LEAST_ONCE
     
-    const val KEEP_ALIVE_SECONDS = 30 // short enough to survive typical NAT idle timeouts
+    /**
+     * Seconds between MQTT pings when nothing else is sent.
+     *
+     * Was 30. The broker drops a client after 1.5x this with no traffic, and Paho's ping
+     * timer does not run while the CPU sleeps — so at 30 s any sleep longer than 45 s cost
+     * a full reconnect (TLS handshake, CONNECT, presence, replication back-fill) on the next
+     * wake, many times an hour per phone under Doze. 120 s survives three minutes of sleep,
+     * still sits under typical mobile NAT idle timeouts, and sends a quarter of the pings.
+     * The trade-off: an abruptly dead phone's last-will "offline" fires after ~3 minutes
+     * instead of ~45 seconds.
+     */
+    const val KEEP_ALIVE_SECONDS = 120
     const val CONNECTION_TIMEOUT = 30
     const val RECONNECT_DELAY_MS = 5000L
 

@@ -9,6 +9,121 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.15.0 (40) — Porch Light, private messages, and a lighter connection
+
+Built from the commits after `0c67128` + the version bump. Supersedes 1.14.0 (39).
+
+Wire format: unchanged (`PROTOCOL_VERSION` stays 3). Phones on 1.14.0 and earlier keep
+working with this build in both directions. Two behaviours differ between versions, neither
+breaking: older builds still back up private messages to every phone, and this build drops
+those copies on arrival unless it is one of the two participants; and a colour picked on this
+build is stored as an ordinary hue, which older builds draw as a close match.
+
+**Not yet run on a device.** Every change below builds and passes the unit tests (563) and
+lint (0 errors), but none has been seen on a phone. Check before uploading: the map with
+colour-blind patterns on and off, the Family and Chat lists, Settings, both themes, and a
+private conversation between two phones.
+
+### Play copy
+
+```
+A fresh look: new colours and clearer type, and each family member keeps one colour
+everywhere, with an optional colour-blind pattern mode in Settings > Appearance. Send
+private messages to one person alongside the family chat. Location keeps updating more
+reliably in the background and uses much less data. Fixes a chat badge that could count
+messages that weren't there.
+```
+
+### What changed, and why it's worth a release
+
+**Broker traffic** — the family was exceeding the broker's 1 GB monthly allowance with 6–12
+people. The largest cause: on every reconnect the app re-subscribed to its topics, and MQTT
+makes the broker re-send every matching retained message, including the ~175 KB vault
+container, many times a day per phone.
+- Reconnects skip re-subscribing when the broker kept the session and the topic set is
+  unchanged (`MqttTransport.restoreSubscriptions`).
+- MQTT keepalive 30 s → 120 s, so a short CPU sleep no longer costs a full reconnect. An
+  abruptly dead phone now shows offline after ~3 minutes instead of ~45 seconds.
+- Fixes that haven't moved (< 30 m, under 5 minutes old) are no longer published.
+- Replication: data announcements every 30 min (was 5), full sync at most every 15 min (was
+  1), a member's history requested from that member only, duplicate requests suppressed.
+
+**Location reliability**
+- Opening the app sent the service a start command that cancelled its movement, reconnect
+  and heartbeat jobs while GPS stayed registered, so tracking degraded quietly until Android
+  restarted the service. A running session is now left alone.
+- Motion detection ("Physical activity") was started without the permission, which the app
+  never requests. On Android 10+ it has therefore never run; the service relied on GPS
+  speed throughout. It now checks and skips cleanly instead of failing inside service
+  start-up. Requesting the permission during setup is a candidate for a later release.
+- The reduced-motion check used an API that is only public from Android 13; on Android
+  8–12 it reached a hidden method, which a device or update could block and crash the tab
+  bar. Now uses `ValueAnimator.areAnimatorsEnabled()`.
+
+**Chat**
+- Private one-to-one messages: the Chat tab lists the family chat and private
+  conversations; each member has a Message button; notifications open the exact thread.
+  Private messages are stored only on their two participants' phones.
+- The Chat badge could show a count with nothing behind it: on a cold start it was built
+  before the group loaded and counted every unread row in the database. Messages synced in
+  while a chat is open are now marked read, and chats from a previous family no longer
+  spread between phones.
+- A message from someone in both the family chat and a private chat no longer replaces the
+  other's notification. A chat left open in the background no longer swallows notifications.
+- Profile photos on the chat screens.
+
+**Design (Porch Light — see `DESIGN.md`)**
+- Pine-tinted greys replace the cool blue-grey defaults; text field and button borders now
+  meet the 3:1 contrast minimum.
+- Bundled typefaces (Bitter for headings, Atkinson Hyperlegible Next for text, Atkinson
+  Hyperlegible Mono for codes), loaded from the app itself rather than downloaded.
+- Corner radius by role; the floating button's metal sheen removed.
+- Twelve person colours at equal perceived brightness, the same for a person everywhere
+  (avatar, map pin, history trail, chat name). Existing choices map to the nearest colour;
+  two pairs of old presets merge (blue/indigo → Periwinkle, magenta/pink → Rose), and
+  members who never chose a colour get a new automatic one.
+- Colour-blind patterns (Settings → Appearance), per phone.
+- Family and Chat drawn as lists instead of stacked cards.
+
+**Smaller fixes** — notifications check their permission on Android 13+; the camera is
+declared optional in the app's own manifest; QR scanning opts in to CameraX's experimental
+image API explicitly.
+
+---
+
+## 1.14.0 (39) — the family subscription goes live
+
+Supersedes 1.13.6 (35) and its own three predecessors on this branch: 36 (uploaded only to
+register a binary with Play Console, billing fully inert), 37 (crashed on every launch past
+onboarding — see below, never distributed), 38 (fixed that crash, still inert). 39 is the
+first build where the paywall can actually gate anything.
+
+Adds the billing/entitlement machinery (`billing/`): trial and subscription state on
+`GroupDefinition`, a Play Billing wrapper, grant-code redemption, and gates on Chat,
+History and Files. Live location sharing, alerts, crash detection and the Vault are never
+gated. **Every family that exists as of this release — including every real family already
+using the app — is grandfathered permanently**: `PAYWALL_INTRODUCED_AT_EPOCH_MS` is fixed
+to the instant this was built, and the rule is `createdAtEpochMs < that instant`. Only a
+family created from this release onward gets the 60-day free trial, then needs a
+subscription ($4/month) or a developer-issued grant code to keep Chat, History and Files.
+
+The 37 crash: `BillingManager`'s constructor called `PendingPurchasesParams.newBuilder()
+.build()` with neither toggle set. Play Billing Library 8.0.0 throws
+`IllegalArgumentException("Pending purchases for one-time products must be supported.")` in
+that case, undocumented as far as we found — caught from a real crash log, not the
+library's release notes. Fixed by calling `enableOneTimeProducts()` unconditionally, even
+though this app sells only the one subscription.
+
+### Play copy
+
+```
+Adds an optional family membership ($4/month after a 60-day free trial) for Chat, Location
+History, and File Sharing. Live location sharing and safety alerts are always free.
+Existing families are unaffected.
+```
+
+---
+
 ## 1.13.6 (35) — a real pause switch, and privacy text that matches the app
 
 Built from the commits after `582ec70` + the version bump. Supersedes 1.13.5 (34).
