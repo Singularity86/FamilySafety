@@ -16,6 +16,7 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
 
+@androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
 @Composable
 fun QrCodeScanner(
     onQrCodeScanned: (String) -> Unit,
@@ -75,7 +76,8 @@ fun QrCodeScanner(
     )
 }
 
-@androidx.camera.core.ExperimentalGetImage
+// ImageProxy.image is a CameraX opt-in API; reading the frame for ML Kit is its intended use.
+@androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
 private fun processImageProxy(
     scanner: com.google.mlkit.vision.barcode.BarcodeScanner,
     imageProxy: ImageProxy,
