@@ -15,6 +15,7 @@ import com.example.familysafety.ui.theme.Spacing
 import com.example.familysafety.ui.theme.ButtonShape
 import com.example.familysafety.ui.theme.CardShape
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 
 @SuppressLint("InlinedApi")
 @Composable
@@ -34,6 +35,7 @@ fun PermissionRationaleCard(
         Manifest.permission.ACCESS_FINE_LOCATION,
         Manifest.permission.ACCESS_COARSE_LOCATION     -> Icons.Default.LocationOn
         Manifest.permission.ACCESS_BACKGROUND_LOCATION -> Icons.Default.MyLocation
+        Manifest.permission.ACTIVITY_RECOGNITION       -> Icons.AutoMirrored.Filled.DirectionsWalk
         Manifest.permission.POST_NOTIFICATIONS         -> Icons.Default.Notifications
         Manifest.permission.NEARBY_WIFI_DEVICES        -> Icons.Default.Wifi
         else                                           -> Icons.Default.Security

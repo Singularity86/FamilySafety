@@ -619,6 +619,9 @@ private fun RouteMapView(
             // Absorb requestLayout() from the MapView so its internal pan/zoom layout requests
             // do not propagate up into Compose and make the surrounding UI blink.
             object : FrameLayout(ctx) {
+                // Deliberately not calling super: passing the request up is exactly what made
+                // the screen blink. forceLayout() still marks this view for the next pass.
+                @android.annotation.SuppressLint("MissingSuperCall")
                 override fun requestLayout() {
                     forceLayout()
                 }

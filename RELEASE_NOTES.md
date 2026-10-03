@@ -9,6 +9,91 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.15.0 (40) — Porch Light, private messages, and a lighter connection
+
+Built from the commits after `0c67128` + the version bump. Supersedes 1.14.0 (39).
+
+Wire format: unchanged (`PROTOCOL_VERSION` stays 3). Phones on 1.14.0 and earlier keep
+working with this build in both directions. Two behaviours differ between versions, neither
+breaking: older builds still back up private messages to every phone, and this build drops
+those copies on arrival unless it is one of the two participants; and a colour picked on this
+build is stored as an ordinary hue, which older builds draw as a close match.
+
+**Not yet run on a device.** Every change below builds and passes the unit tests (563) and
+lint (0 errors), but none has been seen on a phone. Check before uploading: the map with
+colour-blind patterns on and off, the Family and Chat lists, Settings, both themes, and a
+private conversation between two phones.
+
+### Play copy
+
+```
+A fresh look: new colours and clearer type, and each family member keeps one colour
+everywhere, with an optional colour-blind pattern mode in Settings > Appearance. Send
+private messages to one person alongside the family chat. Location keeps updating more
+reliably in the background and uses much less data. Fixes a chat badge that could count
+messages that weren't there.
+```
+
+### What changed, and why it's worth a release
+
+**Broker traffic** — the family was exceeding the broker's 1 GB monthly allowance with 6–12
+people. The largest cause: on every reconnect the app re-subscribed to its topics, and MQTT
+makes the broker re-send every matching retained message, including the ~175 KB vault
+container, many times a day per phone.
+- Reconnects skip re-subscribing when the broker kept the session and the topic set is
+  unchanged (`MqttTransport.restoreSubscriptions`).
+- MQTT keepalive 30 s → 120 s, so a short CPU sleep no longer costs a full reconnect. An
+  abruptly dead phone now shows offline after ~3 minutes instead of ~45 seconds.
+- Fixes that haven't moved (< 30 m, under 5 minutes old) are no longer published.
+- Replication: data announcements every 30 min (was 5), full sync at most every 15 min (was
+  1), a member's history requested from that member only, duplicate requests suppressed.
+
+**Location reliability**
+- Opening the app sent the service a start command that cancelled its movement, reconnect
+  and heartbeat jobs while GPS stayed registered, so tracking degraded quietly until Android
+  restarted the service. A running session is now left alone.
+- Motion detection ("Physical activity") was started without the permission, which the app
+  never requested. On Android 10+ it has therefore never run: the service relied on GPS
+  speed, and **crash detection never armed**, since it arms only while motion detection
+  reports being in a vehicle. Setup now asks for the permission (a "Driving & Movement"
+  step after location), and the service checks for it and skips cleanly when it's denied.
+  Families who finished setup on an earlier version are not asked again; they can grant
+  it in Android Settings → Apps → Jibaro Family Safety → Permissions → Physical activity.
+- The reduced-motion check used an API that is only public from Android 13; on Android
+  8–12 it reached a hidden method, which a device or update could block and crash the tab
+  bar. Now uses `ValueAnimator.areAnimatorsEnabled()`.
+
+**Chat**
+- Private one-to-one messages: the Chat tab lists the family chat and private
+  conversations; each member has a Message button; notifications open the exact thread.
+  Private messages are stored only on their two participants' phones.
+- The Chat badge could show a count with nothing behind it: on a cold start it was built
+  before the group loaded and counted every unread row in the database. Messages synced in
+  while a chat is open are now marked read, and chats from a previous family no longer
+  spread between phones.
+- A message from someone in both the family chat and a private chat no longer replaces the
+  other's notification. A chat left open in the background no longer swallows notifications.
+- Profile photos on the chat screens.
+
+**Design (Porch Light — see `DESIGN.md`)**
+- Pine-tinted greys replace the cool blue-grey defaults; text field and button borders now
+  meet the 3:1 contrast minimum.
+- Bundled typefaces (Bitter for headings, Atkinson Hyperlegible Next for text, Atkinson
+  Hyperlegible Mono for codes), loaded from the app itself rather than downloaded.
+- Corner radius by role; the floating button's metal sheen removed.
+- Twelve person colours at equal perceived brightness, the same for a person everywhere
+  (avatar, map pin, history trail, chat name). Existing choices map to the nearest colour;
+  two pairs of old presets merge (blue/indigo → Periwinkle, magenta/pink → Rose), and
+  members who never chose a colour get a new automatic one.
+- Colour-blind patterns (Settings → Appearance), per phone.
+- Family and Chat drawn as lists instead of stacked cards.
+
+**Smaller fixes** — notifications check their permission on Android 13+; the camera is
+declared optional in the app's own manifest; QR scanning opts in to CameraX's experimental
+image API explicitly.
+
+---
+
 ## 1.14.0 (39) — the family subscription goes live
 
 Supersedes 1.13.6 (35) and its own three predecessors on this branch: 36 (uploaded only to

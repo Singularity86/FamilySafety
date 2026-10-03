@@ -21,10 +21,11 @@ import com.example.familysafety.ui.theme.OverlayShape
 
 private const val STEP_LOCATION = 0
 private const val STEP_BG_LOCATION = 1
-private const val STEP_NOTIFICATIONS = 2
-private const val STEP_NEARBY_WIFI = 3
-private const val STEP_BATTERY = 4
-private const val STEP_DONE = 5
+private const val STEP_ACTIVITY = 2
+private const val STEP_NOTIFICATIONS = 3
+private const val STEP_NEARBY_WIFI = 4
+private const val STEP_BATTERY = 5
+private const val STEP_DONE = 6
 
 @SuppressLint("InlinedApi")
 private fun shouldSkipStep(context: Context, step: Int): Boolean = when (step) {
@@ -36,6 +37,11 @@ private fun shouldSkipStep(context: Context, step: Int): Boolean = when (step) {
         // Background location requires foreground location — skip if foreground was denied.
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED ||
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    // A runtime permission from Android 10; granted with the app on earlier versions.
+    STEP_ACTIVITY ->
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED
 
     STEP_NOTIFICATIONS ->
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
@@ -96,7 +102,7 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
                       results[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         // Skip background location if foreground was denied — OS won't grant it anyway.
         step = if (granted) nextStep(context, STEP_BG_LOCATION)
-               else nextStep(context, STEP_NOTIFICATIONS)
+               else nextStep(context, STEP_ACTIVITY)
     }
 
     val bgLocationLauncher = rememberLauncherForActivityResult(
@@ -106,6 +112,10 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
     val appSettingsLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { step = nextStep(context, STEP_BG_LOCATION) }
+
+    val activityLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { step = nextStep(context, STEP_NOTIFICATIONS) }
 
     val notificationsLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -142,7 +152,7 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
                         )
                     )
                 },
-                onDismiss = { step = nextStep(context, STEP_NOTIFICATIONS) }
+                onDismiss = { step = nextStep(context, STEP_ACTIVITY) }
             )
 
             STEP_BG_LOCATION -> PermissionRationaleCard(
@@ -162,6 +172,18 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
                     } else {
                         bgLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
                     }
+                },
+                onDismiss = { step = nextStep(context, STEP_ACTIVITY) }
+            )
+
+            STEP_ACTIVITY -> PermissionRationaleCard(
+                shape = OverlayShape,
+                permission = Manifest.permission.ACTIVITY_RECOGNITION,
+                title = PermissionCopy.PhysicalActivity.title,
+                rationale = PermissionCopy.PhysicalActivity.rationale,
+                coaching = PermissionCopy.PhysicalActivity.coachingText(context),
+                onRequestPermission = {
+                    activityLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
                 },
                 onDismiss = { step = nextStep(context, STEP_NOTIFICATIONS) }
             )

@@ -15,6 +15,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 
 @Singleton
 class ActivityRecognitionManager @Inject constructor(
@@ -29,8 +33,28 @@ class ActivityRecognitionManager @Inject constructor(
 
     private var pendingIntent: PendingIntent? = null
 
+    /**
+     * Whether the phone lets us read motion ("Physical activity" on Android 10+; a Play
+     * services permission before that). Without it the location service simply runs on GPS
+     * speed alone (see LocationService.adjustIntervalFromGps); asking anyway made the call
+     * fail, and on some Play services versions throw, from inside the service's start-up.
+     */
+    private fun hasPermission(): Boolean {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            Manifest.permission.ACTIVITY_RECOGNITION
+        } else {
+            "com.google.android.gms.permission.ACTIVITY_RECOGNITION"
+        }
+        return ContextCompat.checkSelfPermission(context, permission) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+
     fun startMonitoring() {
         if (pendingIntent != null) return
+        if (!hasPermission()) {
+            Timber.i("Activity recognition not permitted — using GPS speed for movement")
+            return
+        }
 
         val intent = Intent(context, ActivityTransitionReceiver::class.java)
         val pi = PendingIntent.getBroadcast(
@@ -60,25 +84,37 @@ class ActivityRecognitionManager @Inject constructor(
                 .build()
         )
 
-        ActivityRecognition.getClient(context)
-            .requestActivityTransitionUpdates(ActivityTransitionRequest(transitions), pi)
-            .addOnSuccessListener { Timber.i("Activity recognition monitoring started") }
-            .addOnFailureListener { e ->
-                Timber.e(e, "Failed to start activity recognition")
-                // Otherwise the guard above makes every later startMonitoring() a no-op.
-                if (pendingIntent === pi) pendingIntent = null
-            }
+        try {
+            ActivityRecognition.getClient(context)
+                .requestActivityTransitionUpdates(ActivityTransitionRequest(transitions), pi)
+                .addOnSuccessListener { Timber.i("Activity recognition monitoring started") }
+                .addOnFailureListener { e ->
+                    Timber.e(e, "Failed to start activity recognition")
+                    // Otherwise the guard above makes every later startMonitoring() a no-op.
+                    if (pendingIntent === pi) pendingIntent = null
+                }
+        } catch (e: SecurityException) {
+            // Permission revoked between the check and the call.
+            Timber.w(e, "Activity recognition permission missing — using GPS speed for movement")
+            pendingIntent = null
+        }
     }
 
     fun stopMonitoring() {
         val pi = pendingIntent ?: return
-        ActivityRecognition.getClient(context)
-            .removeActivityTransitionUpdates(pi)
-            .addOnSuccessListener {
-                Timber.i("Activity recognition monitoring stopped")
-                pendingIntent = null
-            }
-            .addOnFailureListener { e -> Timber.e(e, "Failed to stop activity recognition") }
+        try {
+            ActivityRecognition.getClient(context)
+                .removeActivityTransitionUpdates(pi)
+                .addOnSuccessListener {
+                    Timber.i("Activity recognition monitoring stopped")
+                    pendingIntent = null
+                }
+                .addOnFailureListener { e -> Timber.e(e, "Failed to stop activity recognition") }
+        } catch (e: SecurityException) {
+            // Permission revoked while monitoring; there is nothing registered we can reach.
+            Timber.w(e, "Could not stop activity recognition — permission missing")
+            pendingIntent = null
+        }
     }
 
     fun onTransitionResult(result: ActivityTransitionResult) {

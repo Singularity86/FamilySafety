@@ -26,6 +26,8 @@ import com.example.familysafety.ui.components.PermissionRationaleCard
 import com.example.familysafety.ui.theme.Spacing
 import com.example.familysafety.ui.theme.ControlShape
 
+// ImageProxy.image is a CameraX opt-in API; reading the frame for ML Kit is its intended use.
+@androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
 fun QrScannerScreen(

@@ -47,6 +47,9 @@ import timber.log.Timber
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 
 /**
  * Handles app initialization and wiring up dependencies.
@@ -395,7 +398,12 @@ class AppInitializer @Inject constructor(
                 .apply { if (pendingIntent != null) setContentIntent(pendingIntent) }
                 .build()
 
-            NotificationManagerCompat.from(context).notify(REMOVED_NOTIFICATION_ID, notification)
+            // Android 13+ drops notifications without the permission; check rather than rely on it.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED) {
+                NotificationManagerCompat.from(context).notify(REMOVED_NOTIFICATION_ID, notification)
+            }
         } catch (e: Exception) {
             Timber.e(e, "$TAG: failed to post removal notification")
         }
