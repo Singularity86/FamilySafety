@@ -69,6 +69,10 @@ Hilt is used throughout. Modules:
 - Onboarding: Welcome → EnterName → GenerateMnemonic → ConfirmMnemonic → CreateFamily (or JoinFamily via QR scan)
 - Main: bottom-nav tabs — Map, Members, Chat, Settings
 
+## Design
+
+Read `DESIGN.md` before any visual change. It defines the colours (including the twelve person colours and their colour-blind patterns), type, corner radius rules and the decisions behind them. Use the theme files it names; don't introduce new hex values, fonts or radii in screens.
+
 ## Testing Patterns
 
 Tests live in `app/src/test/java/com/example/familysafety/`. Framework: JUnit 4 + MockK + `kotlinx-coroutines-test` + Turbine (for Flows).
