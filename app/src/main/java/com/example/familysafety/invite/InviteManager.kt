@@ -25,6 +25,9 @@ import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 
 @Singleton
 class InviteManager @Inject constructor(
@@ -169,8 +172,13 @@ class InviteManager @Inject constructor(
                 .apply { if (pendingIntent != null) setContentIntent(pendingIntent) }
                 .build()
 
-            NotificationManagerCompat.from(context)
-                .notify(NOTIFICATION_BASE_ID + request.requestId.hashCode(), notification)
+            // Android 13+ drops notifications without the permission; check rather than rely on it.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED) {
+                NotificationManagerCompat.from(context)
+                    .notify(NOTIFICATION_BASE_ID + request.requestId.hashCode(), notification)
+            }
         } catch (e: Exception) {
             Timber.e(e, "Failed to send join request notification")
         }

@@ -363,7 +363,7 @@ class LocationService : Service() {
                 val isNowConnected = state is MqttTransport.ConnectionState.Connected
                 Timber.d("LocationService: MQTT state → $state")
                 if (isNowConnected && !wasConnected) {
-                val lastLocation = locationRepository.myLocation.value
+                    val lastLocation = locationRepository.myLocation.value
                     if (lastLocation != null) {
                         Timber.i("LocationService: MQTT reconnected — republishing last known location")
                         scope.launch {
