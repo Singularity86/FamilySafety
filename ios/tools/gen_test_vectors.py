@@ -117,6 +117,31 @@ print(f"canonical string:    {canonical}")
 print(f"state_hash:          {state_hash}")
 print()
 
+# ---------------- computeStateHash with tombstones (2+ removedMemberIds) ----------------
+# Regression case for a real bug: an earlier iOS draft repeated "removed:" once PER
+# tombstone instead of once before the whole list, which only coincidentally matched
+# Android for a single removal and silently diverged for two or more. "removed:" is a
+# ONE-TIME prefix; each id is just "{id};" after that — mirrors
+# GroupDefinition.computeStateHash's removedMemberIds branch exactly.
+group_with_tombstones = dict(group, version=3)
+removed_ids = sorted(["146002794e05db8fea5ac6f48c319e8c", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
+canonical_with_tombstones = (
+    f"{group_with_tombstones['groupId']}|{group_with_tombstones['groupName']}|"
+    f"{group_with_tombstones['createdAtEpochMs']}|{group_with_tombstones['creatorMemberId']}|"
+    f"{group_with_tombstones['version']}|"
+)
+for m in members:
+    canonical_with_tombstones += f"{m['member_id']},{m['ed_pub']},{m['x_pub']};"
+canonical_with_tombstones += "|removed:"
+for rid in removed_ids:
+    canonical_with_tombstones += f"{rid};"
+state_hash_with_tombstones = hashlib.sha256(canonical_with_tombstones.encode()).hexdigest()
+print("### GroupDefinition.computeStateHash (with 2 tombstones)")
+print(f"removed_ids:         {removed_ids}")
+print(f"canonical string:    {canonical_with_tombstones}")
+print(f"state_hash:          {state_hash_with_tombstones}")
+print()
+
 # ---------------- Group sync signature ----------------
 ts = 1700000001000
 sync_payload = f"{group['groupId']}|{group['version']}|{alice['member_id']}|{ts}|{state_hash}"

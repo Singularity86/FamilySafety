@@ -6,6 +6,9 @@ interoperate over the same MQTT broker with identical crypto and wire formats.
 
 ## Contents
 
+- **[IOS_PROJECT_STATUS.md](IOS_PROJECT_STATUS.md)** — tracking doc: progress against the
+  phase plan below, what's been verified and how, bugs found and fixed, outstanding items.
+  Read this first to see where things actually stand.
 - **[IOS_PORT_SPEC.md](IOS_PORT_SPEC.md)** — the complete port specification and interop
   contract: key derivation, E2EE envelope, MQTT topic/payload matrix, group-state security
   rules, join flow, verified cross-platform test vectors, iOS library mapping, and a

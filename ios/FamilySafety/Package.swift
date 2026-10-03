@@ -15,10 +15,9 @@ import PackageDescription
 // SodiumRaw.swift. This sidesteps swift-sodium's higher-level Swift wrapper API, whose
 // exact overloads could not be verified against a live compiler while scaffolding.
 //
-// Dependencies for later phases are intentionally NOT pinned here yet — add them when
-// that phase starts, so version choices are made against the Xcode/Swift toolchain
-// actually being used:
-//   Phase 2 (Transport): CocoaMQTT — https://github.com/emqx/CocoaMQTT
+// Dependencies for later phases are added when that phase starts, so version choices are
+// made against the Xcode/Swift toolchain actually being used:
+//   Phase 2 (Transport): CocoaMQTT — https://github.com/emqx/CocoaMQTT — ADDED.
 //   Phase 6 (Storage):   GRDB.swift (+ SQLCipher) — https://github.com/groue/GRDB.swift
 //     GRDB's SQLCipher integration is version-sensitive (SPM trait / build flag setup
 //     differs by release) — read GRDB's current README before pinning a version.
@@ -37,13 +36,15 @@ let package = Package(
         .library(name: "FamilySafetyCore", targets: ["FamilySafetyCore"])
     ],
     dependencies: [
-        .package(url: "https://github.com/jedisct1/swift-sodium.git", from: "0.9.1")
+        .package(url: "https://github.com/jedisct1/swift-sodium.git", from: "0.9.1"),
+        .package(url: "https://github.com/emqx/CocoaMQTT.git", from: "2.1.6")
     ],
     targets: [
         .target(
             name: "FamilySafetyCore",
             dependencies: [
-                .product(name: "Clibsodium", package: "swift-sodium")
+                .product(name: "Clibsodium", package: "swift-sodium"),
+                .product(name: "CocoaMQTT", package: "CocoaMQTT")
             ],
             resources: [
                 // .copy (not .process) so the wordlist is embedded byte-for-byte —
@@ -53,6 +54,15 @@ let package = Package(
         ),
         .testTarget(
             name: "FamilySafetyCoreTests",
+            dependencies: ["FamilySafetyCore"]
+        ),
+        // Manual, throwaway two-process harness for the §14 Phase 2 live-broker
+        // acceptance test (two clients seeing each other's presence flip online/offline
+        // over the real broker, LWT observed on an abrupt kill). NOT part of the app;
+        // takes broker credentials from MQTT_USERNAME/MQTT_PASSWORD env vars only — never
+        // reads or writes them to disk. Run with `swift run PresenceHarness`.
+        .executableTarget(
+            name: "PresenceHarness",
             dependencies: ["FamilySafetyCore"]
         )
     ]

@@ -146,6 +146,40 @@ final class VectorTests: XCTestCase {
         )
     }
 
+    // MARK: - Group state hash with tombstones (regression: "removed:" is a ONE-TIME
+    // prefix before the whole list, not repeated per id — an earlier iOS draft got this
+    // wrong, which only coincidentally matched Android for exactly one removal and
+    // silently diverged for two or more. Ground truth from ../tools/gen_test_vectors.py,
+    // computed independently via Python's hashlib, not derived from the Swift code.)
+
+    func testGroupStateHashWithTwoTombstones() throws {
+        let alice = try FamilySafeKeyDerivation.deriveIdentity(mnemonic: aliceMnemonic)
+        let bob = try FamilySafeKeyDerivation.deriveIdentity(mnemonic: bobMnemonic)
+
+        let aliceMember = FamilyMember(
+            memberId: alice.memberId, displayName: "Alice",
+            ed25519PublicKey: alice.ed25519PublicKeyHex, x25519PublicKey: alice.x25519PublicKeyHex,
+            addedAtEpochMs: 1_700_000_000_000
+        )
+        let bobMember = FamilyMember(
+            memberId: bob.memberId, displayName: "Bob",
+            ed25519PublicKey: bob.ed25519PublicKeyHex, x25519PublicKey: bob.x25519PublicKeyHex,
+            addedAtEpochMs: 1_700_000_000_000
+        )
+
+        let group = GroupDefinition(
+            groupId: groupId,
+            groupName: "Test Family",
+            createdAtEpochMs: 1_700_000_000_000,
+            creatorMemberId: alice.memberId,
+            members: [aliceMember, bobMember],
+            version: 3,
+            removedMemberIds: [bob.memberId, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+        )
+
+        XCTAssertEqual(group.computeStateHash(), "856f4a67fe46adf70bfed3e12e7c8b014e719a50ec1038807441d098416a87c2")
+    }
+
     // MARK: - Shared-file key
 
     func testSharedFileKey() {
