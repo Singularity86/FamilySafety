@@ -22,6 +22,8 @@ import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.theme.*
 import com.example.familysafety.location.LocationPermissionHelper
 import com.example.familysafety.util.OemBatteryHelper
+import com.example.familysafety.ui.theme.ButtonShape
+import com.example.familysafety.ui.theme.OverlayShape
 
 /**
  * Explains battery optimization exemption with OEM-specific guidance and launches
@@ -56,7 +58,8 @@ fun BatteryOptimizationScreen(
 
     val instructions = remember { OemBatteryHelper.getInstructions() }
 
-    OutlinedCard {
+    // Only ever shown inside a dialog, so it takes the overlay corner.
+    OutlinedCard(shape = OverlayShape) {
         Column(modifier = Modifier.padding(Spacing.lg)) {
             Icon(
                 imageVector = Icons.Default.BatteryAlert,
@@ -114,6 +117,7 @@ fun BatteryOptimizationScreen(
 
             // Secondary action: open OEM battery settings directly
             OutlinedButton(
+                shape = ButtonShape,
                 onClick = { OemBatteryHelper.openBatterySettings(context) },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)
@@ -139,6 +143,7 @@ fun BatteryOptimizationScreen(
                 )
                 Spacer(modifier = Modifier.height(Spacing.xs))
                 OutlinedButton(
+                    shape = ButtonShape,
                     onClick = {
                         try {
                             context.startActivity(
@@ -177,6 +182,7 @@ fun BatteryOptimizationScreen(
                 }
                 Spacer(modifier = Modifier.width(Spacing.sm))
                 Button(
+                    shape = ButtonShape,
                     onClick = {
                         try {
                             launcher.launch(

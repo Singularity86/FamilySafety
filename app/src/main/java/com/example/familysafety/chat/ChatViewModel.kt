@@ -24,6 +24,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import com.example.familysafety.avatar.AvatarRepository
+import android.graphics.Bitmap
 
 /**
  * ViewModel for chat functionality.
@@ -32,20 +34,28 @@ import javax.inject.Inject
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     private val chatRepository: ChatRepository,
-    private val groupStateManager: GroupStateManager
+    private val groupStateManager: GroupStateManager,
+    avatarRepository: AvatarRepository
 ) : ViewModel() {
+
+    /** Profile photos by member ID, the same source the Family screen draws from. */
+    val memberAvatars: StateFlow<Map<String, Bitmap?>> = avatarRepository.memberAvatars
+
 
     // =========================================================================
     // CONVERSATION LIST STATE
     // =========================================================================
 
+    private val allSummaries = chatRepository.observeConversations()
+
     /**
-     * All conversations with summaries.
+     * Private (one-to-one) conversations, newest first. A conversation with someone who
+     * has since left the family is dropped: there is no one to reply to.
      */
-    val conversations: StateFlow<List<ConversationWithMember>> = chatRepository
-        .observeConversations()
+    val conversations: StateFlow<List<ConversationWithMember>> = allSummaries
         .combine(groupStateManager.groupDefinition) { conversations, group ->
             conversations.mapNotNull { summary ->
+                if (summary.conversationId == group?.groupId) return@mapNotNull null
                 val member = group?.findMemberById(summary.otherMemberId)
                 if (member != null) {
                     ConversationWithMember(summary, member)
@@ -53,6 +63,13 @@ class ChatViewModel @Inject constructor(
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** Last message and unread count of the family chat, or null before its first message. */
+    val groupConversation: StateFlow<ConversationSummary?> = allSummaries
+        .combine(groupStateManager.groupDefinition) { conversations, group ->
+            conversations.firstOrNull { it.conversationId == group?.groupId }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     /**
      * Total unread message count.
@@ -74,6 +91,9 @@ class ChatViewModel @Inject constructor(
     // =========================================================================
     // SINGLE CONVERSATION STATE
     // =========================================================================
+
+    /** True while the open conversation's screen is visible (between ON_START and ON_STOP). */
+    private var isOnScreen = false
 
     private val _currentConversationId = MutableStateFlow<String?>(null)
     val currentConversationId: StateFlow<String?> = _currentConversationId.asStateFlow()
@@ -142,6 +162,7 @@ class ChatViewModel @Inject constructor(
                 .groupId
             _currentConversationId.value = groupId
             _currentRecipient.value = null
+            isOnScreen = true
             chatRepository.setActiveConversation(groupId)
         }
     }
@@ -150,17 +171,44 @@ class ChatViewModel @Inject constructor(
      * Open a conversation with a member.
      */
     fun openConversation(memberId: String) {
-        val member = groupStateManager.groupDefinition.value?.findMemberById(memberId)
-        if (member == null) {
-            viewModelScope.launch {
+        viewModelScope.launch {
+            // Same wait as the group chat: opened from a notification on a cold start,
+            // the group may not be loaded yet, and that is not "member not found".
+            val group = groupStateManager.groupDefinition.filterNotNull().first()
+            val member = group.findMemberById(memberId)
+            if (member == null) {
                 _events.emit(ChatEvent.Error("Member not found"))
+                return@launch
             }
-            return
-        }
 
-        val conversationId = chatRepository.getConversationId(memberId)
-        _currentConversationId.value = conversationId
-        _currentRecipient.value = member
+            val conversationId = chatRepository.getConversationId(memberId)
+            _currentConversationId.value = conversationId
+            _currentRecipient.value = member
+            isOnScreen = true
+            chatRepository.setActiveConversation(conversationId)
+        }
+    }
+
+    /**
+     * The screen left the foreground while a conversation stays selected. Releases the
+     * repository's "on screen" flag so new messages notify and stay unread, without
+     * clearing what this screen shows.
+     */
+    fun pauseConversation() {
+        isOnScreen = false
+        chatRepository.setActiveConversation(null)
+    }
+
+    /**
+     * New messages appeared in the conversation on screen. Messages that arrive by
+     * replication (back-fill after a reconnect, or a peer's backup copy landing before
+     * the original) are stored unread, and only entering the conversation used to mark
+     * anything read — so they sat behind the badge while plainly visible.
+     */
+    fun onMessagesShown() {
+        if (!isOnScreen) return
+        val conversationId = _currentConversationId.value ?: return
+        if (currentMessages.value.none { !it.isOutgoing && !it.isReadLocally }) return
         chatRepository.setActiveConversation(conversationId)
     }
 
@@ -168,6 +216,7 @@ class ChatViewModel @Inject constructor(
      * Close current conversation.
      */
     fun closeConversation() {
+        isOnScreen = false
         _currentConversationId.value = null
         _currentRecipient.value = null
         _messageInput.value = ""

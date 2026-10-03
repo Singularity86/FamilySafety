@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.theme.Spacing
+import com.example.familysafety.ui.theme.ButtonShape
 
 /**
  * Shown when the inviter declines a join request. Terminal until the user
@@ -82,7 +83,7 @@ fun RejectedScreen(
 
             Spacer(modifier = Modifier.height(Spacing.xl))
 
-            Button(onClick = onContinue) {
+            Button(shape = ButtonShape, onClick = onContinue) {
                 Text("Back to Start")
             }
         }

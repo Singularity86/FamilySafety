@@ -17,6 +17,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import com.example.familysafety.ui.components.PermissionRationaleCard
+import com.example.familysafety.ui.theme.OverlayShape
 
 private const val STEP_LOCATION = 0
 private const val STEP_BG_LOCATION = 1
@@ -128,6 +129,7 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
     ) {
         when (step) {
             STEP_LOCATION -> PermissionRationaleCard(
+                shape = OverlayShape,
                 permission = Manifest.permission.ACCESS_FINE_LOCATION,
                 title = PermissionCopy.Location.title,
                 rationale = PermissionCopy.Location.rationale,
@@ -144,6 +146,7 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
             )
 
             STEP_BG_LOCATION -> PermissionRationaleCard(
+                shape = OverlayShape,
                 permission = Manifest.permission.ACCESS_BACKGROUND_LOCATION,
                 title = PermissionCopy.BackgroundLocation.title,
                 rationale = PermissionCopy.BackgroundLocation.rationale,
@@ -164,6 +167,7 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
             )
 
             STEP_NOTIFICATIONS -> PermissionRationaleCard(
+                shape = OverlayShape,
                 permission = Manifest.permission.POST_NOTIFICATIONS,
                 title = PermissionCopy.Notifications.title,
                 rationale = PermissionCopy.Notifications.rationale,
@@ -175,6 +179,7 @@ fun PermissionOnboardingFlow(onComplete: () -> Unit) {
             )
 
             STEP_NEARBY_WIFI -> PermissionRationaleCard(
+                shape = OverlayShape,
                 permission = Manifest.permission.NEARBY_WIFI_DEVICES,
                 title = PermissionCopy.NearbyWifi.title,
                 rationale = PermissionCopy.NearbyWifi.rationale,

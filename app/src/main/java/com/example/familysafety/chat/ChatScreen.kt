@@ -43,6 +43,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -54,6 +55,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.familysafety.storage.ChatMessageEntity
 import com.example.familysafety.storage.MessageStatus
 import com.example.familysafety.storage.MessageType
@@ -62,6 +66,11 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import com.example.familysafety.ui.theme.ChipShape
+import com.example.familysafety.ui.theme.ControlShape
+import com.example.familysafety.ui.theme.PersonPalette
+import com.example.familysafety.ui.theme.themedText
+import com.example.familysafety.main.MemberAvatar
 
 /**
  * Screen showing messages in a single conversation.
@@ -81,20 +90,36 @@ fun ChatScreen(
     val isGroupChat by viewModel.isGroupConversation.collectAsState()
     val memberNames by viewModel.memberNames.collectAsState()
     val memberColorHues by viewModel.memberColorHues.collectAsState()
+    val memberAvatars by viewModel.memberAvatars.collectAsState()
 
     val listState = rememberLazyListState()
 
-    // Open the right conversation when screen loads
-    LaunchedEffect(memberId) {
-        if (memberId.isEmpty()) {
-            viewModel.openGroupConversation()
-        } else {
-            viewModel.openConversation(memberId)
+    // The conversation counts as "on screen" only while this screen is actually visible.
+    // That flag decides whether incoming messages are marked read and whether they
+    // notify, so it must drop when the app goes to the background or the user leaves —
+    // otherwise a phone left on a chat swallows every notification for that thread.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(memberId, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START ->
+                    if (memberId.isEmpty()) viewModel.openGroupConversation()
+                    else viewModel.openConversation(memberId)
+                Lifecycle.Event.ON_STOP -> viewModel.pauseConversation()
+                else -> {}
+            }
+        }
+        // addObserver replays ON_START when the screen is already started.
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            viewModel.closeConversation()
         }
     }
 
     // Scroll to bottom when new messages arrive
     LaunchedEffect(messages.size) {
+        viewModel.onMessagesShown()
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
         }
@@ -106,28 +131,45 @@ fun ChatScreen(
                 TopAppBar(
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primaryContainer),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = if (isGroupChat) "G" else (currentRecipient?.displayName ?: "?").take(1).uppercase(),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                            val recipient = currentRecipient
+                            if (!isGroupChat && recipient != null) {
+                                MemberAvatar(
+                                    displayName = recipient.displayName,
+                                    memberId = recipient.memberId,
+                                    bitmap = memberAvatars[recipient.memberId],
+                                    colorHue = recipient.colorHue,
+                                    size = 36.dp
                                 )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.primaryContainer),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "G",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
                             }
                             Spacer(modifier = Modifier.width(12.dp))
-                            Text(if (isGroupChat) "Family Chat" else currentRecipient?.displayName ?: "Chat")
+                            Column {
+                                Text(if (isGroupChat) "Family Chat" else currentRecipient?.displayName ?: "Chat")
+                                if (!isGroupChat && currentRecipient != null) {
+                                    Text(
+                                        text = "Private — only the two of you",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
                     },
                     navigationIcon = {
-                        IconButton(onClick = {
-                            viewModel.closeConversation()
-                            onBack()
-                        }) {
+                        IconButton(onClick = onBack) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     }
@@ -165,7 +207,7 @@ fun ChatScreen(
                     items(dayMessages) { message ->
                         MessageBubble(
                             message = message,
-                            senderName = if (!message.isOutgoing) memberNames[message.senderId] else null,
+                            senderName = if (isGroupChat && !message.isOutgoing) memberNames[message.senderId] else null,
                             senderColorHue = memberColorHues[message.senderId]
                         )
                     }
@@ -192,7 +234,7 @@ private fun DateHeader(dateKey: String) {
         contentAlignment = Alignment.Center
     ) {
         Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = ChipShape,
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         ) {
             Text(
@@ -205,11 +247,6 @@ private fun DateHeader(dateKey: String) {
     }
 }
 
-/** HSL color matching MemberAvatar, with optional override hue. */
-private fun memberBubbleColor(memberId: String, colorHue: Float? = null): Color {
-    val hue = colorHue ?: ((memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
-    return Color.hsl(hue, 0.55f, 0.45f)
-}
 
 @Composable
 private fun MessageBubble(
@@ -239,7 +276,7 @@ private fun MessageBubble(
         MaterialTheme.colorScheme.onSurfaceVariant
     }
     // Sender identity in group chat still reads via the label color.
-    val labelColor = memberBubbleColor(message.senderId, senderColorHue)
+    val labelColor = PersonPalette.forMember(message.senderId, senderColorHue).themedText()
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -446,7 +483,7 @@ private fun MessageInput(
                     focusedIndicatorColor = Color.Transparent,
                     unfocusedIndicatorColor = Color.Transparent
                 ),
-                shape = RoundedCornerShape(24.dp),
+                shape = ControlShape,
                 maxLines = 4
             )
 

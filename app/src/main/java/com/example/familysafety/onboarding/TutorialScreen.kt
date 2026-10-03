@@ -16,10 +16,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.GlossaryTerm
+import com.example.familysafety.ui.theme.ButtonShape
 
 private data class TutorialSlide(
     val title: String,
@@ -158,9 +158,10 @@ fun TutorialScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (page > 0) {
-                    OutlinedButton(onClick = { page-- }) { Text("Back") }
+                    OutlinedButton(shape = ButtonShape, onClick = { page-- }) { Text("Back") }
                 }
                 Button(
+                    shape = ButtonShape,
                     onClick = {
                         if (isLast) finish() else page++
                     }
@@ -180,7 +181,7 @@ private fun SlideContent(slide: TutorialSlide) {
     ) {
         Text(
             text = slide.title,
-            style = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Monospace),
+            style = MaterialTheme.typography.headlineSmall,
             textAlign = TextAlign.Center
         )
         // Render body with glossary terms replaced by tappable GlossaryTerm composables

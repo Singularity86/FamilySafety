@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.theme.Spacing
 import kotlinx.coroutines.delay
+import com.example.familysafety.ui.theme.ButtonShape
 
 /**
  * Shown immediately after the joiner receives approval, before the app restarts.
@@ -86,6 +87,7 @@ fun ApprovedScreen(
             Spacer(modifier = Modifier.height(Spacing.xl))
 
             Button(
+                shape = ButtonShape,
                 onClick = onContinue,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,

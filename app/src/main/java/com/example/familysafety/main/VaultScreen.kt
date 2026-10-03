@@ -30,6 +30,8 @@ import com.example.familysafety.vault.VaultViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.StrokeCap
 
 /**
  * The vault.
@@ -136,7 +138,7 @@ fun VaultScreen(
         },
         floatingActionButton = {
             if (!busy) {
-                FloatingActionButton(onClick = { picker.launch("*/*") }) {
+                FloatingActionButton(onClick = { picker.launch("*/*") }, shape = CircleShape) {
                     Icon(Icons.Default.Add, contentDescription = "Add")
                 }
             }
@@ -147,7 +149,7 @@ fun VaultScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), strokeCap = StrokeCap.Butt)
 
             if (current.items.isEmpty()) {
                 Box(

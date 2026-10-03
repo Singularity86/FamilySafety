@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.ui.theme.statusColors
 import com.example.familysafety.ui.theme.Spacing
+import com.example.familysafety.ui.theme.ButtonShape
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -107,6 +108,7 @@ fun ConfirmMnemonicScreen(
             }
 
             Button(
+                shape = ButtonShape,
                 onClick = onNext,
                 modifier = Modifier
                     .fillMaxWidth()

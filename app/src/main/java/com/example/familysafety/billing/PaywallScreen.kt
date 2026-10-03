@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.android.billingclient.api.ProductDetails
 import com.example.familysafety.main.MainViewModel
+import com.example.familysafety.ui.theme.ButtonShape
 
 /**
  * Shown in place of Chat, Files, or a member's History once [Entitlement] is [Entitlement.
@@ -54,6 +55,7 @@ fun PaywallScreen(feature: String, viewModel: MainViewModel) {
         )
         Spacer(Modifier.height(24.dp))
         Button(
+            shape = ButtonShape,
             onClick = {
                 (context as? Activity)?.let { viewModel.billingManager.launchPurchaseFlow(it) }
             },

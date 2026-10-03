@@ -60,9 +60,13 @@ class ChatNotificationHelper @Inject constructor(
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("navigate_to", conversationRoute)
         }
+        // Keyed by conversation, not sender: someone writing both privately and in the
+        // family chat used to have one notification overwrite the other, and the tap then
+        // opened whichever thread happened to be last.
+        val notificationId = conversationRoute.hashCode()
         val pendingIntent = PendingIntent.getActivity(
             context,
-            senderMemberId.hashCode(),
+            notificationId,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -79,7 +83,7 @@ class ChatNotificationHelper @Inject constructor(
             .build()
 
         try {
-            notificationManager.notify(senderMemberId.hashCode(), notification)
+            notificationManager.notify(notificationId, notification)
         } catch (e: Exception) {
             Timber.w(e, "ChatNotificationHelper: failed to post notification")
         }

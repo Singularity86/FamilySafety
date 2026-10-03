@@ -92,6 +92,10 @@ object ChatRoutes {
     const val CHAT_DETAIL       = "chat/conversation/{memberId}"
 
     fun chatDetail(memberId: String) = "chat/conversation/$memberId"
+
+    /** A route that opens one conversation (as opposed to the conversation list). */
+    fun isThread(route: String): Boolean =
+        route == GROUP_CHAT || (route.startsWith(chatDetail("")) && route.length > chatDetail("").length)
 }
 
 // 4 pager pages — label/icon for bottom nav
@@ -139,6 +143,22 @@ fun MainScreen(
                 confirmedSubscribe()
             }
         )
+    }
+
+    // A chat notification names a specific conversation. Handled here rather than in the
+    // pager's effect, which is not composed while another thread is already open on top —
+    // there the tap would do nothing. The thread replaces whatever detail screen is open,
+    // so backing out lands on the home pager. Cleared once handled so a second tap on a
+    // notification for the same thread is not swallowed as an unchanged key.
+    LaunchedEffect(navigateTo) {
+        val route = navigateTo ?: return@LaunchedEffect
+        if (ChatRoutes.isThread(route)) {
+            navController.navigate(route) {
+                popUpTo(MainRoute.Map.route)
+                launchSingleTop = true
+            }
+            onNavigationHandled()
+        }
     }
 
     NavHost(
@@ -441,6 +461,9 @@ fun MainScreen(
                             },
                             onNavigateToFiles = {
                                 navigatePagerTo(2)
+                            },
+                            onMessageMember = { memberId ->
+                                navController.navigate(ChatRoutes.chatDetail(memberId))
                             }
                         )
                         2 -> com.example.familysafety.billing.GatedFeature("Files", entitlement, viewModel) {
@@ -454,9 +477,11 @@ fun MainScreen(
                             )
                         }
                         3 -> com.example.familysafety.billing.GatedFeature("Chat", entitlement, viewModel) {
-                            ChatScreen(
-                                memberId = "",
-                                onBack = {},
+                            ConversationListScreen(
+                                onOpenGroupChat = { navController.navigate(ChatRoutes.GROUP_CHAT) },
+                                onOpenConversation = { memberId ->
+                                    navController.navigate(ChatRoutes.chatDetail(memberId))
+                                },
                                 viewModel = chatViewModel,
                                 showTopBar = false
                             )
@@ -564,10 +589,22 @@ fun MainScreen(
         composable(ChatRoutes.CONVERSATION_LIST) {
             com.example.familysafety.billing.GatedFeature("Chat", entitlement, viewModel) {
                 ConversationListScreen(
-                    onConversationClick = { memberId ->
+                    onOpenGroupChat = { navController.navigate(ChatRoutes.GROUP_CHAT) },
+                    onOpenConversation = { memberId ->
                         navController.navigate(ChatRoutes.chatDetail(memberId))
                     },
                     viewModel = chatViewModel
+                )
+            }
+        }
+
+        // Each open conversation gets its own ChatViewModel (scoped to its back-stack
+        // entry), so a thread on top never changes what the Chat tab underneath holds.
+        composable(ChatRoutes.GROUP_CHAT) {
+            com.example.familysafety.billing.GatedFeature("Chat", entitlement, viewModel) {
+                ChatScreen(
+                    memberId = "",
+                    onBack = { navController.popBackStack() }
                 )
             }
         }
@@ -580,8 +617,7 @@ fun MainScreen(
             com.example.familysafety.billing.GatedFeature("Chat", entitlement, viewModel) {
                 ChatScreen(
                     memberId = memberId,
-                    onBack = { navController.popBackStack() },
-                    viewModel = chatViewModel
+                    onBack = { navController.popBackStack() }
                 )
             }
         }

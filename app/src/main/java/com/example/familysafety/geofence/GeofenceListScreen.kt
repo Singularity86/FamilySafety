@@ -15,7 +15,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.example.familysafety.main.MetalActionButton
+import com.example.familysafety.main.FloatingActionLabelButton
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,7 +38,7 @@ fun GeofenceListScreen(
             )
         },
         floatingActionButton = {
-            MetalActionButton(
+            FloatingActionLabelButton(
                 label = "Add Zone",
                 icon = Icons.Default.Add,
                 onClick = { onNavigateToEditor("new") }

@@ -62,6 +62,15 @@ import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 import timber.log.Timber
+import com.example.familysafety.ui.theme.ChipShape
+import com.example.familysafety.ui.theme.ButtonShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.StrokeCap
+import com.example.familysafety.ui.theme.PersonPalette
+import com.example.familysafety.ui.theme.PersonColor
+import com.example.familysafety.ui.theme.OnPersonColor
+import com.example.familysafety.ui.theme.PersonPatternsPreference
+import androidx.compose.ui.graphics.toArgb
 
 /** Beyond this age, a member marker is dimmed to signal it's no longer fresh. */
 private const val STALE_LOCATION_THRESHOLD_MS = 30 * 60_000L
@@ -127,7 +136,7 @@ fun MapScreen(
             )
             Spacer(modifier = Modifier.height(24.dp))
             if (permanentlyDenied) {
-                Button(onClick = {
+                Button(shape = ButtonShape, onClick = {
                     context.startActivity(
                         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                             data = Uri.fromParts("package", context.packageName, null)
@@ -141,7 +150,7 @@ fun MapScreen(
                     Text("I've granted it, refresh")
                 }
             } else {
-                Button(onClick = {
+                Button(shape = ButtonShape, onClick = {
                     permissionLauncher.launch(
                         arrayOf(
                             Manifest.permission.ACCESS_FINE_LOCATION,
@@ -331,9 +340,12 @@ fun MapScreen(
 
     // Rebuild member markers whenever locations, members, or avatars change — or when a
     // different member is raised, since draw order is decided here — or when the zoom
-    // changes, since that is what decides who is covering whom.
+    // changes, since that is what decides who is covering whom — or when the colour-blind
+    // patterns are switched, since they are drawn into the pin bitmaps.
+    val personPatterns = PersonPatternsPreference.enabled()
     LaunchedEffect(
-        memberLocations, familyMembers, memberAvatars, raisedMemberId, mapZoom, expandedClusterKey
+        memberLocations, familyMembers, memberAvatars, raisedMemberId, mapZoom, expandedClusterKey,
+        personPatterns
     ) {
         mapView.overlays.removeAll { it is Marker }
         // osmdroid draws overlays in list order, so whatever is added last ends up on top.
@@ -395,7 +407,8 @@ fun MapScreen(
                         memberId = memberId,
                         avatar = memberAvatars[memberId],
                         sizePx = markerSizePx,
-                        colorHue = member?.colorHue
+                        colorHue = member?.colorHue,
+                        patterns = personPatterns
                     )
                     val marker = Marker(mapView).apply {
                         position = GeoPoint(location.latitude, location.longitude)
@@ -431,7 +444,8 @@ fun MapScreen(
                         totalCount = cluster.size,
                         sizePx = markerSizePx,
                         highlightMemberId = raisedMemberId,
-                        isOpen = cluster.key == expandedClusterKey
+                        isOpen = cluster.key == expandedClusterKey,
+                        patterns = personPatterns
                     )
                     val marker = Marker(mapView).apply {
                         position = GeoPoint(cluster.latitude, cluster.longitude)
@@ -487,7 +501,7 @@ fun MapScreen(
                     if (isLarge && !tooMany) {
                         Surface(
                             color = statusColors.warningIndicator.copy(alpha = 0.16f),
-                            shape = MaterialTheme.shapes.extraSmall
+                            shape = ChipShape
                         ) {
                             Text(
                                 text = "Large download — make sure you're on Wi-Fi.",
@@ -501,6 +515,7 @@ fun MapScreen(
             },
             confirmButton = {
                 Button(
+                    shape = ButtonShape,
                     enabled = !tooMany,
                     onClick = {
                         showDownloadDialog = false
@@ -565,7 +580,7 @@ fun MapScreen(
                 .padding(end = 2.dp)
                 .width(18.dp)
                 .height(72.dp),
-            shape = RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp),
+            shape = RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp),
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.58f),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
@@ -649,6 +664,7 @@ fun MapScreen(
                     }
                     val fraction = if (downloadTotal > 0) downloadProgress.toFloat() / downloadTotal else 0f
                     LinearProgressIndicator(
+                        strokeCap = StrokeCap.Butt,
                         progress = { fraction },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -658,6 +674,7 @@ fun MapScreen(
             }
         } else if (bottomControlsVisible) {
             SmallFloatingActionButton(
+                shape = CircleShape,
                 onClick = { showDownloadDialog = true },
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -670,6 +687,7 @@ fun MapScreen(
 
         if (bottomControlsVisible) {
             SmallFloatingActionButton(
+                shape = CircleShape,
                 onClick = onNavigateToZones,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -705,7 +723,7 @@ fun MapScreen(
                     }
                 },
                 confirmButton = {
-                    Button(onClick = { showClusterTutorial = false }) { Text("Got it") }
+                    Button(shape = ButtonShape, onClick = { showClusterTutorial = false }) { Text("Got it") }
                 }
             )
         }
@@ -866,7 +884,8 @@ internal fun memberMarkerBitmap(
     memberId: String,
     avatar: Bitmap?,
     sizePx: Int,
-    colorHue: Float? = null
+    colorHue: Float? = null,
+    patterns: Boolean = false
 ): Bitmap {
     val tailH  = (sizePx * 0.34f).toInt()
     val totalH = sizePx + tailH + 4          // +4 px headroom for shadow bleed
@@ -876,11 +895,13 @@ internal fun memberMarkerBitmap(
     val r      = sizePx / 2f
     val cx     = r
     val cy     = r                            // centre of the circle within the bitmap
-    val border = (sizePx * 0.10f).coerceAtLeast(3f)
+    // With the colour-blind patterns on, the coloured band around the face is widened so its
+    // pattern has room to read; otherwise it stays a thin accent.
+    val border = (sizePx * if (patterns) 0.22f else 0.10f).coerceAtLeast(3f)
     val tipY   = cy + r + tailH.toFloat()    // tip of the pin tail
 
-    val hue         = colorHue ?: ((memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
-    val accentColor = ColorUtils.HSLToColor(floatArrayOf(hue, 0.70f, 0.50f))
+    val personColor = PersonPalette.forMember(memberId, colorHue)
+    val accentColor = personColor.fill.toArgb()
 
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
@@ -912,6 +933,17 @@ internal fun memberMarkerBitmap(
     // 2 — Accent-coloured outer pin
     paint.color = accentColor
     canvas.drawPath(pinPath(r, tipY), paint)
+    if (patterns) {
+        // Pattern over the pin body only; the face is drawn on top of it next.
+        canvas.save()
+        canvas.clipPath(pinPath(r, tipY))
+        personColor.pattern.draw(
+            canvas,
+            android.graphics.RectF(0f, 0f, sizePx.toFloat(), tipY),
+            cell = (border * 0.95f).coerceAtLeast(6f)
+        )
+        canvas.restore()
+    }
 
     // 3 & 4 — The face: white ring, then the avatar photo or coloured initials.
     // Shared with the cluster bubble, so the small faces in a bubble are literally the
@@ -923,7 +955,7 @@ internal fun memberMarkerBitmap(
         radius = r,
         ringWidth = border,
         displayName = displayName,
-        hue = hue,
+        personColor = personColor,
         avatar = avatar,
         drawRing = false
     )
@@ -944,17 +976,30 @@ private fun drawMemberDisc(
     radius: Float,
     ringWidth: Float,
     displayName: String,
-    hue: Float,
+    personColor: PersonColor,
     avatar: Bitmap?,
     drawRing: Boolean = true,
-    highlight: Boolean = false
+    highlight: Boolean = false,
+    patterns: Boolean = false
 ) {
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    val accentColor = ColorUtils.HSLToColor(floatArrayOf(hue, 0.70f, 0.50f))
+    val accentColor = personColor.fill.toArgb()
 
     if (drawRing) {
         paint.color = accentColor
         canvas.drawCircle(cx, cy, radius, paint)
+        if (patterns) {
+            canvas.save()
+            canvas.clipPath(android.graphics.Path().apply {
+                addCircle(cx, cy, radius, android.graphics.Path.Direction.CW)
+            })
+            personColor.pattern.draw(
+                canvas,
+                android.graphics.RectF(cx - radius, cy - radius, cx + radius, cy + radius),
+                cell = (ringWidth * 1.1f).coerceAtLeast(5f)
+            )
+            canvas.restore()
+        }
     }
 
     // White under the photo, so a transparent avatar reads as a face and not as a hole.
@@ -984,11 +1029,10 @@ private fun drawMemberDisc(
             .joinToString("") { it.first().uppercaseChar().toString() }
             .ifEmpty { "?" }
 
-        // Fill slightly lighter than the accent ring so it reads well
-        paint.color = ColorUtils.HSLToColor(floatArrayOf(hue, 0.65f, 0.58f))
+        paint.color = accentColor
         canvas.drawCircle(cx, cy, innerR, paint)
 
-        paint.color = Color.WHITE
+        paint.color = OnPersonColor.toArgb()
         paint.textSize = innerR * 0.74f
         paint.textAlign = Paint.Align.CENTER
         paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -1002,7 +1046,7 @@ private fun drawMemberDisc(
         paint.shader = null
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = ringWidth * 0.9f
-        paint.color = ColorUtils.HSLToColor(floatArrayOf(hue, 0.85f, 0.28f))
+        paint.color = personColor.textOnLight.toArgb()
         canvas.drawCircle(cx, cy, radius - ringWidth * 0.45f, paint)
         paint.style = Paint.Style.FILL
     }
@@ -1051,7 +1095,8 @@ internal fun clusterMarkerBitmap(
     totalCount: Int,
     sizePx: Int,
     highlightMemberId: String?,
-    isOpen: Boolean
+    isOpen: Boolean,
+    patterns: Boolean = false
 ): Bitmap {
     val discD  = sizePx * 0.60f
     val discR  = discD / 2f
@@ -1159,8 +1204,7 @@ internal fun clusterMarkerBitmap(
     for (index in faces.indices.reversed()) {
         val face = faces[index]
         val cx = firstCx + index * faceAdvance
-        val hue = face.colorHue
-            ?: ((face.memberId.hashCode().toLong() and 0xFFFFFFFFL) % 360).toFloat()
+        val personColor = PersonPalette.forMember(face.memberId, face.colorHue)
         // A stale face fades on its own; the bubble around it stays solid, since the
         // group is still there even when one person's fix is old.
         val restore = canvas.saveLayerAlpha(
@@ -1180,10 +1224,11 @@ internal fun clusterMarkerBitmap(
             radius = discR,
             ringWidth = (discR * 0.22f).coerceAtLeast(2f),
             displayName = face.displayName,
-            hue = hue,
+            personColor = personColor,
             avatar = face.avatar,
             drawRing = true,
-            highlight = face.memberId == highlightMemberId
+            highlight = face.memberId == highlightMemberId,
+            patterns = patterns
         )
         canvas.restoreToCount(restore)
     }

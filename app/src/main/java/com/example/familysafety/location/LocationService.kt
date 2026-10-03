@@ -106,6 +106,11 @@ class LocationService : Service() {
         // so a runaway coroutine can't pin the CPU forever.
         private const val WAKELOCK_TIMEOUT_MS = 60_000L
 
+        // A heartbeat inside this window after a successful publish only checks the
+        // connection. A minute short of the stationary interval so a heartbeat landing
+        // just before the next one is due does not skip a whole cycle.
+        private const val HEARTBEAT_SKIP_IF_PUBLISHED_WITHIN_MS = LOCATION_INTERVAL_STATIONARY - 60_000L
+
         const val PREFS_NAME = "location_service"
         const val PREFS_MEMBER_ID = "member_id"
         const val PREF_SERVICE_ALIVE = "service_alive"
@@ -182,16 +187,29 @@ class LocationService : Service() {
             ACTION_START_TRACKING -> {
                 val id = intent.getStringExtra(EXTRA_MEMBER_ID)
                 Timber.i("LocationService: START_TRACKING for member=${id?.take(8)}…")
+                // MainActivity sends this every time the app opens. Cancelling the scope
+                // here used to kill the movement, reconnect and heartbeat jobs, and
+                // startLocationUpdates() then returned early because GPS was still
+                // registered — leaving a service that looked alive but no longer adapted
+                // its interval or flushed on reconnect until the OS happened to restart it.
+                val alreadyTrackingThisMember = isTracking && memberId == id
                 memberId = id
                 getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
                     .putString(PREFS_MEMBER_ID, memberId)
                     .putBoolean(PREF_SERVICE_ALIVE, true)
                     .apply()
-                scope.cancel()
-                scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
                 startForeground(NOTIFICATION_ID, createNotification())
                 appInitializer.initialize()
-                startLocationUpdates()
+                if (alreadyTrackingThisMember) {
+                    Timber.d("LocationService: already tracking — keeping the running session")
+                } else {
+                    stopLocationUpdates()
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                        .putBoolean(PREF_SERVICE_ALIVE, true).apply()
+                    scope.cancel()
+                    scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+                    startLocationUpdates()
+                }
                 ServiceWatchdogWorker.scheduleIfNeeded(this)
                 LocationHeartbeatReceiver.schedule(this)
             }
@@ -418,6 +436,18 @@ class LocationService : Service() {
             Timber.w(e, "LocationService: heartbeat ($trigger) reconnect failed")
         }
 
+        // The alarm fires every five minutes whether or not regular fixes are flowing.
+        // When one went out recently, the family already has a fresh position; another
+        // GPS fix plus a message per member would only cost battery and broker traffic.
+        // Anything stuck in the outbox still gets its retry.
+        if (System.currentTimeMillis() - lastPublishedAt < HEARTBEAT_SKIP_IF_PUBLISHED_WITHIN_MS) {
+            Timber.d("LocationService: heartbeat ($trigger) — recent publish, connection check only")
+            if (locationPublishOutboxRepository.getNewestPendingTimestamp(id) != null) {
+                flushPendingLocationPublishes()
+            }
+            return
+        }
+
         val fresh = requestFreshFix()
         val lastKnown = locationRepository.myLocation.value
         if (fresh != null && (lastKnown == null || fresh.time > lastKnown.timestamp)) {
@@ -609,9 +639,17 @@ class LocationService : Service() {
                     ValidationResult.Valid -> {}
                 }
 
+                crashDetectionMonitor.feedSpeed(speedMs)
+
+                val previous = locationRepository.myLocation.value
+                if (previous != null && LocationPublishPolicy.isRedundant(previous, memberLocation)) {
+                    Timber.d("LocationService: fix unchanged from last sent — not publishing")
+                    adjustIntervalFromGps(location)
+                    return@safely
+                }
+
                 locationRepository.updateMyLocation(memberLocation)
                 locationPublishOutboxRepository.enqueue(memberLocation)
-                crashDetectionMonitor.feedSpeed(speedMs)
 
                 if (!RateLimiters.locationUpdates.allowRequest(id)) {
                     val retryAfter = RateLimiters.locationUpdates.getRetryAfterMs(id)
