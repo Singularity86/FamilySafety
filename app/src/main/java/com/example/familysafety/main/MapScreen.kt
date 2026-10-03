@@ -53,10 +53,8 @@ import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
 import org.osmdroid.tileprovider.cachemanager.CacheManager
-import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
-import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Overlay
@@ -68,21 +66,6 @@ import timber.log.Timber
 /** Beyond this age, a member marker is dimmed to signal it's no longer fresh. */
 private const val STALE_LOCATION_THRESHOLD_MS = 30 * 60_000L
 
-private val MAP_TILES = object : OnlineTileSourceBase(
-    "OsmStandard", 0, 19, 256, ".png",
-    arrayOf(
-        "https://a.tile.openstreetmap.org/",
-        "https://b.tile.openstreetmap.org/",
-        "https://c.tile.openstreetmap.org/"
-    ),
-    "© OpenStreetMap contributors"
-) {
-    override fun getTileURLString(pMapTileIndex: Long): String =
-        baseUrl +
-            MapTileIndex.getZoom(pMapTileIndex) + "/" +
-            MapTileIndex.getX(pMapTileIndex) + "/" +
-            MapTileIndex.getY(pMapTileIndex) + mImageFilenameEnding
-}
 
 @Composable
 fun MapScreen(
@@ -207,7 +190,7 @@ fun MapScreen(
 
     val mapView = remember {
         MapView(context).apply {
-            setTileSource(MAP_TILES)
+            setTileSource(OSM_TILES)
             setMultiTouchControls(true)
             confineToSingleWorld(context.resources.displayMetrics)
             controller.setZoom(savedMapZoom)
