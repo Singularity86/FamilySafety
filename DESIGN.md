@@ -181,8 +181,9 @@ Once `p ≥ r`, it takes its own role's radius.
 
 - **Kept on purpose:** the soft amber glow behind the selected bottom-tab icon (the screen's
   porch light) and the shimmer on loading file thumbnails.
-- Both stop animating when the phone's *Remove animations* setting is on
-  (`rememberReducedMotion`): the glow appears instantly and the shimmer holds still.
+- Both stop animating when the phone's *Remove animations* setting is on, or Battery Saver
+  has switched animations off (`rememberReducedMotion`): the glow appears instantly and the
+  shimmer holds still.
 - No other decorative motion: no sheen, glow or gradient unless it says something.
 
 ## Words
