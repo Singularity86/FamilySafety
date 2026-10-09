@@ -60,10 +60,9 @@ public final class MqttTransport: NSObject {
     /// Persisted so a later connect can recognise a subscription set the broker already holds.
     public var fingerprintStore: SubscriptionFingerprintStore = UserDefaultsFingerprintStore()
 
-    /// Whether the broker kept our session on the latest connect. CocoaMQTT 2.x reads the
-    /// CONNACK session-present flag internally but does not pass it to its delegate, so this
-    /// stays `false` — the safe direction, which always resubscribes — until the flag is
-    /// surfaced (patched/forked library or another client). See IOS_PORT_SPEC.md §4.
+    /// Whether the broker kept our session on the latest connect (CONNACK session-present),
+    /// read from the patched CocoaMQTT in `Vendor/` (see Vendor/PATCHES.md). `false` is the
+    /// safe direction: it forces a full resubscribe.
     public private(set) var sessionPresent = false
 
     /// NSLock's lock()/unlock() are NS_SWIFT_UNAVAILABLE_FROM_ASYNC — calling them
@@ -278,6 +277,7 @@ extension MqttTransport: CocoaMQTTDelegate {
             defer { connectContinuation = nil }
             return connectContinuation
         }
+        sessionPresent = ack == .accept && mqtt.sessionPresent
         if ack == .accept {
             continuation?.resume()
         } else {

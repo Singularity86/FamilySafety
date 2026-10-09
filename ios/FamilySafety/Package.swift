@@ -37,7 +37,8 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/jedisct1/swift-sodium.git", from: "0.9.1"),
-        .package(url: "https://github.com/emqx/CocoaMQTT.git", from: "2.1.6")
+        // Vendored + patched (exposes CONNACK session-present) — see ../Vendor/PATCHES.md.
+        .package(path: "../Vendor/CocoaMQTT")
     ],
     targets: [
         .target(

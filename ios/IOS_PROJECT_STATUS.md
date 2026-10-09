@@ -103,12 +103,12 @@ trust the spec's summary.
 `MqttTransport.restoreSubscriptions` (SUBACK-gated, fingerprint cleared first and stored only on
 full grant) replace the old unconditional `subscribeOwnTopics`/`subscribePeerTopics`. 74 tests pass.
 
-**Known gap:** the resubscribe skip cannot trigger yet. CocoaMQTT reads the CONNACK
-session-present flag internally (`FrameConnAck.sessPresent`) but does not pass it to its
-delegate, so `MqttTransport.sessionPresent` is always `false` and every connect still
-resubscribes — the safe direction, but the retained-message replay Android eliminated is still
-paid on iOS. Fix needs a patched/forked CocoaMQTT (expose the flag in `didConnectAck`) or a
-different client. Do this before the family runs iOS builds.
+**Resubscribe skip is live in code, unverified on a broker.** CocoaMQTT does not expose the
+CONNACK session-present flag, so CocoaMQTT 2.4.1 is vendored in `ios/Vendor/CocoaMQTT` with a
+small patch adding `sessionPresent` (see `ios/Vendor/PATCHES.md`); `Package.swift` points at it
+and `MqttTransport` reads it in `didConnectAck`. Unit tests cover the policy only — nothing has
+yet shown a second connect to the real broker skipping SUBSCRIBE. Check that with the two-simulator
+harness (reconnect one side and confirm no retained replay / no SUBSCRIBE in the debug log).
 
 **Still to do in later phases:** Phase 3 (group sync) and Phase 5 (chat) must implement the
 private-conversation confinement and replication scoping in spec §6.3/§6.6 from the start;

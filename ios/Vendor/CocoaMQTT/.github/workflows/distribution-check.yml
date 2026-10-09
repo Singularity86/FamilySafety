@@ -1,0 +1,270 @@
+name: Distribution Checks
+
+on:
+  pull_request:
+    paths:
+      - "Source/**/*.swift"
+      - "Source/Info.plist"
+      - "Source/PrivacyInfo.xcprivacy"
+      - "CocoaMQTTTests/**/*.swift"
+      - "Package.swift"
+      - "Package.resolved"
+      - "CocoaMQTT.podspec"
+      - "CocoaMQTT.xcodeproj/project.pbxproj"
+      - "CocoaMQTT.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+      - ".github/workflows/distribution-check.yml"
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tag-version-check:
+    name: Tag Version Guard
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release version and branch
+        run: |
+          set -euo pipefail
+
+          VERSION="$(ruby -ne 'puts $1 if /s\.version\s*=\s*"([^"]+)"/' CocoaMQTT.podspec)"
+          SOURCE_TAG="$(ruby -ne 'puts $1 if /:tag\s*=>\s*"([^"]+)"/' CocoaMQTT.podspec)"
+          FRAMEWORK_VERSION="$(
+            python3 -c 'import plistlib; print(plistlib.load(open("Source/Info.plist", "rb"))["CFBundleShortVersionString"])'
+          )"
+
+          if [ -z "${VERSION}" ] || [ -z "${SOURCE_TAG}" ] || [ -z "${FRAMEWORK_VERSION}" ]; then
+            echo "Failed to parse release version metadata"
+            exit 1
+          fi
+
+          if [ "${VERSION}" != "${SOURCE_TAG}" ] || [ "${VERSION}" != "${FRAMEWORK_VERSION}" ]; then
+            echo "Release versions must match: podspec=${VERSION}, source=${SOURCE_TAG}, framework=${FRAMEWORK_VERSION}"
+            exit 1
+          fi
+
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          if [ "${TAG_NAME}" != "${SOURCE_TAG}" ]; then
+            echo "Git tag (${TAG_NAME}) must exactly match podspec source tag (${SOURCE_TAG})"
+            exit 1
+          fi
+
+          if [[ "${VERSION}" == 2.* ]]; then
+            git fetch origin \
+              release/2.x:refs/remotes/origin/release/2.x \
+              --force
+            TAG_COMMIT="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+            if ! git merge-base --is-ancestor "${TAG_COMMIT}" origin/release/2.x; then
+              echo "CocoaMQTT 2.x tag must point to a commit on release/2.x"
+              exit 1
+            fi
+          fi
+
+          echo "Release guard passed: tag=${TAG_NAME}, version=${VERSION}"
+
+  spm-smoke:
+    name: SPM Release Smoke
+    runs-on: macos-15
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Validate package manifest
+        run: swift package dump-package > /dev/null
+
+      - name: Build package targets
+        run: swift build
+
+      - name: Verify SPM privacy manifest resource
+        run: test -n "$(find .build -path '*CocoaMQTT*.bundle/PrivacyInfo.xcprivacy' -print -quit)"
+
+      - name: Build Xcode framework project
+        run: |
+          set -euo pipefail
+
+          DERIVED_DATA="${RUNNER_TEMP}/CocoaMQTT-Xcode"
+          xcodebuild \
+            -project CocoaMQTT.xcodeproj \
+            -scheme "Mac Framework" \
+            -configuration Release \
+            -derivedDataPath "${DERIVED_DATA}" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+          test -f "${DERIVED_DATA}/Build/Products/Release/CocoaMQTT.framework/Versions/A/Resources/PrivacyInfo.xcprivacy"
+
+          xcodebuild \
+            -project CocoaMQTT.xcodeproj \
+            -scheme "iOS Framework" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "${DERIVED_DATA}" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+          test -f "${DERIVED_DATA}/Build/Products/Release-iphoneos/CocoaMQTT.framework/PrivacyInfo.xcprivacy"
+
+      - name: Build as local SPM dependency
+        run: |
+          set -euo pipefail
+
+          TMP_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TMP_DIR}"' EXIT
+
+          cat > "${TMP_DIR}/Package.swift" <<SPM
+          // swift-tools-version:5.7
+          import PackageDescription
+
+          let package = Package(
+              name: "CocoaMQTTSmoke",
+              platforms: [.macOS(.v10_13)],
+              dependencies: [
+                  .package(path: "${GITHUB_WORKSPACE}")
+              ],
+              targets: [
+                  .executableTarget(
+                      name: "CocoaMQTTSmoke",
+                      dependencies: [
+                          .product(name: "CocoaMQTT", package: "CocoaMQTT"),
+                          .product(name: "CocoaMQTTWebSocket", package: "CocoaMQTT")
+                      ]
+                  )
+              ]
+          )
+          SPM
+
+          mkdir -p "${TMP_DIR}/Sources/CocoaMQTTSmoke"
+          cat > "${TMP_DIR}/Sources/CocoaMQTTSmoke/main.swift" <<'SPM_MAIN'
+          import CocoaMQTT
+          import CocoaMQTTWebSocket
+
+          let message = CocoaMQTTMessage(topic: "ci/spm", string: "ok")
+          let socket = CocoaMQTTWebSocket(uri: "/mqtt")
+          print("\(message.topic) \(socket.enableSSL)")
+          SPM_MAIN
+
+          swift build --package-path "${TMP_DIR}"
+
+      - name: Build as tagged SPM dependency
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+
+          TMP_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TMP_DIR}"' EXIT
+
+          cat > "${TMP_DIR}/Package.swift" <<SPM
+          // swift-tools-version:5.7
+          import PackageDescription
+
+          let package = Package(
+              name: "CocoaMQTTTaggedSmoke",
+              platforms: [.macOS(.v10_13)],
+              dependencies: [
+                  .package(url: "https://github.com/${GITHUB_REPOSITORY}.git", exact: "${GITHUB_REF_NAME}")
+              ],
+              targets: [
+                  .executableTarget(
+                      name: "CocoaMQTTTaggedSmoke",
+                      dependencies: [
+                          .product(name: "CocoaMQTT", package: "CocoaMQTT"),
+                          .product(name: "CocoaMQTTWebSocket", package: "CocoaMQTT")
+                      ]
+                  )
+              ]
+          )
+          SPM
+
+          mkdir -p "${TMP_DIR}/Sources/CocoaMQTTTaggedSmoke"
+          cat > "${TMP_DIR}/Sources/CocoaMQTTTaggedSmoke/main.swift" <<'SPM_MAIN'
+          import CocoaMQTT
+          import CocoaMQTTWebSocket
+
+          print(CocoaMQTTMessage(topic: "ci/tag", string: "ok").topic)
+          SPM_MAIN
+
+          swift build --package-path "${TMP_DIR}"
+
+  cocoapods-lint:
+    name: CocoaPods Release Lint
+    runs-on: macos-15
+    timeout-minutes: 35
+
+    env:
+      COCOAPODS_DISABLE_STATS: "true"
+      LANG: en_US.UTF-8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@19a43a6a2428d455dbd1b85344698725179c9d8c # v1
+        with:
+          ruby-version: "3.2"
+
+      - name: Install CocoaPods
+        run: gem install cocoapods --no-document
+
+      - name: Verify release version metadata
+        run: |
+          set -euo pipefail
+
+          VERSION="$(ruby -ne 'puts $1 if /s\.version\s*=\s*"([^"]+)"/' CocoaMQTT.podspec)"
+          SOURCE_TAG="$(ruby -ne 'puts $1 if /:tag\s*=>\s*"([^"]+)"/' CocoaMQTT.podspec)"
+          FRAMEWORK_VERSION="$(
+            python3 -c 'import plistlib; print(plistlib.load(open("Source/Info.plist", "rb"))["CFBundleShortVersionString"])'
+          )"
+
+          if [ -z "${VERSION}" ] || [ -z "${SOURCE_TAG}" ] || [ -z "${FRAMEWORK_VERSION}" ]; then
+            echo "Failed to parse release version metadata"
+            exit 1
+          fi
+
+          if [ "${VERSION}" != "${SOURCE_TAG}" ] || [ "${VERSION}" != "${FRAMEWORK_VERSION}" ]; then
+            echo "Release versions must match: podspec=${VERSION}, source=${SOURCE_TAG}, framework=${FRAMEWORK_VERSION}"
+            exit 1
+          fi
+
+      - name: Verify CocoaPods privacy manifest resource
+        run: |
+          SPEC_JSON="$(mktemp)"
+          pod ipc spec CocoaMQTT.podspec > "${SPEC_JSON}"
+          ruby -rjson - "${SPEC_JSON}" <<'RUBY'
+          spec = JSON.parse(File.read(ARGV.fetch(0)))
+          core = spec.fetch("subspecs").find { |subspec| subspec["name"] == "Core" }
+          bundles = core&.fetch("resource_bundles", {}) || {}
+          manifests = bundles.values.flatten
+
+          abort "Core subspec does not package PrivacyInfo.xcprivacy" unless manifests.include?("Source/PrivacyInfo.xcprivacy")
+          RUBY
+
+      - name: Lint CocoaPods Core subspec
+        run: pod lib lint CocoaMQTT.podspec --subspec=Core --allow-warnings --skip-tests --fail-fast --verbose
+
+      - name: Lint CocoaPods WebSockets subspec
+        run: pod lib lint CocoaMQTT.podspec --subspec=WebSockets --allow-warnings --skip-tests --fail-fast --verbose
+
+      - name: Lint tagged podspec from source
+        if: github.ref_type == 'tag'
+        run: pod spec lint CocoaMQTT.podspec --allow-warnings --skip-tests --fail-fast --verbose

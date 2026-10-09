@@ -1,0 +1,524 @@
+//
+//  CocoaMQTTDeliverTests.swift
+//  CocoaMQTT-Tests
+//
+//  Created by JianBo on 2019/10/3.
+//  Copyright © 2019 emqtt.io. All rights reserved.
+//
+
+import XCTest
+@testable import CocoaMQTT
+
+class CocoaMQTTDeliverTests: XCTestCase {
+
+    override func setUp() {
+        // Put setup code here. This method is called before the invocation of each test method in the class.
+    }
+
+    override func tearDown() {
+        // Put teardown code here. This method is called after the invocation of each test method in the class.
+    }
+
+    func testSerialDeliver() {
+        let caller = Caller()
+        let deliver = CocoaMQTTDeliver()
+
+        let frames = [FramePublish(topic: "t/0", payload: [0x00], qos: .qos0),
+                      FramePublish(topic: "t/1", payload: [0x01], qos: .qos1, msgid: 1),
+                      FramePublish(topic: "t/2", payload: [0x02], qos: .qos2, msgid: 2)]
+
+        deliver.delegate = caller
+        for f in frames {
+            _ = deliver.add(f)
+        }
+        ms_sleep(100)
+
+        XCTAssertEqual(frames.count, caller.frames.count)
+        for i in 0 ..< frames.count {
+            assertEqual(frames[i], caller.frames[i])
+        }
+
+    }
+
+    func testAckMessage() {
+        let caller = Caller()
+        let deliver = CocoaMQTTDeliver()
+
+        let frames = [FramePublish(topic: "t/0", payload: [0x00], qos: .qos0),
+                      FramePublish(topic: "t/1", payload: [0x01], qos: .qos1, msgid: 1),
+                      FramePublish(topic: "t/2", payload: [0x02], qos: .qos2, msgid: 2)]
+
+        deliver.delegate = caller
+        for f in frames {
+            _ = deliver.add(f)
+        }
+
+        ms_sleep(100)
+
+        XCTAssertEqual(frames.count, caller.frames.count)
+        for i in 0 ..< frames.count {
+            assertEqual(frames[i], caller.frames[i])
+        }
+
+        var inflights = deliver.t_inflightFrames()
+        XCTAssertEqual(inflights.count, 2)
+        XCTAssertEqual(deliver.t_queuedFrames().count, 0)
+        for i in 0 ..< inflights.count {
+            assertEqual(inflights[i], frames[i+1])
+        }
+
+        deliver.ack(by: FramePubAck(msgid: 1))
+        deliver.ack(by: FramePubRec(msgid: 2))
+        ms_sleep(100)
+
+        inflights = deliver.t_inflightFrames()
+        XCTAssertEqual(inflights.count, 1)
+        XCTAssertEqual(deliver.t_queuedFrames().count, 0)
+        assertEqual(inflights[0], FramePubRel(msgid: 2))
+
+        deliver.ack(by: FramePubComp(msgid: 2))
+        ms_sleep(100)
+
+        inflights = deliver.t_inflightFrames()
+        XCTAssertEqual(inflights.count, 0)
+
+        // Assert sent
+        assertEqual(caller.frames[3], FramePubRel(msgid: 2))
+    }
+
+    func testQueueAndInflightReDeliver() {
+        let caller = Caller()
+        let deliver = CocoaMQTTDeliver()
+
+        let frames = [FramePublish(topic: "t/0", payload: [0x00], qos: .qos0),
+                      FramePublish(topic: "t/1", payload: [0x01], qos: .qos1, msgid: 1),
+                      FramePublish(topic: "t/2", payload: [0x02], qos: .qos2, msgid: 2)]
+
+        deliver.retryTimeInterval = 1000
+        deliver.inflightWindowSize = 1
+        deliver.mqueueSize = 1
+        deliver.delegate = caller
+
+        XCTAssertEqual(true, deliver.add(frames[1]))
+        ms_sleep(100) // Wait the message transfer to inflight-window
+        XCTAssertEqual(true, deliver.add(frames[2]))
+        XCTAssertEqual(false, deliver.add(frames[0]))
+
+        ms_sleep(1100) // Wait for re-delivering timeout
+        XCTAssertEqual(caller.frames.count, 2)
+        assertEqual(caller.frames[0], frames[1])
+        assertEqual(caller.frames[1], frames[1])
+
+        deliver.ack(by: FramePubAck(msgid: 1))
+        ms_sleep(100)   // Waiting for the frame in the mqueue transfer to inflight window
+
+        var inflights = deliver.t_inflightFrames()
+        XCTAssertEqual(inflights.count, 1)
+        assertEqual(inflights[0], frames[2])
+
+        deliver.ack(by: FramePubRec(msgid: 2))
+        ms_sleep(2000)  // Waiting for re-delivering timeout
+        deliver.ack(by: FramePubComp(msgid: 2))
+        ms_sleep(100)
+
+        inflights = deliver.t_inflightFrames()
+        XCTAssertEqual(inflights.count, 0)
+
+        let sents: [Frame] = [frames[1], frames[1], frames[2], FramePubRel(msgid: 2), FramePubRel(msgid: 2)]
+        XCTAssertEqual(caller.frames.count, sents.count)
+        for i in 0 ..< sents.count {
+            assertEqual(caller.frames[i], sents[i])
+        }
+        XCTAssertTrue((caller.frames[1] as? FramePublish)?.dup == true)
+        XCTAssertEqual(caller.frames[4].packetFixedHeaderType, 0x62)
+    }
+
+    func testRedeliverTimerDriftDoesNotSkipRetry() {
+        let caller = Caller()
+        let deliver = CocoaMQTTDeliver()
+        let frame = FramePublish(topic: "t/drift", payload: [0x01], qos: .qos1, msgid: 42)
+
+        deliver.retryTimeInterval = 1000
+        deliver.delegate = caller
+        XCTAssertTrue(deliver.add(frame))
+        ms_sleep(100)
+
+        caller.reset()
+        let intervalNs = deliver.t_retryIntervalNanoseconds()
+        XCTAssertTrue(deliver.t_setInflightNextRetryTime(intervalNs, forMsgid: frame.msgid))
+
+        deliver.t_redeliver(atUptimeNanoseconds: intervalNs / 2)
+        ms_sleep(50)
+        XCTAssertEqual(caller.frames.count, 0)
+
+        // Simulate strict timer ticks: first callback runs slightly late, second runs on the next deadline.
+        deliver.t_redeliver(atUptimeNanoseconds: intervalNs + 1_000_000)
+        deliver.t_redeliver(atUptimeNanoseconds: intervalNs * 2)
+        ms_sleep(100)
+
+        XCTAssertEqual(caller.frames.count, 2)
+        for sent in caller.frames {
+            guard let publish = sent as? FramePublish else {
+                XCTFail("Expected FramePublish")
+                continue
+            }
+            assertEqual(publish, frame)
+            XCTAssertTrue(publish.dup)
+        }
+    }
+
+    func testMQTT5DoesNotRedeliverPublishWhileConnectionRemainsOpen() {
+        let caller = Caller()
+        let deliver = CocoaMQTTDeliver()
+        let frame = FramePublish(topic: "t/mqtt5", payload: [0x01], qos: .qos1, msgid: 43)
+
+        deliver.protocolVersion = .v5
+        deliver.retryTimeInterval = 1
+        deliver.delegate = caller
+        XCTAssertTrue(deliver.add(frame))
+        deliver.t_waitUntilIdle()
+        caller.delegateQueue.sync {}
+        caller.reset()
+
+        XCTAssertTrue(deliver.t_setInflightNextRetryTime(0, forMsgid: frame.msgid))
+        deliver.t_redeliver(atUptimeNanoseconds: UInt64.max)
+        deliver.t_waitUntilIdle()
+        caller.delegateQueue.sync {}
+
+        XCTAssertTrue(caller.frames.isEmpty)
+        XCTAssertEqual(deliver.t_inflightFrames().count, 1)
+    }
+
+    func testMQTT5DoesNotRedeliverPubrelWhileConnectionRemainsOpen() {
+        let caller = Caller()
+        let deliver = CocoaMQTTDeliver()
+        let publish = FramePublish(topic: "t/mqtt5-qos2", payload: [0x02], qos: .qos2, msgid: 44)
+
+        deliver.protocolVersion = .v5
+        deliver.retryTimeInterval = 1
+        deliver.delegate = caller
+        XCTAssertTrue(deliver.add(publish))
+        deliver.t_waitUntilIdle()
+        deliver.ack(by: FramePubRec(msgid: publish.msgid))
+        deliver.t_waitUntilIdle()
+        caller.delegateQueue.sync {}
+        caller.reset()
+
+        XCTAssertTrue(deliver.t_setInflightNextRetryTime(0, forMsgid: publish.msgid))
+        deliver.t_redeliver(atUptimeNanoseconds: UInt64.max)
+        deliver.t_waitUntilIdle()
+        caller.delegateQueue.sync {}
+
+        XCTAssertTrue(caller.frames.isEmpty)
+        let inflight = deliver.t_inflightFrames()
+        XCTAssertEqual(inflight.count, 1)
+        XCTAssertTrue(inflight.first is FramePubRel)
+    }
+
+    func testRetryIntervalNanosecondsClampsNonPositiveValues() {
+        let deliver = CocoaMQTTDeliver()
+
+        deliver.retryTimeInterval = 0
+        XCTAssertEqual(deliver.t_retryIntervalNanoseconds(), 1)
+
+        deliver.retryTimeInterval = -5
+        XCTAssertEqual(deliver.t_retryIntervalNanoseconds(), 1)
+    }
+
+    func testRetryIntervalNanosecondsHandlesInvalidAndHugeValues() {
+        let deliver = CocoaMQTTDeliver()
+
+        deliver.retryTimeInterval = .infinity
+        XCTAssertEqual(deliver.t_retryIntervalNanoseconds(), 1)
+
+        deliver.retryTimeInterval = .nan
+        XCTAssertEqual(deliver.t_retryIntervalNanoseconds(), 1)
+
+        deliver.retryTimeInterval = (Double(UInt64.max) / 1_000_000.0) + 1
+        XCTAssertEqual(deliver.t_retryIntervalNanoseconds(), UInt64.max)
+    }
+
+    func testRedeliverWithZeroRetryIntervalDoesNotCrash() {
+        let caller = Caller()
+        let deliver = CocoaMQTTDeliver()
+        let frame = FramePublish(topic: "t/zero", payload: [0x01], qos: .qos1, msgid: 100)
+
+        deliver.retryTimeInterval = 0
+        deliver.delegate = caller
+        XCTAssertTrue(deliver.add(frame))
+        ms_sleep(100)
+
+        caller.reset()
+        XCTAssertTrue(deliver.t_setInflightNextRetryTime(0, forMsgid: frame.msgid))
+
+        deliver.t_redeliver(atUptimeNanoseconds: 0)
+        ms_sleep(100)
+
+        XCTAssertEqual(caller.frames.count, 1)
+        guard let publish = caller.frames.first as? FramePublish else {
+            XCTFail("Expected FramePublish")
+            return
+        }
+        assertEqual(publish, frame)
+        XCTAssertTrue(publish.dup)
+    }
+
+    func testPausedTransportDoesNotRedeliverInflightMessages() {
+        let caller = Caller()
+        let deliver = CocoaMQTTDeliver()
+        let frame = FramePublish(topic: "t/paused", payload: [0x01], qos: .qos1, msgid: 101)
+
+        deliver.delegate = caller
+        XCTAssertTrue(deliver.add(frame))
+        deliver.t_waitUntilIdle()
+        caller.delegateQueue.sync {}
+        caller.reset()
+
+        deliver.setTransportEnabled(false)
+        XCTAssertTrue(deliver.t_setInflightNextRetryTime(0, forMsgid: frame.msgid))
+        deliver.t_redeliver(atUptimeNanoseconds: 1)
+        caller.delegateQueue.sync {}
+
+        XCTAssertTrue(caller.frames.isEmpty)
+    }
+
+    func testBeginConnectionPausesTransportAndRedirectsNewFrames() {
+        let caller = Caller()
+        let deliver = CocoaMQTTDeliver()
+        let frame = FramePublish(topic: "t/pending", payload: [0x01], qos: .qos1, msgid: 102)
+
+        deliver.delegate = caller
+        deliver.beginConnection()
+        XCTAssertTrue(deliver.add(frame))
+        deliver.t_waitUntilIdle()
+        caller.delegateQueue.sync {}
+
+        XCTAssertTrue(caller.frames.isEmpty)
+        XCTAssertTrue(deliver.t_queuedFrames().isEmpty)
+        XCTAssertEqual(deliver.connectionPendingFrames().count, 1)
+
+        deliver.completeConnection()
+        deliver.t_waitUntilIdle()
+        caller.delegateQueue.sync {}
+
+        XCTAssertEqual(caller.frames.count, 1)
+        assertEqual(caller.frames[0], frame)
+    }
+
+    func testReceiveMaximumKeepsQoS2QuotaUntilPubComp() {
+        let caller = Caller()
+        let deliver = CocoaMQTTDeliver()
+        let qos2 = FramePublish(topic: "t/qos2", payload: [1], qos: .qos2, msgid: 1)
+        let qos1 = FramePublish(topic: "t/qos1", payload: [2], qos: .qos1, msgid: 2)
+
+        deliver.delegate = caller
+        deliver.configureServerLimits(receiveMaximum: 1, maximumPacketSize: UInt32.max)
+        XCTAssertTrue(deliver.add(qos2))
+        XCTAssertTrue(deliver.add(qos1))
+        deliver.t_waitUntilIdle()
+        caller.delegateQueue.sync {}
+        XCTAssertEqual(caller.frames.compactMap { $0 as? FramePublish }.count, 1)
+
+        deliver.ack(by: FramePubRec(msgid: qos2.msgid, reasonCode: .success))
+        deliver.t_waitUntilIdle()
+        caller.delegateQueue.sync {}
+        XCTAssertEqual(caller.frames.compactMap { $0 as? FramePublish }.count, 1)
+        XCTAssertEqual(caller.frames.compactMap { $0 as? FramePubRel }.count, 1)
+
+        deliver.ack(by: FramePubComp(msgid: qos2.msgid))
+        deliver.t_waitUntilIdle()
+        caller.delegateQueue.sync {}
+        XCTAssertEqual(caller.frames.compactMap { $0 as? FramePublish }.count, 2)
+    }
+
+    func testStorage() {
+
+        let clientID = "deliver-unit-testing"
+        let caller = Caller()
+        let deliver = CocoaMQTTDeliver()
+
+        let frames = [FramePublish(topic: "t/0", payload: [0x00], qos: .qos0),
+                      FramePublish(topic: "t/1", payload: [0x01], qos: .qos1, msgid: 1),
+                      FramePublish(topic: "t/2", payload: [0x02], qos: .qos2, msgid: 2)]
+
+        guard let storage = CocoaMQTTStorage(by: clientID) else {
+            XCTAssert(false, "Initial storage failed")
+            return
+        }
+
+        deliver.delegate = caller
+        deliver.recoverSessionBy(storage)
+
+        for f in frames {
+            _ = deliver.add(f)
+        }
+
+        var saved = storage.readAll()
+        XCTAssertEqual(saved.count, 2)
+
+        deliver.ack(by: FramePubAck(msgid: 1))
+        ms_sleep(100)
+        saved = storage.readAll()
+        XCTAssertEqual(saved.count, 1)
+
+        deliver.ack(by: FramePubRec(msgid: 2))
+        ms_sleep(100)
+        saved = storage.readAll()
+        XCTAssertEqual(saved.count, 1)
+        assertEqual(saved[0], FramePubRel(msgid: 2))
+
+        deliver.ack(by: FramePubComp(msgid: 2))
+        ms_sleep(100)
+        saved = storage.readAll()
+        XCTAssertEqual(saved.count, 0)
+
+        caller.reset()
+        _ = storage.write(frames[1])
+        deliver.recoverSessionBy(storage)
+        ms_sleep(100)
+        XCTAssertEqual(caller.frames.count, 1)
+        assertEqual(caller.frames[0], frames[1])
+
+        deliver.ack(by: FramePubAck(msgid: 1))
+        ms_sleep(100)
+        XCTAssertEqual(storage.readAll().count, 0)
+    }
+
+    func testFailedMQTT5PubRecCompletesQoS2WithoutSendingPubRel() {
+        let caller = Caller()
+        let deliver = CocoaMQTTDeliver()
+        deliver.delegate = caller
+        let publish = FramePublish(topic: "t/failure", payload: [1], qos: .qos2, msgid: 7)
+
+        XCTAssertTrue(deliver.add(publish))
+        ms_sleep(100)
+        caller.reset()
+
+        deliver.ack(by: FramePubRec(msgid: publish.msgid, reasonCode: .notAuthorized))
+        deliver.t_waitUntilIdle()
+        caller.delegateQueue.sync {}
+
+        XCTAssertTrue(caller.frames.isEmpty)
+        XCTAssertTrue(deliver.t_inflightFrames().isEmpty)
+    }
+
+    func testRecoverSessionKeepStoredFramesUntilAck() {
+        let clientID = "deliver-recover-\(UUID().uuidString)"
+        defer {
+            clearStorage(clientID)
+        }
+
+        let frame = FramePublish(topic: "t/recover", payload: [0x01], qos: .qos1, msgid: 42)
+        guard let storage = CocoaMQTTStorage(by: clientID) else {
+            XCTFail("Initial storage failed")
+            return
+        }
+        XCTAssertTrue(storage.write(frame))
+
+        let caller1 = Caller()
+        var deliver1: CocoaMQTTDeliver? = CocoaMQTTDeliver()
+        deliver1?.delegate = caller1
+        deliver1?.recoverSessionBy(storage)
+        ms_sleep(100)
+        XCTAssertEqual(caller1.frames.count, 1)
+        if let firstRecovered = caller1.frames.first {
+            assertEqual(firstRecovered, frame)
+            XCTAssertTrue(firstRecovered.dup)
+        }
+        XCTAssertEqual(storage.readAll().count, 1)
+
+        // Simulate an app crash/restart before receiving PUBACK.
+        deliver1 = nil
+
+        guard let storageAfterRestart = CocoaMQTTStorage(by: clientID) else {
+            XCTFail("Reload storage failed")
+            return
+        }
+        let caller2 = Caller()
+        let deliver2 = CocoaMQTTDeliver()
+        deliver2.delegate = caller2
+        deliver2.recoverSessionBy(storageAfterRestart)
+        ms_sleep(100)
+
+        XCTAssertEqual(caller2.frames.count, 1)
+        if let secondRecovered = caller2.frames.first {
+            assertEqual(secondRecovered, frame)
+            XCTAssertTrue(secondRecovered.dup)
+        }
+        XCTAssertEqual(storageAfterRestart.readAll().count, 1)
+
+        deliver2.ack(by: FramePubAck(msgid: frame.msgid))
+        ms_sleep(100)
+        XCTAssertEqual(storageAfterRestart.readAll().count, 0)
+    }
+
+    func testTODO() {
+        // TODO: How to test large of messages combined qos0/qos1/qos2
+    }
+
+    private func clearStorage(_ clientId: String) {
+        let suiteName = "cocomqtt-\(clientId)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return
+        }
+        for key in defaults.dictionaryRepresentation().keys {
+            defaults.removeObject(forKey: key)
+        }
+        defaults.synchronize()
+    }
+
+    // Helper for assert equality for Frame
+    private func assertEqual(_ f1: Frame, _ f2: Frame, _ lines: Int = #line) {
+        if let pub1 = f1 as? FramePublish,
+           let pub2 = f2 as? FramePublish {
+            XCTAssertEqual(pub1.topic, pub2.topic)
+            XCTAssertEqual(pub1.payload(), pub2.payload())
+            XCTAssertEqual(pub1.msgid, pub2.msgid)
+            XCTAssertEqual(pub1.qos, pub2.qos)
+        } else if let rel1 = f1 as? FramePubRel,
+                let rel2 = f2 as? FramePubRel {
+            XCTAssertEqual(rel1.msgid, rel2.msgid)
+        } else {
+            XCTAssert(false, "Assert equal failed line: \(lines)")
+        }
+    }
+
+    private func ms_sleep(_ ms: Int) {
+        usleep(useconds_t(ms * 1000))
+    }
+}
+
+private class Caller: CocoaMQTTDeliverProtocol {
+
+    private let delegate_queue_key = DispatchSpecificKey<String>()
+    private let delegate_queue_val = "_custom_delegate_queue_"
+
+    var delegateQueue: DispatchQueue
+
+    private var recordedFrames = [Frame]()
+
+    var frames: [Frame] {
+        return delegateQueue.sync { recordedFrames }
+    }
+
+    init() {
+        delegateQueue = DispatchQueue(label: "caller.deliver.test")
+        delegateQueue.setSpecific(key: delegate_queue_key, value: delegate_queue_val)
+    }
+
+    func reset() {
+        delegateQueue.sync {
+            recordedFrames.removeAll()
+        }
+    }
+
+    func deliver(_ deliver: CocoaMQTTDeliver, wantToSend frame: Frame) {
+        assert_in_del_queue()
+
+        recordedFrames.append(frame)
+    }
+
+    private func assert_in_del_queue() {
+        XCTAssertEqual(delegate_queue_val, DispatchQueue.getSpecific(key: delegate_queue_key))
+    }
+}

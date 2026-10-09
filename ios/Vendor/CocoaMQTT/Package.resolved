@@ -1,5 +1,4 @@
 {
-  "originHash" : "bcf2d5a9e697e3e27146f21791bed59f1e1d98cc52b76ba1b4cb60134086e33b",
   "pins" : [
     {
       "identity" : "mqttcocoaasyncsocket",
@@ -18,16 +17,7 @@
         "revision" : "c6bfd1af48efcc9a9ad203665db12375ba6b145a",
         "version" : "4.0.8"
       }
-    },
-    {
-      "identity" : "swift-sodium",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/jedisct1/swift-sodium.git",
-      "state" : {
-        "revision" : "cfd195c76882aa9b997560ca7cb95d72fbf5db00",
-        "version" : "0.11.0"
-      }
     }
   ],
-  "version" : 3
+  "version" : 2
 }
