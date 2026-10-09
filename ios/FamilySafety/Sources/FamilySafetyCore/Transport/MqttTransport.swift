@@ -55,6 +55,16 @@ public final class MqttTransport: NSObject {
     private let stateLock = NSLock()
     private var connectingSince: Date?
     private var connectContinuation: CheckedContinuation<Void, Error>?
+    private var subscribeContinuation: CheckedContinuation<Bool, Never>?
+
+    /// Persisted so a later connect can recognise a subscription set the broker already holds.
+    public var fingerprintStore: SubscriptionFingerprintStore = UserDefaultsFingerprintStore()
+
+    /// Whether the broker kept our session on the latest connect. CocoaMQTT 2.x reads the
+    /// CONNACK session-present flag internally but does not pass it to its delegate, so this
+    /// stays `false` — the safe direction, which always resubscribes — until the flag is
+    /// surfaced (patched/forked library or another client). See IOS_PORT_SPEC.md §4.
+    public private(set) var sessionPresent = false
 
     /// NSLock's lock()/unlock() are NS_SWIFT_UNAVAILABLE_FROM_ASYNC — calling them
     /// directly inside an `async` function body is a hard error under Swift 6's stricter
@@ -205,21 +215,60 @@ public final class MqttTransport: NSObject {
 
     // MARK: - Subscriptions (§5)
 
-    public func subscribeOwnTopics(groupId: String? = nil) {
-        guard let mqtt else { return }
-        let topics = Topics.ownSubscriptionTopics(memberId: memberId, groupId: groupId)
-        mqtt.subscribe(topics.map { ($0, CocoaMQTTQoS.qos1) })
+    /// The full filter set with its QoS: own topics, then each other member's legacy
+    /// `location` + `presence`, both QoS 0 — a position supersedes itself and the current one
+    /// is covered by the outbox retry and heartbeat, not QoS (§4).
+    static func subscriptionSet(memberId: String, groupId: String?, peerMemberIds: [String]) -> [(String, CocoaMQTTQoS)] {
+        var set: [(String, CocoaMQTTQoS)] = Topics.ownSubscriptionTopics(memberId: memberId, groupId: groupId).map { ($0, .qos1) }
+        for peer in peerMemberIds where peer != memberId {
+            set.append((Topics.location(memberId: peer), .qos0))
+            set.append((Topics.presence(memberId: peer), .qos0))
+        }
+        return set
     }
 
-    /// Per-peer `location` (legacy) + `presence`, both QoS 0 — a position supersedes
-    /// itself and the current one is covered by the outbox retry and heartbeat, not QoS
-    /// (§4).
-    public func subscribePeerTopics(peerMemberId: String) {
-        guard let mqtt else { return }
-        mqtt.subscribe([
-            (Topics.location(memberId: peerMemberId), .qos0),
-            (Topics.presence(memberId: peerMemberId), .qos0)
-        ])
+    /// Subscribe after a connect — but only when the broker does not already hold our
+    /// subscriptions (see `SubscriptionPolicy`). The fingerprint is cleared before subscribing
+    /// and stored only once the SUBACK grants every filter, so a crash or refusal mid-way is
+    /// never trusted on the next connect. Returns `true` if the subscriptions are in place.
+    @discardableResult
+    public func restoreSubscriptions(groupId: String?, peerMemberIds: [String]) async -> Bool {
+        guard let mqtt else { return false }
+        let set = Self.subscriptionSet(memberId: memberId, groupId: groupId, peerMemberIds: peerMemberIds)
+        let current = SubscriptionPolicy.fingerprint(
+            brokerUrl: "\(FamilySafetyBroker.host):\(FamilySafetyBroker.port)", topics: set.map { $0.0 })
+        guard SubscriptionPolicy.shouldResubscribe(
+            sessionPresent: sessionPresent, storedFingerprint: fingerprintStore.fingerprint, currentFingerprint: current
+        ) else { return true }
+
+        fingerprintStore.fingerprint = nil
+        let granted: Bool = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { [weak self] in
+                await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                    guard let self else { continuation.resume(returning: false); return }
+                    self.withStateLock { self.subscribeContinuation = continuation }
+                    mqtt.subscribe(set)
+                }
+            }
+            group.addTask { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(TransportTiming.subscribeTimeout * 1_000_000_000))
+                self?.finishSubscribe(false)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+        if granted { fingerprintStore.fingerprint = current }
+        return granted
+    }
+
+    private func finishSubscribe(_ granted: Bool) {
+        let continuation = withStateLock { () -> CheckedContinuation<Bool, Never>? in
+            defer { subscribeContinuation = nil }
+            return subscribeContinuation
+        }
+        continuation?.resume(returning: granted)
     }
 }
 
@@ -246,7 +295,9 @@ extension MqttTransport: CocoaMQTTDelegate {
 
     public func mqtt(_ mqtt: CocoaMQTT, didPublishMessage message: CocoaMQTTMessage, id: UInt16) {}
     public func mqtt(_ mqtt: CocoaMQTT, didPublishAck id: UInt16) {}
-    public func mqtt(_ mqtt: CocoaMQTT, didSubscribeTopics success: NSDictionary, failed: [String]) {}
+    public func mqtt(_ mqtt: CocoaMQTT, didSubscribeTopics success: NSDictionary, failed: [String]) {
+        finishSubscribe(failed.isEmpty)
+    }
     public func mqtt(_ mqtt: CocoaMQTT, didUnsubscribeTopics topics: [String]) {}
     public func mqttDidPing(_ mqtt: CocoaMQTT) {}
     public func mqttDidReceivePong(_ mqtt: CocoaMQTT) {}

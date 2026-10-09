@@ -4,7 +4,12 @@ import Foundation
 /// MqttTransport.kt's connect-bounding constants exactly, so iOS and Android apply the
 /// same backoff/timeout shape even though nothing here crosses the wire.
 public enum TransportTiming {
-    public static let keepAliveSeconds: UInt16 = 30
+    /// 120 s since Android 1.15.0 (was 30). The broker drops a client after 1.5x this with no
+    /// traffic and the ping timer does not run while the CPU sleeps, so 30 s cost a full
+    /// reconnect after any sleep over 45 s. Trade-off: an abruptly dead phone's last-will
+    /// "offline" fires after ~3 minutes instead of ~45 seconds.
+    public static let keepAliveSeconds: UInt16 = 120
+    public static let subscribeTimeout: TimeInterval = 15
     public static let connectionTimeoutSeconds: TimeInterval = 30
 
     /// Android wraps Paho's own 30 s timeout in a slightly longer one of its own — the

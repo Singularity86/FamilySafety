@@ -158,4 +158,34 @@ final class TransportTests: XCTestCase {
         XCTAssertFalse(delivered)
         XCTAssertEqual(transport.pendingBulkCount, 1)
     }
+
+    // MARK: - Keep-alive and resubscribe-skipping (Android 1.15.0)
+
+    func test_keepAlive_is120Seconds() {
+        XCTAssertEqual(TransportTiming.keepAliveSeconds, 120)
+    }
+
+    func test_fingerprint_isOrderIndependentAndBrokerSpecific() {
+        let a = SubscriptionPolicy.fingerprint(brokerUrl: "b1", topics: ["x", "y", "z"])
+        XCTAssertEqual(a, SubscriptionPolicy.fingerprint(brokerUrl: "b1", topics: ["z", "x", "y", "x"]))
+        XCTAssertNotEqual(a, SubscriptionPolicy.fingerprint(brokerUrl: "b2", topics: ["x", "y", "z"]))
+        XCTAssertNotEqual(a, SubscriptionPolicy.fingerprint(brokerUrl: "b1", topics: ["x", "y"]))
+        XCTAssertEqual(a.count, 64)
+    }
+
+    func test_shouldResubscribe_onlySkipsWhenSessionKeptAndFingerprintMatches() {
+        XCTAssertFalse(SubscriptionPolicy.shouldResubscribe(sessionPresent: true, storedFingerprint: "f", currentFingerprint: "f"))
+        XCTAssertTrue(SubscriptionPolicy.shouldResubscribe(sessionPresent: false, storedFingerprint: "f", currentFingerprint: "f"))
+        XCTAssertTrue(SubscriptionPolicy.shouldResubscribe(sessionPresent: true, storedFingerprint: "f", currentFingerprint: "g"))
+        XCTAssertTrue(SubscriptionPolicy.shouldResubscribe(sessionPresent: true, storedFingerprint: nil, currentFingerprint: "f"))
+    }
+
+    func test_subscriptionSet_addsPeerTopicsAtQos0_andNeverSubscribesToSelfAsPeer() {
+        let set = MqttTransport.subscriptionSet(memberId: "m1", groupId: "g1", peerMemberIds: ["m1", "m2"])
+        let topics = set.map { $0.0 }
+        XCTAssertTrue(topics.contains(Topics.presence(memberId: "m2")))
+        XCTAssertFalse(topics.contains(Topics.presence(memberId: "m1")))
+        XCTAssertEqual(set.first { $0.0 == Topics.location(memberId: "m2") }?.1, .qos0)
+        XCTAssertEqual(set.first { $0.0 == Topics.chat(memberId: "m1") }?.1, .qos1)
+    }
 }

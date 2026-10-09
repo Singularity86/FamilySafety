@@ -94,3 +94,22 @@ trust the spec's summary.
   `project.yml` is the source of truth if it needs regenerating).
 - `ios/tools/gen_test_vectors.py` — regenerates the spec's cross-platform ground-truth
   test vectors using real libsodium (`pip install pynacl`, then `python gen_test_vectors.py`).
+
+## Android spec drift to absorb (2026-10-08)
+
+`IOS_PORT_SPEC.md` was brought up to Android 1.15.0 (40).
+
+**Done in code:** keep-alive is now 120 s; `SubscriptionPolicy` (fingerprint + skip rule),
+`MqttTransport.restoreSubscriptions` (SUBACK-gated, fingerprint cleared first and stored only on
+full grant) replace the old unconditional `subscribeOwnTopics`/`subscribePeerTopics`. 74 tests pass.
+
+**Known gap:** the resubscribe skip cannot trigger yet. CocoaMQTT reads the CONNACK
+session-present flag internally (`FrameConnAck.sessPresent`) but does not pass it to its
+delegate, so `MqttTransport.sessionPresent` is always `false` and every connect still
+resubscribes — the safe direction, but the retained-message replay Android eliminated is still
+paid on iOS. Fix needs a patched/forked CocoaMQTT (expose the flag in `didConnectAck`) or a
+different client. Do this before the family runs iOS builds.
+
+**Still to do in later phases:** Phase 3 (group sync) and Phase 5 (chat) must implement the
+private-conversation confinement and replication scoping in spec §6.3/§6.6 from the start;
+location publishing (Phase 4) should follow the throttle in the "Changes since 1.13.6" table.
