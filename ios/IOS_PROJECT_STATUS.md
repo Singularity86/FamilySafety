@@ -94,3 +94,22 @@ trust the spec's summary.
   `project.yml` is the source of truth if it needs regenerating).
 - `ios/tools/gen_test_vectors.py` — regenerates the spec's cross-platform ground-truth
   test vectors using real libsodium (`pip install pynacl`, then `python gen_test_vectors.py`).
+
+## Android spec drift to absorb (2026-10-08)
+
+`IOS_PORT_SPEC.md` was brought up to Android 1.15.0 (40).
+
+**Done in code:** keep-alive is now 120 s; `SubscriptionPolicy` (fingerprint + skip rule),
+`MqttTransport.restoreSubscriptions` (SUBACK-gated, fingerprint cleared first and stored only on
+full grant) replace the old unconditional `subscribeOwnTopics`/`subscribePeerTopics`. 74 tests pass.
+
+**Resubscribe skip is live in code, unverified on a broker.** CocoaMQTT does not expose the
+CONNACK session-present flag, so CocoaMQTT 2.4.1 is vendored in `ios/Vendor/CocoaMQTT` with a
+small patch adding `sessionPresent` (see `ios/Vendor/PATCHES.md`); `Package.swift` points at it
+and `MqttTransport` reads it in `didConnectAck`. Unit tests cover the policy only — nothing has
+yet shown a second connect to the real broker skipping SUBSCRIBE. Check that with the two-simulator
+harness (reconnect one side and confirm no retained replay / no SUBSCRIBE in the debug log).
+
+**Still to do in later phases:** Phase 3 (group sync) and Phase 5 (chat) must implement the
+private-conversation confinement and replication scoping in spec §6.3/§6.6 from the start;
+location publishing (Phase 4) should follow the throttle in the "Changes since 1.13.6" table.

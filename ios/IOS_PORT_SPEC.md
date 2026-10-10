@@ -4,14 +4,16 @@
 revised 2026-08-16 against `main` at 4f3c1f0 (1.12.10 plus the shared-file rebuild and the
 vault), revised again 2026-09-19 against `main` at b2d0807 (1.13.6, versionCode 35), and
 revised again 2026-09-22 for the family subscription (`billing/`), and revised again
-2026-10-03 against Android 1.15.0 (versionCode 41). **The subscription shipped in 1.14.0
-(37–39) and is enforced; private chats are now actually private (§6.6); MQTT keep-alive is
-120 s (§4); location publishing and replication are throttled (§4, §6.6). None of it changes
-a byte on the wire — `PROTOCOL_VERSION` is still 3 — but three items change what a correct
-client must do. See "Changes since 1.13.6" below.**
+2026-10-10 against Android 1.15.0 (versionCode 41). **The subscription shipped in 1.14.0
+(37–39) and is enforced; private chats are now confined to their two participants (§6.3,
+§6.6); MQTT keep-alive is 120 s and resubscribing is skipped when the session survived (§4);
+location publishing and replication are throttled (§6.2, §6.6). None of it changes a byte on
+the wire — `PROTOCOL_VERSION` is still 3 — but several items change what a correct client must
+do. See "Changes since 1.13.6" below.**
 
 ## Changes since 1.13.6 (Android 1.14.0 – 1.15.0)
 
+Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the billing work.
 **wire** = changes bytes on the broker; **behaviour** = changes what a correct client must do;
 **product** = policy, not interop. No row is **wire**: 1.15.0's notes state phones on 1.14.0
 and earlier interoperate with it in both directions.
@@ -20,16 +22,19 @@ and earlier interoperate with it in both directions.
 |---|---|---|---|
 | 1.14.0 (36–39) | behaviour | The family subscription is **live and enforced**. Both constants are real: `GRANT_PUBLIC_KEY_HEX` and `PAYWALL_INTRODUCED_AT_EPOCH_MS = 1790483432067` (2026-09-26). Every family created before that instant is exempt forever; later families get the 60-day trial. | §6.9 |
 | 1.14.0 (38) | product | Subscribing during an active trial asks for confirmation first (Play has no way to carry the remaining trial days, so it bills the same day). | §11 |
-| 1.15.0 (40) | **behaviour** | **Private (1-to-1) chats are never replicated.** Not sent to other phones, not served to a non-participant who asks, not accepted from a non-participant, and omitted from `DataAvailabilityAnnouncement.chatDataSummary` sent to others. Older senders still push them; drop on arrival unless you are one of the two participants. Chat replication covers only the *current* family chat and the member's own private conversations. | §6.6 |
-| 1.15.0 (40) | behaviour | MQTT keep-alive **30 s → 120 s**. After a reconnect, **skip SUBSCRIBE when the broker kept the persistent session and the topic set is unchanged** (re-subscribing replays every retained message: vault container, manifest, presence). | §4 |
-| 1.15.0 (40) | behaviour | A fix that has not moved is not published: skip if it is older than the last one, moved less than `max(30 m, its own accuracy)`, is not markedly more accurate (< half the previous accuracy), and the last one is under 5 minutes old. An unchanged position is still re-sent every 5 minutes. | §4 |
-| 1.15.0 (40) | behaviour | Replication throttling: announce every **30 min** (was 5), full sync at most every **15 min** (was 1), ask a member alone for that member's location history (everyone only for your own), ask only the other participant for a private chat, and keep one outstanding request per item. | §6.6 |
-| 1.15.0 (40) | behaviour | Setup asks for the motion/activity permission (Android `ACTIVITY_RECOGNITION`) in a "Driving & Movement" step; without it crash detection can never arm. iOS needs the Core Motion equivalent plus its usage string. | §11 |
-| 1.15.0 (40) | product | The twelve-colour person palette, colour-blind patterns and profile photos in chat. `colorHue` is still an ordinary HSL hue on the wire: a chosen colour is stored as the HSL hue of the palette colour, and one never chosen is derived from the member ID locally. | §6.5; `DESIGN.md` |
+| 1.15.0 (40) | behaviour | **MQTT keep-alive is 120 s** (was 30), to cut idle battery and data. Each client picks its own keep-alive, so mixed values interoperate; iOS should still use 120 s so offline timing matches. The broker drops a silent client after 1.5×, so an abruptly dead phone's last-will "offline" now fires after ~3 min, not ~45 s. A clean disconnect still publishes "offline" at once. | §4 |
+| 1.15.0 (40) | behaviour | **Skip SUBSCRIBE when the broker kept the session.** Only if CONNACK `sessionPresent` is true *and* the stored subscription fingerprint equals the current one. A re-SUBSCRIBE makes the broker replay every retained message (vault container ~175 KB, file manifest, presence per member), which was the bulk of the family's monthly traffic. Persist the fingerprint only after a SUBACK granting every filter (0x80 = refusal); clear it before subscribing. iOS note: stock CocoaMQTT does not expose `sessionPresent`; iOS vendors a patched copy (`ios/Vendor/PATCHES.md`). | §4 |
+| 1.15.0 (40) | **behaviour** | **Private chat is confined to its two participants.** Conversation ID `idA:idB` (member IDs sorted ascending, string order). Never hold, request, announce, accept in a replication response, or back up a private message unless you are one of the two participants. Peers on older builds still push backup copies; drop them on arrival. A non-private conversation must equal this family's `groupId`. | §6.3, §6.6 |
+| 1.15.0 (40) | behaviour | **Replication is scoped.** Location history is requested only from the member it belongs to (everyone only for your own history). A private conversation is requested only from the other participant. At most one outstanding request per (dataType, target, conversation). Each peer's `chatDataSummary` lists only conversations that peer may hold. | §6.6 |
+| 1.15.0 (40) | behaviour | **Replication cadence:** announcements every 30 min (was 5); minimum 15 min between full syncs (was 60 s). | §6.6 |
+| 1.15.0 (40) | behaviour | **Location publish throttling.** Skip a fix if its timestamp is not newer than the last sent; send if the last send is 5 min or older; send if accuracy is better than half the last; otherwise skip when moved < max(30 m, new fix's accuracy). A heartbeat within (stationary interval − 60 s) of a successful publish only checks the connection. Receivers are unaffected. | §6.2 |
+| 1.15.0 (41) | behaviour | Setup asks for the motion/activity permission (Android `ACTIVITY_RECOGNITION`) in a "Driving & Movement" step; without it crash detection can never arm. iOS needs the Core Motion equivalent plus its usage string. | §11 |
+| 1.15.0 (40) | product | **Colours:** the twelve-colour person palette, colour-blind patterns and profile photos in chat. `FamilyMember.colorHue` is unchanged on the wire (HSL hue): a chosen colour is stored as the hue of the palette colour, and one never chosen is derived from the member ID locally. For the same person to look the same on both platforms, port `PersonPalette.forHue` and `hueFromId` (`PersonColors.kt`). | §6.5; `DESIGN.md` |
 
-Not in this table because they do not touch interop: the Porch Light theme and typefaces,
-corner-radius rules, the stays/trips/gaps history view (computed locally from fixes already
-held), badge-count fixes, the reduced-motion API change, lint fixes.
+Not in this table because they do not touch interop: private-chat UI, Family/Chat lists, the
+Porch Light theme and typefaces, corner-radius rules, the stays/trips/gaps history view
+(computed locally from fixes already held), badge-count fixes, the reduced-motion API change,
+lint fixes.
 
 ## The family subscription (shipped in 1.14.0, added to this spec 2026-09-22)
 
@@ -43,6 +48,8 @@ override that any device can verify entirely offline. None of the three particip
 `computeStateHash` (§7.1) — the same treatment as `fileEncryptionKey`, except that key
 changes once per group while the subscription confirmation is expected to change roughly
 daily.
+
+---
 
 ## Changes since the 2026-08-16 revision (read this first if you already started)
 
@@ -512,8 +519,10 @@ published plaintext + retained on **own** presence topic.
 // ChatMessagePayload (plaintext inside envelope)
 { "messageId": "<uuid>", "content": "...", "messageType": "TEXT|LOCATION|SYSTEM",
   "timestamp": 0, "conversationId": null, "replyToMessageId": null }
-// conversationId: null = 1-to-1 (conversation is the peer's memberId);
+// conversationId: null = 1-to-1 (sent to that one peer only; the receiver derives the local
+//                 conversation ID as "idA:idB", the two member IDs sorted ascending);
 //                 groupId = group chat (send one E2EE copy to every member).
+// A private conversation exists only on its two participants — see §6.6.
 // LOCATION message content = {"latitude":0.0,"longitude":0.0} JSON string.
 
 // DeliveryReceipt (plaintext inside envelope; status DELIVERED → chat/receipt, READ → chat/read)
@@ -615,6 +624,19 @@ alone unless it is your own.
 { "announcerId": "...", "locationDataSummary": [ {"memberId":"...","oldestTimestamp":0,"newestTimestamp":0,"count":0} ],
   "chatDataSummary":   [ {"conversationId":"...","oldestTimestamp":0,"newestTimestamp":0,"count":0} ], "timestamp": 0 }
 ```
+
+**Scoping rules (since 1.15.0).** `directParticipants(id)` = `id.split(":")` when it has exactly
+two non-empty parts, else null (group chat).
+- `mayHold(conv, member)` = member is a participant, or `conv` is not private.
+- `mayShare(conv, member)` = `mayHold` and, if not private, `conv == our groupId`.
+- Announce to peer P only conversations with `mayShare(conv, P)`. Act on a received summary only
+  if `mayShare(conv, us)` and `mayShare(conv, sender)`. Refuse a request for a conversation the
+  requester may not hold. Filter received `messages` the same way (both us and sender).
+- Never send a backup copy of a private message to third parties.
+- Request sources: location history -> only `targetMemberId` if it is a peer, else all peers;
+  chat -> the other participant for a private conversation, else all peers. Do not issue a request
+  while an unexpired one for the same (dataType, target, conversation) is outstanding.
+- Cadence: announce every 30 min; at most one full sync per 15 min.
 
 ### 6.7 Shared files
 ```json

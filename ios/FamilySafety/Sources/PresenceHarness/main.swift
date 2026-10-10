@@ -100,7 +100,7 @@ print("[\(myName)] connecting to \(FamilySafetyBroker.host):\(FamilySafetyBroker
 try await transport.connect(willPayload: willPayload)
 print("[\(myName)] connected.")
 
-transport.subscribePeerTopics(peerMemberId: peer.memberId)
+await transport.restoreSubscriptions(groupId: nil, peerMemberIds: [peer.memberId])
 print("[\(myName)] subscribed to \(peerName)'s presence + legacy location topics.")
 
 let onlinePayload = try buildPresenceEnvelopeJSON(memberId: me.memberId, isOnline: true, ed25519SecretKey64: me.ed25519SecretKey64)

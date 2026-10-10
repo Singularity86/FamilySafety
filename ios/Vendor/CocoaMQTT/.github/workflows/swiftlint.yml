@@ -1,0 +1,37 @@
+name: SwiftLint
+
+on:
+  pull_request:
+    branches:
+      - master
+      - release/2.x
+    paths:
+      - "Source/**/*.swift"
+      - "CocoaMQTTTests/**/*.swift"
+      - ".swiftlint.yml"
+      - "Package.swift"
+      - "Package.resolved"
+      - "Tools/**"
+      - ".github/workflows/swiftlint.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  swiftlint:
+    name: SwiftLint (SPM plugin)
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run SwiftLint
+        run: Tools/lint.sh
+
+      - name: Verify build is unaffected
+        run: swift build
+
+      - name: Ensure no tracked files changed
+        run: git diff --exit-code

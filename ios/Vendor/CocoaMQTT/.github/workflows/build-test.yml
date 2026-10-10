@@ -1,0 +1,172 @@
+name: Build & Test
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  example-compile-check:
+    name: Example Compile Check
+    runs-on: macos-15
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build iOS example with the local package
+        run: |
+          xcodebuild \
+            -project Example/Example.xcodeproj \
+            -scheme Example \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath "${RUNNER_TEMP}/CocoaMQTT-Example" \
+            build \
+            CODE_SIGNING_ALLOWED=NO
+
+  swift6-compile-check:
+    name: Swift 6 Compile Check (Core)
+    runs-on: macos-15
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Build core target with Swift 6 language mode
+        run: swift build --target CocoaMQTT -Xswiftc -swift-version -Xswiftc 6
+
+      - name: Run Swift 6 compatibility check for both products
+        run: |
+          swift run \
+            --package-path Tests/Swift6Compatibility \
+            --scratch-path "${RUNNER_TEMP}/CocoaMQTT-Swift6Compatibility" \
+            Swift6Compatibility
+
+  visionos-compile-check:
+    name: visionOS Compile Check (SPM)
+    runs-on: macos-15
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show visionOS SDK
+        run: xcodebuild -version -sdk xros
+
+      - name: Build SwiftPM products for visionOS
+        run: |
+          set -euo pipefail
+          SDK_PATH="$(xcrun --sdk xros --show-sdk-path)"
+          SCRATCH_PATH="${RUNNER_TEMP}/CocoaMQTT-visionOS"
+
+          swift build \
+            --target CocoaMQTT \
+            --triple arm64-apple-xros1.0 \
+            --sdk "${SDK_PATH}" \
+            --scratch-path "${SCRATCH_PATH}"
+
+          swift build \
+            --target CocoaMQTTWebSocket \
+            --triple arm64-apple-xros1.0 \
+            --sdk "${SDK_PATH}" \
+            --scratch-path "${SCRATCH_PATH}"
+
+  build-and-test:
+    name: Swift Build & Test
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Download and install EMQX
+        run: |
+          set -euo pipefail
+          EMQX_ZIP_URL="https://www.emqx.com/en/downloads/enterprise/5.10.3/emqx-enterprise-5.10.3-macos15-arm64.zip"
+          EMQX_ZIP_PATH="${RUNNER_TEMP}/emqx-enterprise-5.10.3-macos15-arm64.zip"
+          EMQX_DIR="${RUNNER_TEMP}/emqx"
+
+          rm -rf "${EMQX_DIR}"
+          mkdir -p "${EMQX_DIR}"
+
+          curl -fL --retry 3 --retry-delay 2 "${EMQX_ZIP_URL}" -o "${EMQX_ZIP_PATH}"
+          unzip -q "${EMQX_ZIP_PATH}" -d "${EMQX_DIR}"
+
+          # EMQX ZIP extracts directly into EMQX_DIR (bin/, etc/, data/, ...).
+          EMQX_HOME="${EMQX_DIR}"
+          [ -x "${EMQX_HOME}/bin/emqx" ]
+          echo "EMQX_HOME=${EMQX_HOME}" >> "${GITHUB_ENV}"
+
+      - name: Start EMQX broker
+        run: |
+          set -euo pipefail
+          "${EMQX_HOME}/bin/emqx" start
+
+          for _ in {1..60}; do
+            if "${EMQX_HOME}/bin/emqx" ping >/dev/null 2>&1; then
+              echo "EMQX node is up."
+              break
+            fi
+            sleep 1
+          done
+
+          "${EMQX_HOME}/bin/emqx" ping
+
+          for port in 1883 8083 8883; do
+            for _ in {1..60}; do
+              if nc -z 127.0.0.1 "${port}"; then
+                echo "EMQX listener is ready on port ${port}"
+                break
+              fi
+              sleep 1
+            done
+            nc -z 127.0.0.1 "${port}"
+          done
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift test
+
+      - name: Print EMQX logs on failure
+        if: failure()
+        run: |
+          if [ -n "${EMQX_HOME:-}" ] && [ -d "${EMQX_HOME}/log" ]; then
+            ls -lah "${EMQX_HOME}/log"
+            for logfile in "${EMQX_HOME}"/log/*; do
+              [ -f "${logfile}" ] || continue
+              echo "===== ${logfile}"
+              tail -n 200 "${logfile}" || true
+            done
+          fi
+
+      - name: Stop EMQX broker
+        if: always()
+        run: |
+          if [ -n "${EMQX_HOME:-}" ] && [ -x "${EMQX_HOME}/bin/emqx" ]; then
+            "${EMQX_HOME}/bin/emqx" stop || true
+          fi

@@ -63,7 +63,7 @@ final class HarnessViewModel: ObservableObject {
                     self.appendLog("[\(myName)] connecting...")
                     try await transport.connect(willPayload: willPayload)
                     self.appendLog("[\(myName)] connected.")
-                    transport.subscribePeerTopics(peerMemberId: peer.memberId)
+                    await transport.restoreSubscriptions(groupId: nil, peerMemberIds: [peer.memberId])
                     self.appendLog("[\(myName)] subscribed to \(peerName)'s presence.")
                     let onlinePayload = try Self.buildPresenceEnvelope(memberId: me.memberId, isOnline: true, ed25519SecretKey64: me.ed25519SecretKey64)
                     transport.publish(topic: Topics.presence(memberId: me.memberId), payload: onlinePayload, qos: .qos0, retained: true)

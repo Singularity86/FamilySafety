@@ -1,0 +1,52 @@
+//
+//  MqttDecodeUnsubAck.swift
+//  CocoaMQTT
+//
+//  Created by liwei wang on 2021/8/16.
+//
+
+import Foundation
+
+public class MqttDecodeUnsubAck: NSObject {
+
+    var totalCount = 0
+    var dataIndex = 0
+    var propertyLength: Int = 0
+
+    public var reasonCodes: [CocoaMQTTUNSUBACKReasonCode] = []
+
+    public var msgid: UInt16 = 0
+    public var reasonString: String?
+    public var userProperty: [String: String]?
+    public var userProperties = [CocoaMQTTUserProperty]()
+
+    @available(*, deprecated, message: "Assumes MQTT 5 data; use the overload with protocolVersion")
+    public func decodeUnSubAck(fixedHeader: UInt8, pubAckData: [UInt8]) {
+        _ = decodeUnSubAck(fixedHeader: fixedHeader, pubAckData: pubAckData, protocolVersion: .v5)
+    }
+
+    @discardableResult
+    public func decodeUnSubAck(fixedHeader: UInt8,
+                               pubAckData: [UInt8],
+                               protocolVersion: CocoaMQTTProtocolVersion) -> Bool {
+        guard fixedHeader == FrameType.unsuback.rawValue,
+              let decoded = decodeReasonCodeList(pubAckData, protocolVersion: protocolVersion) else { return false }
+        if protocolVersion == .v311 {
+            guard decoded.reasonCodes.isEmpty else { return false }
+        } else {
+            guard !decoded.reasonCodes.isEmpty else { return false }
+        }
+        let codes = decoded.reasonCodes.compactMap(CocoaMQTTUNSUBACKReasonCode.init(rawValue:))
+        guard codes.count == decoded.reasonCodes.count else { return false }
+        totalCount = pubAckData.count
+        dataIndex = pubAckData.count
+        propertyLength = decoded.propertyLength
+        msgid = decoded.msgid
+        reasonString = decoded.reasonString
+        userProperty = decoded.userProperty
+        userProperties = decoded.userProperties
+        reasonCodes = codes
+        return true
+    }
+
+}
