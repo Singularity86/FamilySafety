@@ -54,6 +54,19 @@ sealed class PermissionCopy(
         }
     }
 
+    object PhysicalActivity : PermissionCopy(
+        title = "Driving & Movement",
+        // Two uses, both on this phone only: crash detection is armed only while the phone
+        // reports being in a vehicle, and GPS is checked less often while you're still.
+        rationale = "Jibaro Family Safety notices when you're driving, walking or still. " +
+            "It turns on crash detection only while you're in a car, and checks your " +
+            "location less often while you're not moving, to save battery. This stays " +
+            "on your phone and is never shared."
+    ) {
+        override fun coachingText(context: Context) =
+            "Choose 'Allow' — without this, crash detection can't tell when you're driving."
+    }
+
     object Notifications : PermissionCopy(
         title = "Safety Alerts",
         rationale = "Notifications are how safety alerts — geofence arrivals, crash " +

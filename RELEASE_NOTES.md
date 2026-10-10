@@ -53,9 +53,12 @@ container, many times a day per phone.
   and heartbeat jobs while GPS stayed registered, so tracking degraded quietly until Android
   restarted the service. A running session is now left alone.
 - Motion detection ("Physical activity") was started without the permission, which the app
-  never requests. On Android 10+ it has therefore never run; the service relied on GPS
-  speed throughout. It now checks and skips cleanly instead of failing inside service
-  start-up. Requesting the permission during setup is a candidate for a later release.
+  never requested. On Android 10+ it has therefore never run: the service relied on GPS
+  speed, and **crash detection never armed**, since it arms only while motion detection
+  reports being in a vehicle. Setup now asks for the permission (a "Driving & Movement"
+  step after location), and the service checks for it and skips cleanly when it's denied.
+  Families who finished setup on an earlier version are not asked again; they can grant
+  it in Android Settings → Apps → Jibaro Family Safety → Permissions → Physical activity.
 - The reduced-motion check used an API that is only public from Android 13; on Android
   8–12 it reached a hidden method, which a device or update could block and crash the tab
   bar. Now uses `ValueAnimator.areAnimatorsEnabled()`.

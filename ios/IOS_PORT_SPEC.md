@@ -3,13 +3,40 @@
 **Version 1.12 — generated 2026-07-03 from the Android codebase (branch `ui-refactor`),
 revised 2026-08-16 against `main` at 4f3c1f0 (1.12.10 plus the shared-file rebuild and the
 vault), revised again 2026-09-19 against `main` at b2d0807 (1.13.6, versionCode 35), and
-revised again 2026-09-22 for the family subscription (`billing/`, unreleased — no Android
-versionCode carries it yet), and revised again 2026-10-08 against `main` at 78a2942
-(1.15.0, versionCode 40). The subscription shipped in 1.14.0 (39). The 2026-10-08 revision adds
-private-chat confinement, replication scoping, keep-alive, resubscribe-skipping and location
-publish throttling — see "Changes since 1.13.6" below.**
+revised again 2026-09-22 for the family subscription (`billing/`), and revised again
+2026-10-10 against Android 1.15.0 (versionCode 41). **The subscription shipped in 1.14.0
+(37–39) and is enforced; private chats are now confined to their two participants (§6.3,
+§6.6); MQTT keep-alive is 120 s and resubscribing is skipped when the session survived (§4);
+location publishing and replication are throttled (§6.2, §6.6). None of it changes a byte on
+the wire — `PROTOCOL_VERSION` is still 3 — but several items change what a correct client must
+do. See "Changes since 1.13.6" below.**
 
-## The family subscription (unreleased, added 2026-09-22)
+## Changes since 1.13.6 (Android 1.14.0 – 1.15.0)
+
+Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the billing work.
+**wire** = changes bytes on the broker; **behaviour** = changes what a correct client must do;
+**product** = policy, not interop. No row is **wire**: 1.15.0's notes state phones on 1.14.0
+and earlier interoperate with it in both directions.
+
+| Android | Kind | What changed | Where |
+|---|---|---|---|
+| 1.14.0 (36–39) | behaviour | The family subscription is **live and enforced**. Both constants are real: `GRANT_PUBLIC_KEY_HEX` and `PAYWALL_INTRODUCED_AT_EPOCH_MS = 1790483432067` (2026-09-26). Every family created before that instant is exempt forever; later families get the 60-day trial. | §6.9 |
+| 1.14.0 (38) | product | Subscribing during an active trial asks for confirmation first (Play has no way to carry the remaining trial days, so it bills the same day). | §11 |
+| 1.15.0 (40) | behaviour | **MQTT keep-alive is 120 s** (was 30), to cut idle battery and data. Each client picks its own keep-alive, so mixed values interoperate; iOS should still use 120 s so offline timing matches. The broker drops a silent client after 1.5×, so an abruptly dead phone's last-will "offline" now fires after ~3 min, not ~45 s. A clean disconnect still publishes "offline" at once. | §4 |
+| 1.15.0 (40) | behaviour | **Skip SUBSCRIBE when the broker kept the session.** Only if CONNACK `sessionPresent` is true *and* the stored subscription fingerprint equals the current one. A re-SUBSCRIBE makes the broker replay every retained message (vault container ~175 KB, file manifest, presence per member), which was the bulk of the family's monthly traffic. Persist the fingerprint only after a SUBACK granting every filter (0x80 = refusal); clear it before subscribing. iOS note: stock CocoaMQTT does not expose `sessionPresent`; iOS vendors a patched copy (`ios/Vendor/PATCHES.md`). | §4 |
+| 1.15.0 (40) | **behaviour** | **Private chat is confined to its two participants.** Conversation ID `idA:idB` (member IDs sorted ascending, string order). Never hold, request, announce, accept in a replication response, or back up a private message unless you are one of the two participants. Peers on older builds still push backup copies; drop them on arrival. A non-private conversation must equal this family's `groupId`. | §6.3, §6.6 |
+| 1.15.0 (40) | behaviour | **Replication is scoped.** Location history is requested only from the member it belongs to (everyone only for your own history). A private conversation is requested only from the other participant. At most one outstanding request per (dataType, target, conversation). Each peer's `chatDataSummary` lists only conversations that peer may hold. | §6.6 |
+| 1.15.0 (40) | behaviour | **Replication cadence:** announcements every 30 min (was 5); minimum 15 min between full syncs (was 60 s). | §6.6 |
+| 1.15.0 (40) | behaviour | **Location publish throttling.** Skip a fix if its timestamp is not newer than the last sent; send if the last send is 5 min or older; send if accuracy is better than half the last; otherwise skip when moved < max(30 m, new fix's accuracy). A heartbeat within (stationary interval − 60 s) of a successful publish only checks the connection. Receivers are unaffected. | §6.2 |
+| 1.15.0 (41) | behaviour | Setup asks for the motion/activity permission (Android `ACTIVITY_RECOGNITION`) in a "Driving & Movement" step; without it crash detection can never arm. iOS needs the Core Motion equivalent plus its usage string. | §11 |
+| 1.15.0 (40) | product | **Colours:** the twelve-colour person palette, colour-blind patterns and profile photos in chat. `FamilyMember.colorHue` is unchanged on the wire (HSL hue): a chosen colour is stored as the hue of the palette colour, and one never chosen is derived from the member ID locally. For the same person to look the same on both platforms, port `PersonPalette.forHue` and `hueFromId` (`PersonColors.kt`). | §6.5; `DESIGN.md` |
+
+Not in this table because they do not touch interop: private-chat UI, Family/Chat lists, the
+Porch Light theme and typefaces, corner-radius rules, the stays/trips/gaps history view
+(computed locally from fixes already held), badge-count fixes, the reduced-motion API change,
+lint fixes.
+
+## The family subscription (shipped in 1.14.0, added to this spec 2026-09-22)
 
 Android gates Chat, History and Files behind a 60-day free trial, then $4/month, with no
 server anywhere in the mechanism — see §6.9 for the wire shapes and §11 for what an iOS
@@ -21,24 +48,6 @@ override that any device can verify entirely offline. None of the three particip
 `computeStateHash` (§7.1) — the same treatment as `fileEncryptionKey`, except that key
 changes once per group while the subscription confirmation is expected to change roughly
 daily.
-
-## Changes since 1.13.6 (added 2026-10-08, Android 1.15.0 / versionCode 40)
-
-Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d` (and the billing work, which
-shipped in 1.14.0). `PROTOCOL_VERSION` stays **3**; 1.15.0 and 1.14.0 interoperate both ways.
-**wire** / **behaviour** / **product** as below.
-
-| Kind | What changed | Where |
-|---|---|---|
-| **wire** | **MQTT keep-alive is 120 s** (was 30). The broker drops an idle client after 1.5x. Consequence: a dead phone's last-will "offline" now fires after ~3 min, not ~45 s. | §4 |
-| behaviour | **Skip SUBSCRIBE when the broker kept the session.** Only if CONNACK `sessionPresent` is true *and* the stored subscription fingerprint equals the current one. A re-SUBSCRIBE makes the broker replay every retained message (vault container ~175 KB, file manifest, presence per member), which was the bulk of the family's monthly traffic. Persist the fingerprint only after a SUBACK granting every filter (0x80 = refusal); clear it before subscribing. iOS note: stock CocoaMQTT does not expose `sessionPresent`; iOS vendors a patched copy (`ios/Vendor/PATCHES.md`). | §4 |
-| behaviour | **Private chat is confined to its two participants.** Conversation ID `idA:idB` (member IDs sorted ascending, string order). Never hold, request, announce, accept in a replication response, or back up a private message unless you are one of the two participants. Peers on older builds still broadcast backup copies; drop them on arrival. A non-private conversation must equal this family's `groupId`. | §6.3, §6.6 |
-| behaviour | **Replication is scoped.** Location history is requested only from the member it belongs to (everyone only for your own history). A private conversation is requested only from the other participant. At most one outstanding request per (dataType, target, conversation). | §6.6 |
-| behaviour | **Announcements are filtered per recipient.** Each peer's `chatDataSummary` lists only conversations that peer may hold. | §6.6 |
-| behaviour | **Replication cadence:** announcements every 30 min (was 5); minimum 15 min between full syncs (was 60 s). | §6.6 |
-| behaviour | **Location publish throttling.** Skip a fix if its timestamp is not newer than the last sent; send if the last send is 5 min or older; send if accuracy is better than half the last; otherwise skip when moved < max(30 m, new fix's accuracy). A heartbeat within (stationary interval - 60 s) of a successful publish only checks the connection. Receivers are unaffected. | §6.2 |
-| product | **Colours:** `FamilyMember.colorHue` is unchanged on the wire (HSL hue). Android maps it onto a 12-colour palette (`PersonColors.kt`) and derives a hue from the member ID when none is chosen. For the same person to look the same on both platforms, port `PersonPalette.forHue` and `hueFromId`. | §6.5 |
-| product | Private-chat UI, Family/Chat lists, day-timeline History, typefaces, corner radii: local UI, no interop effect. | — |
 
 ---
 
@@ -247,7 +256,7 @@ against the QR invite's `inviterMemberId` (§8.4).
   The earlier public HiveMQ dev broker is no longer used.
 - Client ID: `familysafe_{memberId}`. **Stable** — combined with `cleanSession = false` this
   gives the broker-side persistent session that provides offline delivery.
-- `cleanSession = false`, keep-alive **120 s** (was 30 s before 1.15.0), connect timeout 30 s. QoS **1** for everything
+- `cleanSession = false`, keep-alive **120 s** (was 30 s before 1.15.0; the broker drops a silent client after 1.5× this, and an abruptly dead phone's last-will "offline" now fires after ~3 minutes), connect timeout 30 s. QoS **1** for everything
   **except** `location_inbox` and the online/offline presence publishes, which are QoS **0**
   (since 1.13.1). A position supersedes itself and receivers discard anything older than what
   they hold, so retransmitting one only spends an in-flight slot per recipient and queues
@@ -560,7 +569,7 @@ receipt's sender (anti-forgery, see ChatRepository).
   "subscriberMemberId": null, "subscriptionConfirmedAtEpochMs": null, "grantCode": null }
 ```
 
-The three billing fields (added in the 2026-09-22 revision, unreleased — see §6.9) are
+The three billing fields (added in the 2026-09-22 revision, shipped in 1.14.0 — see §6.9) are
 optional and default to `null`/absent, so a peer that predates them simply never sends
 them and nothing breaks. All three ride the ordinary version-bump-and-broadcast path
 (`GroupStateManager.confirmSubscription` / `redeemGrantCode` on Android, the same shape as
@@ -589,6 +598,16 @@ so it needs no separate distribution path. Two consequences for an implementatio
 - It is **not** covered by `computeStateHash` (§7.1) — see the note there.
 
 ### 6.6 Replication (all inside per-peer envelopes)
+
+**Private chats stay private (since 1.15.0).** A conversation id of the form `idA:idB` exists
+only on its two participants. A client must (a) never include it in a replication response or
+in `chatDataSummary` sent to anyone else, (b) refuse to serve it to a requester who is not one
+of the two ids, (c) discard a replicated message for it unless the local member is one of the
+two, and (d) when it needs one, ask only the other participant. The group chat (`conversationId
+= groupId`) still replicates to everyone, and only for the *current* group. Cadence: announce
+every 30 min, full sync at most every 15 min, one outstanding request per (data type, target
+member or conversation) at a time; a member's location history is requested from that member
+alone unless it is your own.
 ```json
 // ReplicationRequest
 { "requestId": "<uuid>", "requesterId": "...", "dataType": "LOCATION_HISTORY|CHAT_MESSAGES",
@@ -1026,7 +1045,7 @@ a private cache only while another app opens the document, and wipe that cache o
 launch. No thumbnails, no photo-library or Files-app export, no notifications, and vault items
 never appear in any transfer log or status board.
 
-### 6.9 The family subscription (unreleased)
+### 6.9 The family subscription (shipped in 1.14.0)
 
 Chat, History and Files are gated; everything else (live location, place/speed alerts,
 crash detection, the Vault, Settings) is never gated. No server anywhere in this mechanism.
@@ -1037,8 +1056,9 @@ crash detection, the Vault, Settings) is never gated. No server anywhere in this
 **Grandfathering.** Any group whose `createdAtEpochMs` predates the release that first
 enforces this is exempt forever. The cutoff is a constant baked into the app at release
 time (Android: `BillingConfig.PAYWALL_INTRODUCED_AT_EPOCH_MS`), not a wire value — an iOS
-build must use the *same* cutoff instant as whatever Android release it ships alongside, or
-the two platforms will disagree about which families are exempt.
+build must use the *same* cutoff instant as Android: `1790483432067` (2026-09-26), fixed
+permanently — moving it would un-grandfather real families. The grant-signing public key
+(§ below) is likewise real and fixed in `BillingConfig.GRANT_PUBLIC_KEY_HEX`.
 
 **Subscription confirmation.** The device holding the family's Play (or App Store) purchase
 periodically re-checks with the store and, if still active, writes
@@ -1438,7 +1458,7 @@ Swift gotchas:
   encrypted channel and both must be disclosed. If iOS uses MapKit and MKDirections instead,
   that is a *different* disclosure (Apple), not none. Decide deliberately, and keep the privacy
   policy, the in-app Privacy screen and the store label in agreement with the code.
-- **The family subscription** (§6.9, unreleased). Gates Chat, History and Files only — never
+- **The family subscription** (§6.9, shipped in 1.14.0). Gates Chat, History and Files only — never
   location sharing, alerts, crash detection or the Vault. StoreKit replaces Play Billing for
   the purchase and the periodic re-confirmation, but the wire mechanism (a signed field on
   `GroupDefinition`, no server) is platform-agnostic and iOS should use it unchanged.
