@@ -98,6 +98,17 @@ myFlow.test {
 - `Icons.Filled.ArrowBack` → use `Icons.AutoMirrored.Filled.ArrowBack`
 - `@OptIn(ExperimentalCoroutinesApi::class)` needed on coroutine test utilities
 
+## Branches & Platforms
+
+One repo, one `main`, for both apps: Android in `app/`, iOS in `ios/` (built on a Mac clone of
+the same repo). Don't create a separate long-lived main or repo per platform.
+
+- Work on short-lived branches cut from `main`, named by platform: `android/<topic>`,
+  `ios/<topic>`, or `docs/<topic>`. PR into `main`, merge, delete the branch within days.
+- `ios/IOS_PORT_SPEC.md` is shared ground between the two apps. Pull `main` before editing
+  it and merge spec edits promptly. A change to what goes over the broker updates the spec in
+  the same PR.
+
 ## Working With the Owner
 
 - **"Send it"** means: execute the part of the plan discussed in your most recent response — no more, no less. Don't ask for confirmation; don't expand scope beyond what that response proposed.
