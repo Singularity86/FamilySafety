@@ -57,6 +57,9 @@ class MainViewModel @Inject constructor(
     private val routingService: RoutingService,
     val entitlementRepository: com.example.familysafety.billing.EntitlementRepository,
     val billingManager: com.example.familysafety.billing.BillingManager,
+    // Read only by the debug section of the settings screen.
+    val crashTraceRecorder: com.example.familysafety.crash.CrashTraceRecorder,
+    val crashDetectionMonitor: com.example.familysafety.crash.CrashDetectionMonitor,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 

@@ -19,6 +19,11 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.sqrt
 
+/**
+ * Sensor plumbing for crash detection. The rule that decides whether a sample is a crash lives
+ * in [ImpactDecider]; this class registers and unregisters the listener, and turns a
+ * [ImpactDecider.Decision.FIRE] into the full-screen alert.
+ */
 @Singleton
 class CrashDetectionMonitor @Inject constructor(
     @ApplicationContext private val context: Context
@@ -27,25 +32,18 @@ class CrashDetectionMonitor @Inject constructor(
     private val linearAccelSensor: Sensor? =
         sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
 
-    private var isEnabled = false
-    private var isArmed = false
-
-    @Volatile private var lastSpeedMs = 0f
-    private val lastAlertTime = java.util.concurrent.atomic.AtomicLong(0L)
-
-    private var thresholdMs2 = SENSITIVITY_MEDIUM
+    private val decider = ImpactDecider()
 
     private val sensorListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
-            if (!isEnabled || !isArmed) return
             val magnitude = magnitudeOf(event.values[0], event.values[1], event.values[2])
-            val now = System.currentTimeMillis()
-            val last = lastAlertTime.get()
-            // compareAndSet last so two sensor callbacks in the same millisecond can't both fire.
-            if (shouldTriggerAlert(magnitude, thresholdMs2, lastSpeedMs, now, last) &&
-                lastAlertTime.compareAndSet(last, now)) {
-                Timber.w("CrashDetection: impact detected! accel=${magnitude}m/s², speed=${lastSpeedMs}m/s")
-                triggerCrashAlert()
+            when (val decision = decider.onSample(magnitude, System.currentTimeMillis())) {
+                ImpactDecider.Decision.FIRE -> {
+                    Timber.w("CrashDetection: impact detected! accel=${magnitude}m/s²")
+                    triggerCrashAlert()
+                }
+                ImpactDecider.Decision.BELOW_THRESHOLD -> Unit // the overwhelming majority
+                else -> Timber.d("CrashDetection: ${magnitude}m/s² sample rejected — $decision")
             }
         }
 
@@ -53,29 +51,37 @@ class CrashDetectionMonitor @Inject constructor(
     }
 
     fun setEnabled(enabled: Boolean) {
-        isEnabled = enabled
-        if (!enabled) {
-            sensorManager.unregisterListener(sensorListener)
-        } else if (isArmed) {
-            startListening()
-        }
+        decider.setEnabled(enabled)
+        syncListener()
     }
 
     /** Called by LocationService when ActivityRecognition reports IN_VEHICLE state changes. */
     fun setArmed(inVehicle: Boolean) {
-        isArmed = inVehicle
-        if (isEnabled) {
-            if (inVehicle) startListening() else stopListening()
-        }
+        decider.setArmed(inVehicle)
+        syncListener()
     }
 
     /** Called from LocationService on every GPS fix so the speed guard is always current. */
     fun feedSpeed(speedMs: Float) {
-        lastSpeedMs = speedMs
+        decider.feedSpeed(speedMs, System.currentTimeMillis())
     }
 
     fun setThreshold(thresholdMs2: Float) {
-        this.thresholdMs2 = thresholdMs2
+        decider.setThreshold(thresholdMs2)
+    }
+
+    /**
+     * Raises the alert as though a crash had been detected, bypassing every guard. For the debug
+     * settings screen: it exercises the notification, the full-screen intent and
+     * [CrashAlertActivity] without needing motion. Never call this from a release path.
+     */
+    fun simulateAlert() {
+        Timber.w("CrashDetection: simulated alert requested")
+        triggerCrashAlert()
+    }
+
+    private fun syncListener() {
+        if (decider.shouldListen) startListening() else stopListening()
     }
 
     private fun startListening() {
@@ -136,37 +142,8 @@ class CrashDetectionMonitor @Inject constructor(
         const val CHANNEL_ID = "crash_detection_channel"
         const val NOTIFICATION_ID = 9999
 
-        /** Minimum GPS speed in m/s before impact before arming the alert (25 mph = 11.2 m/s). */
-        const val SPEED_GUARD_MS = 11.2f
-
-        /** Don't fire again within 10 minutes of a previous alert. */
-        const val ALERT_COOLDOWN_MS = 10 * 60 * 1000L
-
         /** Magnitude of a linear acceleration sample. Gravity is already removed by the sensor. */
         fun magnitudeOf(x: Float, y: Float, z: Float): Float = sqrt(x * x + y * y + z * z)
-
-        /**
-         * Whether a sample should raise the alert. Pure on purpose: the interesting behaviour is
-         * the conjunction, not the sensor plumbing, and the speed guard is what separates a real
-         * impact from a phone dropped on a hard surface.
-         *
-         * @param nowMs passed in rather than read from the clock so the cooldown is testable.
-         */
-        fun shouldTriggerAlert(
-            magnitudeMs2: Float,
-            thresholdMs2: Float,
-            speedMs: Float,
-            nowMs: Long,
-            lastAlertMs: Long
-        ): Boolean =
-            magnitudeMs2 >= thresholdMs2 &&
-                speedMs >= SPEED_GUARD_MS &&
-                (nowMs - lastAlertMs) > ALERT_COOLDOWN_MS
-
-        /** Linear acceleration thresholds in m/s² (gravity already removed by sensor type). */
-        const val SENSITIVITY_LOW = 40f     // ~4g — severe crashes only
-        const val SENSITIVITY_MEDIUM = 30f  // ~3g — default
-        const val SENSITIVITY_HIGH = 20f    // ~2g — catches moderate impacts
 
         // Dedicated prefs file for crash detection. Previously this was set to
         // "geofence_prefs" (copy-paste bug) — those keys cohabited the geofence

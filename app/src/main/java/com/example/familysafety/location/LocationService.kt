@@ -16,6 +16,8 @@ import com.example.familysafety.core.RateLimiters
 import com.example.familysafety.core.DataValidator
 import com.example.familysafety.core.ValidationResult
 import com.example.familysafety.crash.CrashDetectionMonitor
+import com.example.familysafety.crash.CrashTraceRecorder
+import com.example.familysafety.crash.ImpactDecider
 import com.example.familysafety.storage.LocationPublishOutboxRepository
 import com.example.familysafety.transport.MqttConfig
 import com.example.familysafety.transport.TransportProvider
@@ -55,6 +57,9 @@ class LocationService : Service() {
 
     @Inject
     lateinit var crashDetectionMonitor: CrashDetectionMonitor
+
+    @Inject
+    lateinit var crashTraceRecorder: CrashTraceRecorder
 
     @Inject
     lateinit var appInitializer: AppInitializer
@@ -346,7 +351,7 @@ class LocationService : Service() {
         val crashPrefs = getSharedPreferences(CrashDetectionMonitor.PREFS_NAME, MODE_PRIVATE)
         val crashEnabled = crashPrefs.getBoolean(CrashDetectionMonitor.PREF_ENABLED, false)
         val crashSensitivity = crashPrefs.getFloat(
-            CrashDetectionMonitor.PREF_SENSITIVITY, CrashDetectionMonitor.SENSITIVITY_MEDIUM
+            CrashDetectionMonitor.PREF_SENSITIVITY, ImpactDecider.SENSITIVITY_MEDIUM
         )
         Timber.d("LocationService: crash detection enabled=$crashEnabled threshold=$crashSensitivity")
         crashDetectionMonitor.setThreshold(crashSensitivity)
@@ -640,6 +645,7 @@ class LocationService : Service() {
                 }
 
                 crashDetectionMonitor.feedSpeed(speedMs)
+                crashTraceRecorder.feedSpeed(speedMs)
 
                 val previous = locationRepository.myLocation.value
                 if (previous != null && LocationPublishPolicy.isRedundant(previous, memberLocation)) {
