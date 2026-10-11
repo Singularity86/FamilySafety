@@ -4,7 +4,7 @@
 revised 2026-08-16 against `main` at 4f3c1f0 (1.12.10 plus the shared-file rebuild and the
 vault), revised again 2026-09-19 against `main` at b2d0807 (1.13.6, versionCode 35), and
 revised again 2026-09-22 for the family subscription (`billing/`), and revised again
-2026-10-10 against Android 1.15.0 (versionCode 41), and on 2026-10-11 for 1.15.2 (43) — the
+2026-10-10 against Android 1.15.0 (versionCode 41), and on 2026-10-11 for 1.15.2 (43) and 1.15.3 (44) — the
 first wire change since 1.13.6: memberships and removal proofs (§6.5). **The subscription shipped in 1.14.0
 (37–39) and is enforced; private chats are now confined to their two participants (§6.3,
 §6.6); MQTT keep-alive is 120 s and resubscribing is skipped when the session survived (§4);
@@ -12,11 +12,11 @@ location publishing and replication are throttled (§6.2, §6.6). None of it cha
 the wire — `PROTOCOL_VERSION` is still 3 — but several items change what a correct client must
 do. See "Changes since 1.13.6" below.**
 
-## Changes since 1.13.6 (Android 1.14.0 – 1.15.2)
+## Changes since 1.13.6 (Android 1.14.0 – 1.15.3)
 
 Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the billing work.
 **wire** = changes bytes on the broker; **behaviour** = changes what a correct client must do;
-**product** = policy, not interop. Only the 1.15.2 rows are **wire**; through 1.15.1, phones on
+**product** = policy, not interop. Only the 1.15.3 rows are **wire**; through 1.15.2, phones on
 1.14.0 and earlier interoperate in both directions.
 
 | Android | Kind | What changed | Where |
@@ -29,12 +29,13 @@ Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the bi
 | 1.15.0 (40) | behaviour | **Replication is scoped.** Location history is requested only from the member it belongs to (everyone only for your own history). A private conversation is requested only from the other participant. At most one outstanding request per (dataType, target, conversation). Each peer's `chatDataSummary` lists only conversations that peer may hold. | §6.6 |
 | 1.15.0 (40) | behaviour | **Replication cadence:** announcements every 30 min (was 5); minimum 15 min between full syncs (was 60 s). | §6.6 |
 | 1.15.0 (40) | behaviour | **Location publish throttling.** Skip a fix if its timestamp is not newer than the last sent; send if the last send is 5 min or older; send if accuracy is better than half the last; otherwise skip when moved < max(30 m, new fix's accuracy). A heartbeat within (stationary interval − 60 s) of a successful publish only checks the connection. Receivers are unaffected. | §6.2 |
+| 1.15.2 (43) | behaviour | **Subscribe with two wildcards.** EMQX Serverless grants at most **10 subscriptions per connection** (not adjustable) and refuses the rest with 0x80, so the 21 one-by-one filters lost everything after the tenth — group sync, removal votes, files, the vault and every peer's presence. Subscribe `familysafe/{me}/#`, `familysafe/group/{groupId}/#` and one `presence` per peer; the legacy per-peer `location` is no longer subscribed. Before subscribing, UNSUBSCRIBE the old one-by-one filters, or a kept session's leftovers fill the quota and the wildcards are refused. Nothing published changes, so mixed versions interoperate. | §4, §5 |
 | 1.15.0 (41) | behaviour | Setup asks for the motion/activity permission (Android `ACTIVITY_RECOGNITION`) in a "Driving & Movement" step; without it crash detection can never arm. iOS needs the Core Motion equivalent plus its usage string. | §11 |
 | 1.15.0 (40) | product | **Colours:** the twelve-colour person palette, colour-blind patterns and profile photos in chat. `FamilyMember.colorHue` is unchanged on the wire (HSL hue): a chosen colour is stored as the hue of the palette colour, and one never chosen is derived from the member ID locally. For the same person to look the same on both platforms, port `PersonPalette.forHue` and `hueFromId` (`PersonColors.kt`). | §6.5; `DESIGN.md` |
 | 1.15.1 (42) | behaviour | **Restore is a join.** A phone restored from its recovery phrase scans a member's invite and sends a join request under its restored identity, now **signed** (optional `signature` field). An existing member with matching keys and a valid signature is approved automatically; a request naming an existing member with *different* keys is refused, even by hand. New optional field only, so older peers are unaffected. | §8.3, §8.4, §8.6 |
-| 1.15.2 (43) | **wire** | **Removals end a membership, not a person.** `FamilyMember.joinEpoch` (optional, default 0) and tombstones of the form `"<memberId>#<n>"` for membership n ≥ 1; the bare ID still means membership 0. A member who left or was removed can be let back in as membership n+1. `joinEpoch` is hashed when non-zero, so existing groups hash as before. Peers before 1.15.2 reject a readmission ("removed member present"), so update every phone before letting anyone back in. | §6.5, §7.1, §7.3 |
-| 1.15.2 (43) | **wire** | **Removal proofs.** `GroupDefinition.removalProofs` (optional): per tombstone, a signature by the creator or by the member who left, over `REMOVAL_PROOF:v1:{groupId}:{tombstone}`. Any member may now relay a removal carrying one; before, a removal heard second-hand was refused. Not hashed. Older peers ignore the field. | §6.5, §7.3 |
-| 1.15.2 (43) | product | Leaving while unable to reach the family (no relay, no member on the same Wi-Fi) warns first: the departure can't be sent once the keys are erased. | — |
+| 1.15.3 (44) | **wire** | **Removals end a membership, not a person.** `FamilyMember.joinEpoch` (optional, default 0) and tombstones of the form `"<memberId>#<n>"` for membership n ≥ 1; the bare ID still means membership 0. A member who left or was removed can be let back in as membership n+1. `joinEpoch` is hashed when non-zero, so existing groups hash as before. Peers before 1.15.3 reject a readmission ("removed member present"), so update every phone before letting anyone back in. | §6.5, §7.1, §7.3 |
+| 1.15.3 (44) | **wire** | **Removal proofs.** `GroupDefinition.removalProofs` (optional): per tombstone, a signature by the creator or by the member who left, over `REMOVAL_PROOF:v1:{groupId}:{tombstone}`. Any member may now relay a removal carrying one; before, a removal heard second-hand was refused. Not hashed. Older peers ignore the field. | §6.5, §7.3 |
+| 1.15.3 (44) | product | Leaving while unable to reach the family (no relay, no member on the same Wi-Fi) warns first: the departure can't be sent once the keys are erased. | — |
 
 Not in this table because they do not touch interop: private-chat UI, Family/Chat lists, the
 Porch Light theme and typefaces, corner-radius rules, the stays/trips/gaps history view
@@ -311,6 +312,16 @@ against the QR invite's `inviterMemberId` (§8.4).
   permanently, replayed to anything that subscribed. An implementation that skips this
   produces the same litter.
 - Joiner onboarding uses a separate **ephemeral** client `familysafe_join_{memberId[0..7]}_{epochMs}` (§8.3).
+- **Subscription quota: 10 per connection** on the EMQX Serverless plan, not adjustable.
+  Filters beyond it get 0x80 in the SUBACK and are never delivered; the connection itself
+  carries on as if nothing happened. Measured on this broker 2026-10-11: the limit is per connection, not per
+  SUBSCRIBE packet, and filters held over in a kept session count. Hence the wildcards in §5,
+  and two rules for a client:
+  - When a SUBSCRIBE is needed (see the `sessionPresent` rule above), first UNSUBSCRIBE every
+    filter older builds subscribed one by one (all of §5's own topics, plus `location` and
+    `presence` for each peer). Unsubscribing a filter you don't hold is harmless.
+  - If filters that fit the quota are still refused, the kept session holds something else:
+    connect once with `cleanSession = true`, then go back to persistent sessions.
 
 ---
 
@@ -322,7 +333,7 @@ presence publishes, which are QoS 0 (§4). The presence last-will stays QoS 1.
 | Topic | Payload | E2EE | Retained |
 |---|---|---|---|
 | `familysafe/{id}/location_inbox` | Envelope(§3) of `MessageEnvelope{type:"location_update"}` | ✅ per-recipient | no |
-| `familysafe/{sender}/location` | legacy — **subscribe only**, never publish | ✅ | no |
+| `familysafe/{sender}/location` | legacy — never publish; **no longer subscribed** (since 1.15.2). Arrives through your own wildcard for your own id; ignore it | ✅ | no |
 | `familysafe/{sender}/presence` | sealed presence, `{"v":2,"data":...}` (§6.2), encrypted under a group subkey because the last-will is published by the broker after the device is gone | ✅ group key | **yes** |
 | `familysafe/{id}/chat` | Envelope of `ChatMessagePayload` | ✅ | no |
 | `familysafe/{id}/chat/receipt` | Envelope of `DeliveryReceipt` (DELIVERED) | ✅ | no |
@@ -345,12 +356,19 @@ presence publishes, which are QoS 0 (§4). The presence last-will stays QoS 1.
 | `familysafe/group/{groupId}/vault/chunk/{fileId}/{chunkIndex}` | plaintext `VaultChunkMessage` (data field AES-GCM under the item's content key) | contents ✅ (per-item key, not the group key) | no |
 | `familysafe/{id}/vault/repair` | plaintext `VaultChunkRequest` | ❌ (names only an opaque id) | no |
 
-Own subscriptions on connect: `chat`, `location_inbox`, `chat/receipt`, `chat/read`,
-`replication/request|data|announce`, `join_request`, `join_approval`, `sync_request`, `removal_vote`,
-`group_sync`, group `ack`, files `manifest`, files `chunk/#` (wildcard), `files/request`,
-`files/repair`, `files/availability`, `vault/container`, `vault/chunk/#` (wildcard),
-`vault/repair`.
-Per-peer subscriptions: `location` (legacy), `presence`.
+Subscriptions on connect (since 1.15.2), **2 + one per peer**, which fits a family of nine
+inside the 10-subscription quota (§4):
+- `familysafe/{me}/#` — every own topic: `chat`, `location_inbox`, `chat/receipt`, `chat/read`,
+  `replication/request|data|announce`, `join_request`, `join_approval`, `sync_request`,
+  `removal_vote`, `group_sync`, `files/request`, `files/repair`, `files/availability`,
+  `vault/repair`. It also delivers your own retained `presence` back to you; drop any presence
+  whose sender is yourself (Android already did).
+- `familysafe/group/{groupId}/#` — group `ack`, files `manifest`, files `chunk/…`,
+  `vault/container`, `vault/chunk/…`.
+- Per peer: `familysafe/{peer}/presence`. On a member's removal, unsubscribe theirs.
+
+Route incoming messages by topic **suffix**, as before: the wildcards change which filters
+match, not the topic names messages arrive on.
 
 The three vault topics are subscribed **unconditionally, by every device, in every family**,
 whether or not anyone has ever set a vault code. A client that subscribed to them only once a
@@ -594,7 +612,7 @@ be preserved on re-serialize — a client that drops it will readmit removed mem
 the merge in §7.4 and will disagree about the state hash (§7.1) for any group that has ever
 removed anyone.
 
-**Memberships (since 1.15.2).** A tombstone ends one *membership*, not the person. A recovery
+**Memberships (since 1.15.3).** A tombstone ends one *membership*, not the person. A recovery
 phrase always regenerates the same member ID (§8.6), so a member who left must be able to come
 back without un-removing anyone. `FamilyMember.joinEpoch` (default 0, optional) numbers the
 membership; the tombstone for membership n is the bare `memberId` when n = 0 (exactly what
@@ -603,7 +621,7 @@ for *their current* `joinEpoch` exists. Letting a removed member back in adds th
 `joinEpoch` = (highest n tombstoned for that ID) + 1. When two records of one member disagree,
 the higher `joinEpoch` is the current one (merge, §7.4).
 
-**Removal proofs (since 1.15.2).** `removalProofs` (optional, default empty) holds, per
+**Removal proofs (since 1.15.3).** `removalProofs` (optional, default empty) holds, per
 tombstone, Ed25519-detached by `authorizerMemberId` over the UTF-8 string
 `REMOVAL_PROOF:v1:{groupId}:{tombstone}`. The authorizer is the creator, or the member the
 tombstone removes when they left. Not version-bound: a tombstone is permanent, and a later
@@ -1145,7 +1163,7 @@ SHA-256 (lowercase hex) of the UTF-8 canonical string:
 {memberId},{ed25519PublicKey},{x25519PublicKey};
 ```
 where a member whose `joinEpoch` is non-zero has `,#{joinEpoch}` inserted before the `;`
-(since 1.15.2 — membership 0 hashes exactly as before):
+(since 1.15.3 — membership 0 hashes exactly as before):
 ```
 {memberId},{ed25519PublicKey},{x25519PublicKey},#{joinEpoch};
 ```
@@ -1435,10 +1453,10 @@ approval prompt, and if approved, rejoins under the same identity. An inviter on
 before 1.15.1 always prompts, and approving there is safe: the member already exists, so only
 the approval is sent.
 
-Before 1.15.2 the "left or was removed" case did not actually work: the leave had tombstoned
+Before 1.15.3 the "left or was removed" case did not actually work: the leave had tombstoned
 the member ID, the restored phrase produces the same ID, and every phone except the inviter's
 rejected the re-added member as resurrected, so they were dropped again at the next sync. Since
-1.15.2 the inviter adds them as their next membership (§6.5).
+1.15.3 the inviter adds them as their next membership (§6.5).
 
 ---
 

@@ -74,8 +74,9 @@ object MqttConfig {
     /**
      * Legacy shared location topic keyed by SENDER. Deprecated for publishing:
      * every subscriber received all per-recipient ciphertexts and could only
-     * decrypt its own, producing spurious decrypt failures. Still subscribed
-     * so peers running older builds keep working.
+     * decrypt its own, producing spurious decrypt failures. No longer subscribed
+     * either: nothing publishes to it, and each filter counts against the broker's
+     * 10-subscription quota (see [getOwnWildcardTopic]).
      */
     fun getLocationTopic(memberId: String): String {
         return "familysafe/$memberId/location"
@@ -92,6 +93,20 @@ object MqttConfig {
     
     fun getPresenceTopic(memberId: String): String {
         return "familysafe/$memberId/presence"
+    }
+
+    /**
+     * Every topic under one member's id: their inboxes, plus their own presence and legacy
+     * location, which the handlers already ignore when the sender is us. Subscribed as one
+     * filter because EMQX Serverless grants at most 10 subscriptions per connection.
+     */
+    fun getOwnWildcardTopic(memberId: String): String {
+        return "familysafe/$memberId/#"
+    }
+
+    /** Every group-wide topic (ack, file manifest and chunks, vault container and chunks). */
+    fun getGroupWildcardTopic(groupId: String): String {
+        return "familysafe/group/$groupId/#"
     }
 
     fun getGroupAckTopic(groupId: String): String {
