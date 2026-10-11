@@ -25,3 +25,9 @@ keystore/
 # Swift Package Manager build artifacts (iOS port)
 ios/FamilySafety/.build/
 ios/FamilySafety/.swiftpm/
+
+# Code reviews and remediation plans are kept local only
+/app/REMEDIATION_PLAN.md
+/ios/REMEDIATION_PLAN.md
+/app/CODE_REVIEW_*.md
+/ios/CODE_REVIEW_*.md
