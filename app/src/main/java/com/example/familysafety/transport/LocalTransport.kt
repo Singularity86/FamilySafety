@@ -1,6 +1,10 @@
 package com.example.familysafety.transport
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -36,6 +40,12 @@ import javax.inject.Singleton
  *   4. [isReachable] returns true if a peer has been resolved.
  *   5. [send] delivers an encrypted payload to a peer via a persistent TCP connection.
  *   6. Incoming messages are forwarded to [onMessageReceived].
+ *
+ * Staying found. NSD reports a service once, when it appears, and again only after it has
+ * been lost. A peer whose address is dropped — because a send failed while it dozed, or the
+ * WiFi blipped — is therefore never reported again, so the service each peer advertised is
+ * kept in [discoveredServices] and re-resolved after a failure, with backoff. Registration
+ * and discovery are retried when they fail, and restarted when WiFi comes back.
  */
 @Singleton
 class LocalTransport @Inject constructor(
@@ -60,10 +70,18 @@ class LocalTransport @Inject constructor(
     )
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    // Recreated by start(): stop() cancels it, and a cancelled scope silently ignores every
+    // launch, so a stop followed by a start used to leave no server and no discovery.
+    private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     // Peers discovered via NSD — keyed by the first 16 chars of their memberId
     private val peerAddresses = ConcurrentHashMap<String, InetSocketAddress>()
+    // Every service NSD has reported and not yet lost, resolved or not — what a re-resolve needs.
+    private val discoveredServices = ConcurrentHashMap<String, NsdServiceInfo>()
+    // Consecutive failures per peer, for re-resolve backoff. Cleared when a peer resolves.
+    private val peerFailures = ConcurrentHashMap<String, Int>()
+    private val reResolveJobs = ConcurrentHashMap<String, Job>()
     private val resolveQueue = ConcurrentLinkedQueue<ResolveRequest>()
     private val isResolving = AtomicBoolean(false)
 
@@ -76,6 +94,9 @@ class LocalTransport @Inject constructor(
     private var nsdManager: NsdManager? = null
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var discoveryListener: NsdManager.DiscoveryListener? = null
+    private var registrationFailures = 0
+    private var discoveryFailures = 0
+    private var wifiCallback: ConnectivityManager.NetworkCallback? = null
 
     /** Invoked on the IO dispatcher when a framed message arrives from a peer. */
     var onMessageReceived: ((topic: String, payloadString: String) -> Unit)? = null
@@ -92,14 +113,24 @@ class LocalTransport @Inject constructor(
     fun start(memberId: String) {
         if (localMemberId != null) return
         localMemberId = memberId
+        if (!scope.isActive) scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
+        registrationFailures = 0
+        discoveryFailures = 0
         startServer()
+        watchWifi()
     }
 
     fun stop() {
+        unwatchWifi()
         runCatching { registrationListener?.let { nsdManager?.unregisterService(it) } }
         runCatching { discoveryListener?.let { nsdManager?.stopServiceDiscovery(it) } }
+        registrationListener = null
+        discoveryListener = null
         peerAddresses.clear()
+        discoveredServices.clear()
+        peerFailures.clear()
+        reResolveJobs.clear()
         resolveQueue.clear()
         isResolving.set(false)
         connections.values.forEach { runCatching { it.close() } }
@@ -211,7 +242,7 @@ class LocalTransport @Inject constructor(
      * Returns true if [memberId] has been discovered on the local network.
      */
     fun isReachable(memberId: String): Boolean =
-        peerAddresses.containsKey(memberId.take(16))
+        peerAddresses.containsKey(memberId.take(LanPeerPolicy.PEER_PREFIX_LENGTH))
 
     /**
      * Send an encrypted message to [recipientMemberId] over local WiFi.
@@ -219,7 +250,7 @@ class LocalTransport @Inject constructor(
      * unreachable or the send fails (caller should fall back to MQTT).
      */
     suspend fun send(topic: String, payloadString: String, recipientMemberId: String): Boolean {
-        val prefix = recipientMemberId.take(16)
+        val prefix = recipientMemberId.take(LanPeerPolicy.PEER_PREFIX_LENGTH)
         val address = peerAddresses[prefix] ?: return false
         return withContext(Dispatchers.IO) {
             try {
@@ -256,8 +287,13 @@ class LocalTransport @Inject constructor(
             } catch (e: Exception) {
                 Timber.d("LocalTransport send to $prefix failed (${e.message}), MQTT fallback")
                 connections.remove(prefix)?.let { runCatching { it.close() } }
-                peerAddresses.remove(prefix) // remove stale entry so we re-resolve next time
+                // The address may be stale (new DHCP lease, new port after an app restart), so
+                // drop it — but schedule a re-resolve. Dropping it was all this used to do, and
+                // NSD never reports a still-present service again, so one failed send while the
+                // peer dozed lost it for good: "0 local peers" on a shared WiFi.
+                peerAddresses.remove(prefix)
                 onPeerReachabilityChanged?.invoke(prefix, false, null)
+                scheduleReResolve(prefix)
                 false
             }
         }
@@ -271,16 +307,23 @@ class LocalTransport @Inject constructor(
         val memberId = localMemberId ?: return
         // Encode the first 16 chars of memberId in the service name for peer identification
         val serviceInfo = NsdServiceInfo().apply {
-            serviceName = "familysafety-${memberId.take(16)}"
+            serviceName = LanPeerPolicy.SERVICE_NAME_PREFIX + memberId.take(LanPeerPolicy.PEER_PREFIX_LENGTH)
             serviceType = SERVICE_TYPE
             port = serverPort
         }
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(info: NsdServiceInfo) {
+                registrationFailures = 0
                 Timber.i("NSD registered: ${info.serviceName} on port $serverPort")
             }
             override fun onRegistrationFailed(info: NsdServiceInfo, errorCode: Int) {
-                Timber.e("NSD registration failed: $errorCode")
+                val delayMs = LanPeerPolicy.retryDelayMs(registrationFailures++)
+                Timber.e("NSD registration failed: $errorCode — retrying in ${delayMs / 1000}s")
+                if (registrationListener === this) registrationListener = null
+                scope.launch {
+                    delay(delayMs)
+                    if (localMemberId != null && registrationListener == null) registerNsdService()
+                }
             }
             override fun onServiceUnregistered(info: NsdServiceInfo) {
                 Timber.d("NSD service unregistered")
@@ -290,7 +333,12 @@ class LocalTransport @Inject constructor(
             }
         }
         registrationListener = listener
-        nsdManager?.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, listener)
+        try {
+            nsdManager?.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, listener)
+        } catch (e: Exception) {
+            Timber.w(e, "NSD registerService threw")
+            listener.onRegistrationFailed(serviceInfo, -1)
+        }
     }
 
     // =========================================================================
@@ -300,35 +348,53 @@ class LocalTransport @Inject constructor(
     private fun startNsdDiscovery() {
         val listener = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(serviceType: String) {
+                discoveryFailures = 0
                 Timber.d("NSD discovery started for $serviceType")
             }
             override fun onDiscoveryStopped(serviceType: String) {
                 Timber.d("NSD discovery stopped")
             }
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                if (!serviceInfo.serviceName.startsWith("familysafety-")) return
-                val peerPrefix = serviceInfo.serviceName.removePrefix("familysafety-")
-                if (peerPrefix == localMemberId?.take(16)) return // skip ourselves
+                val peerPrefix = LanPeerPolicy.peerPrefixFromServiceName(serviceInfo.serviceName) ?: return
+                if (peerPrefix == localMemberId?.take(LanPeerPolicy.PEER_PREFIX_LENGTH)) return // skip ourselves
+                discoveredServices[peerPrefix] = serviceInfo
                 Timber.d("NSD found peer: $peerPrefix, queueing resolve...")
                 enqueueResolve(peerPrefix, serviceInfo)
             }
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {
-                if (!serviceInfo.serviceName.startsWith("familysafety-")) return
-                val peerPrefix = serviceInfo.serviceName.removePrefix("familysafety-")
+                val peerPrefix = LanPeerPolicy.peerPrefixFromServiceName(serviceInfo.serviceName) ?: return
+                // A renamed duplicate ("… (2)") can be lost while the peer's live registration
+                // stays up; only forget the peer when the service we are tracking is the one lost.
+                val tracked = discoveredServices[peerPrefix]
+                if (tracked != null && tracked.serviceName != serviceInfo.serviceName) return
+                discoveredServices.remove(peerPrefix)
+                reResolveJobs.remove(peerPrefix)?.cancel()
+                peerFailures.remove(peerPrefix)
                 peerAddresses.remove(peerPrefix)
                 connections.remove(peerPrefix)?.let { runCatching { it.close() } }
                 onPeerReachabilityChanged?.invoke(peerPrefix, false, null)
                 Timber.d("Peer lost: $peerPrefix")
             }
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-                Timber.e("NSD discovery start failed: $errorCode")
+                val delayMs = LanPeerPolicy.retryDelayMs(discoveryFailures++)
+                Timber.e("NSD discovery start failed: $errorCode — retrying in ${delayMs / 1000}s")
+                if (discoveryListener === this) discoveryListener = null
+                scope.launch {
+                    delay(delayMs)
+                    if (localMemberId != null && discoveryListener == null) startNsdDiscovery()
+                }
             }
             override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
                 Timber.e("NSD discovery stop failed: $errorCode")
             }
         }
         discoveryListener = listener
-        nsdManager?.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+        try {
+            nsdManager?.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+        } catch (e: Exception) {
+            Timber.w(e, "NSD discoverServices threw")
+            listener.onStartDiscoveryFailed(SERVICE_TYPE, -1)
+        }
     }
 
     private fun enqueueResolve(peerPrefix: String, serviceInfo: NsdServiceInfo) {
@@ -336,6 +402,23 @@ class LocalTransport @Inject constructor(
         if (resolveQueue.any { it.peerPrefix == peerPrefix }) return
         resolveQueue.offer(ResolveRequest(peerPrefix, serviceInfo))
         drainResolveQueue()
+    }
+
+    /**
+     * Re-resolve a known peer after a failure, waiting longer each consecutive time so a phone
+     * that is genuinely away is not hammered. Cancelled if NSD reports the peer lost.
+     */
+    private fun scheduleReResolve(peerPrefix: String) {
+        if (reResolveJobs[peerPrefix]?.isActive == true) return
+        val attempt = peerFailures.merge(peerPrefix, 1, Int::plus)!! - 1
+        val delayMs = LanPeerPolicy.retryDelayMs(attempt)
+        reResolveJobs[peerPrefix] = scope.launch {
+            delay(delayMs)
+            reResolveJobs.remove(peerPrefix)
+            val info = discoveredServices[peerPrefix] ?: return@launch
+            Timber.d("Re-resolving LAN peer $peerPrefix (attempt ${attempt + 1})")
+            enqueueResolve(peerPrefix, info)
+        }
     }
 
     private fun drainResolveQueue() {
@@ -349,6 +432,7 @@ class LocalTransport @Inject constructor(
                 ?: completeResolve()
         } catch (e: Exception) {
             Timber.w(e, "NSD resolve could not start for ${request.peerPrefix}")
+            scheduleReResolve(request.peerPrefix)
             completeResolve()
         }
     }
@@ -362,20 +446,91 @@ class LocalTransport @Inject constructor(
         return object : NsdManager.ResolveListener {
             override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
                 val host = serviceInfo.host?.hostAddress ?: run {
+                    scheduleReResolve(peerPrefix)
                     completeResolve()
                     return
                 }
                 val port = serviceInfo.port
                 val address = InetSocketAddress(host, port)
                 peerAddresses[peerPrefix] = address
+                peerFailures.remove(peerPrefix)
                 onPeerReachabilityChanged?.invoke(peerPrefix, true, address)
                 Timber.i("Peer resolved: $peerPrefix @ $host:$port")
                 completeResolve()
             }
             override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
                 Timber.e("NSD resolve failed for $peerPrefix: $errorCode")
+                scheduleReResolve(peerPrefix)
                 completeResolve()
             }
         }
+    }
+
+    // =========================================================================
+    // WIFI CHANGES
+    // =========================================================================
+
+    /**
+     * Restart registration and discovery when WiFi comes back. A registration made while the
+     * phone was on mobile data, or on a WiFi network it has since left, is not reliably carried
+     * over to the new network, and neither is discovery, so peers on the new network never see
+     * or are seen by this phone until the app restarts.
+     */
+    private fun watchWifi() {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        var wifiWasLost = false
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                // The first onAvailable just reports the WiFi already connected at start.
+                if (!wifiWasLost) return
+                wifiWasLost = false
+                scope.launch { restartNsd("WiFi reconnected") }
+            }
+            override fun onLost(network: Network) {
+                wifiWasLost = true
+            }
+        }
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .build()
+        try {
+            cm.registerNetworkCallback(request, callback)
+            wifiCallback = callback
+        } catch (e: Exception) {
+            Timber.w(e, "Could not watch WiFi for LAN restarts")
+        }
+    }
+
+    private fun unwatchWifi() {
+        val callback = wifiCallback ?: return
+        wifiCallback = null
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        runCatching { cm?.unregisterNetworkCallback(callback) }
+    }
+
+    private fun restartNsd(reason: String) {
+        if (localMemberId == null || serverSocket?.isClosed != false) return
+        Timber.i("Restarting LAN discovery: $reason")
+        runCatching { registrationListener?.let { nsdManager?.unregisterService(it) } }
+        runCatching { discoveryListener?.let { nsdManager?.stopServiceDiscovery(it) } }
+        registrationListener = null
+        discoveryListener = null
+        // Addresses from the old network are meaningless on the new one. Peers re-announce
+        // themselves to the fresh discovery below.
+        peerAddresses.keys.toList().forEach { prefix ->
+            peerAddresses.remove(prefix)
+            onPeerReachabilityChanged?.invoke(prefix, false, null)
+        }
+        discoveredServices.clear()
+        reResolveJobs.values.forEach { it.cancel() }
+        reResolveJobs.clear()
+        peerFailures.clear()
+        resolveQueue.clear()
+        connections.values.forEach { runCatching { it.close() } }
+        connections.clear()
+        registrationFailures = 0
+        discoveryFailures = 0
+        registerNsdService()
+        startNsdDiscovery()
     }
 }

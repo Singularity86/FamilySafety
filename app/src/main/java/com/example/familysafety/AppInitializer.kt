@@ -31,6 +31,7 @@ import com.example.familysafety.transport.LocalTransport
 import com.example.familysafety.transport.MqttTransport
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -153,12 +154,23 @@ class AppInitializer @Inject constructor(
                 val localMember = groupDef.findMemberById(localMemberId.value)
                     ?: throw IllegalStateException("Local member ${localMemberId.value} not found in group ${groupDef.groupId}")
 
-                mqttTransport.initialize(
-                    memberIdParam = localMemberId.value,
-                    familyMembers = groupDef.members.toList(),
-                    groupIdParam = groupDef.groupId
-                )
-                Timber.d("$TAG: MQTT transport initialized")
+                // Not awaited. With the broker unreachable, initialize spends ~2 minutes on
+                // connect attempts, and LAN discovery used to wait behind it — so the one route
+                // that works when the internet does not came up last. UNDISPATCHED runs it up to
+                // its first suspension now, which is after it has stored the member keys that
+                // messages arriving over the LAN are decrypted with.
+                scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    try {
+                        mqttTransport.initialize(
+                            memberIdParam = localMemberId.value,
+                            familyMembers = groupDef.members.toList(),
+                            groupIdParam = groupDef.groupId
+                        )
+                        Timber.d("$TAG: MQTT transport initialized")
+                    } catch (e: Exception) {
+                        Timber.e(e, "$TAG: MQTT transport initialization failed")
+                    }
+                }
 
                 // 7b. Start local WiFi transport (NSD registration + TCP server)
                 localTransport.start(localMemberId.value)
