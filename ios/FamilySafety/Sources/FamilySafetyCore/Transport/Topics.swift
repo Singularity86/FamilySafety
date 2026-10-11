@@ -108,8 +108,20 @@ public enum Topics {
         "familysafe/\(memberId)/vault/repair"
     }
 
-    /// Own-topic subscriptions on connect (§5) — everything except the per-peer
-    /// `location`/`presence` topics, which are subscribed once per roster member instead.
+    /// Every topic under one member's id (§5). It also matches our own retained `presence`,
+    /// which a presence handler must drop when the sender is us.
+    public static func ownWildcard(memberId: String) -> String {
+        "familysafe/\(memberId)/#"
+    }
+
+    /// Every group-wide topic: ack, file manifest and chunks, vault container and chunks.
+    public static func groupWildcard(groupId: String) -> String {
+        "familysafe/group/\(groupId)/#"
+    }
+
+    /// Every own and group topic, one by one (§5). No longer subscribed individually — the
+    /// two wildcards cover all of them — but kept as the list they must cover, and as the
+    /// filters an older build's kept session may still hold (see `legacySubscriptionTopics`).
     public static func ownSubscriptionTopics(memberId: String, groupId: String? = nil) -> [String] {
         var topics = [
             chat(memberId: memberId),
@@ -137,6 +149,15 @@ public enum Topics {
             topics.append(vaultChunkWildcard(groupId: groupId))
         }
         return topics
+    }
+
+    /// What builds before the wildcards subscribed one by one. A kept session still holds
+    /// whichever the broker granted, and they count against the 10-subscription quota (§4),
+    /// so they are unsubscribed before the wildcards go in.
+    public static func legacySubscriptionTopics(memberId: String, groupId: String?, peerMemberIds: [String]) -> [String] {
+        ownSubscriptionTopics(memberId: memberId, groupId: groupId) + peerMemberIds
+            .filter { $0 != memberId }
+            .flatMap { [location(memberId: $0), presence(memberId: $0)] }
     }
 
     /// Whether `topic` carries group membership/identity rather than ordinary traffic —

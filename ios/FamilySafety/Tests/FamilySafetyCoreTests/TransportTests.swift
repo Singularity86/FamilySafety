@@ -180,12 +180,52 @@ final class TransportTests: XCTestCase {
         XCTAssertTrue(SubscriptionPolicy.shouldResubscribe(sessionPresent: true, storedFingerprint: nil, currentFingerprint: "f"))
     }
 
-    func test_subscriptionSet_addsPeerTopicsAtQos0_andNeverSubscribesToSelfAsPeer() {
+    func test_subscriptionSet_isTwoWildcardsPlusPeerPresence_andNeverSubscribesToSelfAsPeer() {
         let set = MqttTransport.subscriptionSet(memberId: "m1", groupId: "g1", peerMemberIds: ["m1", "m2"])
         let topics = set.map { $0.0 }
-        XCTAssertTrue(topics.contains(Topics.presence(memberId: "m2")))
-        XCTAssertFalse(topics.contains(Topics.presence(memberId: "m1")))
-        XCTAssertEqual(set.first { $0.0 == Topics.location(memberId: "m2") }?.1, .qos0)
-        XCTAssertEqual(set.first { $0.0 == Topics.chat(memberId: "m1") }?.1, .qos1)
+        XCTAssertEqual(topics, ["familysafe/m1/#", "familysafe/group/g1/#", Topics.presence(memberId: "m2")])
+        XCTAssertEqual(set.first { $0.0 == Topics.presence(memberId: "m2") }?.1, .qos0)
+        XCTAssertEqual(set.first { $0.0 == Topics.ownWildcard(memberId: "m1") }?.1, .qos1)
+        XCTAssertFalse(topics.contains(Topics.location(memberId: "m2")))
+    }
+
+    /// MQTT topic-filter matching: `+` is one level, a trailing `#` is any remainder.
+    private func matches(_ filter: String, _ topic: String) -> Bool {
+        let f = filter.split(separator: "/", omittingEmptySubsequences: false)
+        let t = topic.split(separator: "/", omittingEmptySubsequences: false)
+        for i in f.indices {
+            if f[i] == "#" { return true }
+            if i >= t.count { return false }
+            if f[i] != "+" && f[i] != t[i] { return false }
+        }
+        return f.count == t.count
+    }
+
+    func test_wildcards_coverEveryOwnAndGroupTopic_andNothingOfAnotherMemberOrGroup() {
+        let wildcards = MqttTransport.subscriptionSet(memberId: "m1", groupId: "g1", peerMemberIds: []).map { $0.0 }
+        let concrete = { (m: String, g: String) in
+            Topics.ownSubscriptionTopics(memberId: m, groupId: g).map { $0.replacingOccurrences(of: "#", with: "f1/0") }
+        }
+        XCTAssertEqual(concrete("m1", "g1").count, 21)
+        for topic in concrete("m1", "g1") {
+            XCTAssertTrue(wildcards.contains { matches($0, topic) }, "\(topic) is not covered")
+        }
+        for topic in concrete("m2", "g2") {
+            XCTAssertFalse(wildcards.contains { matches($0, topic) }, "\(topic) leaks in")
+        }
+    }
+
+    func test_aFamilyOfNine_fitsTheBrokerQuota() {
+        let peers = (1...8).map { "p\($0)" }
+        XCTAssertEqual(MqttTransport.subscriptionSet(memberId: "m1", groupId: "g1", peerMemberIds: peers).count,
+                       MqttTransport.brokerSubscriptionQuota)
+    }
+
+    func test_legacySubscriptionTopics_coverWhatOlderBuildsHeld() {
+        let legacy = Topics.legacySubscriptionTopics(memberId: "m1", groupId: "g1", peerMemberIds: ["m1", "m2"])
+        XCTAssertTrue(Topics.ownSubscriptionTopics(memberId: "m1", groupId: "g1").allSatisfy(legacy.contains))
+        XCTAssertTrue(legacy.contains(Topics.location(memberId: "m2")))
+        XCTAssertTrue(legacy.contains(Topics.presence(memberId: "m2")))
+        XCTAssertFalse(legacy.contains(Topics.presence(memberId: "m1")))
     }
 }

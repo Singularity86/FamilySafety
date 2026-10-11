@@ -56,6 +56,7 @@ public final class MqttTransport: NSObject {
     private var connectingSince: Date?
     private var connectContinuation: CheckedContinuation<Void, Error>?
     private var subscribeContinuation: CheckedContinuation<Bool, Never>?
+    private var unsubscribeContinuation: CheckedContinuation<Void, Never>?
 
     /// Persisted so a later connect can recognise a subscription set the broker already holds.
     public var fingerprintStore: SubscriptionFingerprintStore = UserDefaultsFingerprintStore()
@@ -64,6 +65,9 @@ public final class MqttTransport: NSObject {
     /// read from the patched CocoaMQTT in `Vendor/` (see Vendor/PATCHES.md). `false` is the
     /// safe direction: it forces a full resubscribe.
     public private(set) var sessionPresent = false
+
+    /// Filters the broker refused in the most recent SUBACK (empty when all were granted).
+    public private(set) var lastSubscribeFailures: [String] = []
 
     /// NSLock's lock()/unlock() are NS_SWIFT_UNAVAILABLE_FROM_ASYNC — calling them
     /// directly inside an `async` function body is a hard error under Swift 6's stricter
@@ -124,7 +128,10 @@ public final class MqttTransport: NSObject {
         client.username = credentials.username
         client.password = credentials.password
         client.enableSSL = true
-        client.cleanSession = false
+        // A fresh session once, after the broker refused filters within quota; it costs
+        // whatever QoS 1 traffic the broker had queued for us.
+        let resetSession = fingerprintStore.resetSession
+        client.cleanSession = resetSession
         client.keepAlive = TransportTiming.keepAliveSeconds
         client.autoReconnect = false // app-managed backoff, not the library's (§4)
         client.inflightWindowSize = TransportTiming.maxInflight
@@ -158,6 +165,7 @@ public final class MqttTransport: NSObject {
                 connectContinuation = nil
             }
             connectionState = .connected
+            if resetSession { fingerprintStore.resetSession = false }
         } catch {
             // Bound every attempt: on timeout or rejection, abort the client outright
             // rather than leaving it "connecting" forever holding the single-flight guard.
@@ -217,10 +225,16 @@ public final class MqttTransport: NSObject {
     /// The full filter set with its QoS: own topics, then each other member's legacy
     /// `location` + `presence`, both QoS 0 — a position supersedes itself and the current one
     /// is covered by the outbox retry and heartbeat, not QoS (§4).
+    /// EMQX Serverless grants at most this many subscriptions per connection and refuses
+    /// the rest with 0x80; not adjustable on that plan (§4).
+    public static let brokerSubscriptionQuota = 10
+
+    /// Two wildcards plus each peer's presence (§5): 2 + one per peer, so a family of nine
+    /// fits the quota. The legacy per-peer `location` topic is no longer subscribed.
     static func subscriptionSet(memberId: String, groupId: String?, peerMemberIds: [String]) -> [(String, CocoaMQTTQoS)] {
-        var set: [(String, CocoaMQTTQoS)] = Topics.ownSubscriptionTopics(memberId: memberId, groupId: groupId).map { ($0, .qos1) }
+        var set: [(String, CocoaMQTTQoS)] = [(Topics.ownWildcard(memberId: memberId), .qos1)]
+        if let groupId { set.append((Topics.groupWildcard(groupId: groupId), .qos1)) }
         for peer in peerMemberIds where peer != memberId {
-            set.append((Topics.location(memberId: peer), .qos0))
             set.append((Topics.presence(memberId: peer), .qos0))
         }
         return set
@@ -241,6 +255,11 @@ public final class MqttTransport: NSObject {
         ) else { return true }
 
         fingerprintStore.fingerprint = nil
+        // A kept session from an older build still holds its one-by-one filters; left in
+        // place they fill the quota and the wildcards are refused (§4).
+        await unsubscribe(Topics.legacySubscriptionTopics(
+            memberId: memberId, groupId: groupId, peerMemberIds: peerMemberIds), on: mqtt)
+        lastSubscribeFailures = []
         let granted: Bool = await withTaskGroup(of: Bool.self) { group in
             group.addTask { [weak self] in
                 await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
@@ -258,8 +277,40 @@ public final class MqttTransport: NSObject {
             group.cancelAll()
             return first
         }
-        if granted { fingerprintStore.fingerprint = current }
+        if granted {
+            fingerprintStore.fingerprint = current
+        } else if !lastSubscribeFailures.isEmpty && set.count <= Self.brokerSubscriptionQuota {
+            fingerprintStore.resetSession = true
+        }
         return granted
+    }
+
+    /// One UNSUBSCRIBE, awaited (bounded by the subscribe timeout) so the broker has freed
+    /// the slots before the SUBSCRIBE that follows. Best effort.
+    private func unsubscribe(_ topics: [String], on mqtt: CocoaMQTT) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { [weak self] in
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    guard let self else { continuation.resume(); return }
+                    self.withStateLock { self.unsubscribeContinuation = continuation }
+                    mqtt.unsubscribe(topics)
+                }
+            }
+            group.addTask { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(TransportTiming.subscribeTimeout * 1_000_000_000))
+                self?.finishUnsubscribe()
+            }
+            await group.next()
+            group.cancelAll()
+        }
+    }
+
+    private func finishUnsubscribe() {
+        let continuation = withStateLock { () -> CheckedContinuation<Void, Never>? in
+            defer { unsubscribeContinuation = nil }
+            return unsubscribeContinuation
+        }
+        continuation?.resume()
     }
 
     private func finishSubscribe(_ granted: Bool) {
@@ -296,9 +347,12 @@ extension MqttTransport: CocoaMQTTDelegate {
     public func mqtt(_ mqtt: CocoaMQTT, didPublishMessage message: CocoaMQTTMessage, id: UInt16) {}
     public func mqtt(_ mqtt: CocoaMQTT, didPublishAck id: UInt16) {}
     public func mqtt(_ mqtt: CocoaMQTT, didSubscribeTopics success: NSDictionary, failed: [String]) {
+        lastSubscribeFailures = failed
         finishSubscribe(failed.isEmpty)
     }
-    public func mqtt(_ mqtt: CocoaMQTT, didUnsubscribeTopics topics: [String]) {}
+    public func mqtt(_ mqtt: CocoaMQTT, didUnsubscribeTopics topics: [String]) {
+        finishUnsubscribe()
+    }
     public func mqttDidPing(_ mqtt: CocoaMQTT) {}
     public func mqttDidReceivePong(_ mqtt: CocoaMQTT) {}
 }
