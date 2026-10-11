@@ -60,10 +60,21 @@ let package = Package(
         // Manual, throwaway two-process harness for the §14 Phase 2 live-broker
         // acceptance test (two clients seeing each other's presence flip online/offline
         // over the real broker, LWT observed on an abrupt kill). NOT part of the app;
-        // takes broker credentials from MQTT_USERNAME/MQTT_PASSWORD env vars only — never
-        // reads or writes them to disk. Run with `swift run PresenceHarness`.
+        // credentials via HarnessSupport (env vars, else the macOS Keychain) — never
+        // written to disk. Run with `swift run PresenceHarness`.
         .executableTarget(
             name: "PresenceHarness",
+            dependencies: ["FamilySafetyCore", "HarnessSupport"]
+        ),
+        // Manual live-broker check that a reconnect with the broker's session intact skips
+        // SUBSCRIBE (no retained-message replay). Same credential rules as PresenceHarness.
+        .executableTarget(
+            name: "ReconnectHarness",
+            dependencies: ["FamilySafetyCore", "HarnessSupport"]
+        ),
+        // Broker-credential lookup shared by the harnesses. NOT part of the app.
+        .target(
+            name: "HarnessSupport",
             dependencies: ["FamilySafetyCore"]
         )
     ]
