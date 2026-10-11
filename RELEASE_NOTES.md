@@ -18,14 +18,17 @@ Older phones ignore it and keep working in both directions.
 
 **Not yet run on a device.** Builds and passes the unit tests. Check before uploading, with two
 phones: restore a phone that is still in the family (should rejoin with no prompt on the other
-phone); leave and restore (should prompt); and a normal new join.
+phone); leave and restore (should prompt); and a normal new join. On the same WiFi: each phone
+shows the other as Local within seconds, and again within a minute of waking after ~10 minutes
+locked.
 
 ### Play copy
 
 ```
 Restoring from your 12-word recovery phrase now brings you back into your family: scan an
-invite from anyone in the family and you're let straight back in. Also fixes a case where a
-join request could be approved for the wrong phone, and improves crash detection.
+invite from anyone in the family and you're let straight back in. Phones on the same WiFi
+stay connected to each other directly, even when the internet is down. Also fixes a case
+where a join request could be approved for the wrong phone, and improves crash detection.
 ```
 
 ### What changed, and why it's worth a release
@@ -44,6 +47,17 @@ replace a lost phone.
 definition, file key included, encrypted to whatever key the request carried. Someone with a
 member's public key could have asked to "join" as that person and, if the prompt was
 approved, read the family. Such requests are now refused outright and never shown.
+
+**Same-WiFi connections dropped and never came back** ("Local peers: 0" on a shared WiFi).
+One failed send to a phone that was dozing deleted its address, and Android's discovery
+reports a phone only once, so it stayed lost until an app restarted.
+- A lost peer is looked up again after a failure, waiting 15 s, then longer, up to 5 minutes.
+- The WiFi route starts immediately instead of after the relay's ~2 minutes of connection
+  attempts when the internet is down.
+- Discovery retries when it fails to start, restarts when WiFi reconnects, and recognises a
+  phone whose listing Android renamed ("… (2)").
+- The diagnostics no longer show a phone as offline because the relay said so while it is
+  reachable on the WiFi.
 
 **Crash detection** — the detection rule was separated out and tested against recorded motion
 and 122 real lab crashes. A GPS speed older than 90 seconds no longer counts toward the 25 mph
