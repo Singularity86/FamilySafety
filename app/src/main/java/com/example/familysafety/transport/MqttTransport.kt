@@ -930,9 +930,14 @@ class MqttTransport @Inject constructor(
                 )
             }
         } else {
-            // A retained "offline" or a fired last-will means their app is gone, which
-            // invalidates any LAN route we thought we had as well.
-            groupStateManager.updateConnectionState(senderId, MemberConnectionState.Offline)
+            // A retained "offline" or a fired last-will says they left the *broker*. That also
+            // fires when only their internet dropped and they are still on our WiFi, so it must
+            // not erase a LAN route: LocalTransport owns Local, and NSD reports the peer lost
+            // when their app really is gone (the system unregisters its service).
+            val current = groupStateManager.memberStates.value[senderId]?.connectionState
+            if (current !is MemberConnectionState.Local) {
+                groupStateManager.updateConnectionState(senderId, MemberConnectionState.Offline)
+            }
         }
     }
 
