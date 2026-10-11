@@ -19,7 +19,19 @@ class MqttSubscriptionRestoreTest {
     private val group = "g1"
 
     private fun topics(vararg members: String) =
-        MqttTransport.ownTopicFilters(me, group) + members.flatMap { MqttTransport.memberTopicFilters(it) }
+        MqttTransport.subscriptionFilters(me, group, members.toList())
+
+    /** MQTT topic-filter matching: `+` is one level, a trailing `#` is any remainder. */
+    private fun matches(filter: String, topic: String): Boolean {
+        val f = filter.split("/")
+        val t = topic.split("/")
+        for (i in f.indices) {
+            if (f[i] == "#") return true
+            if (i >= t.size) return false
+            if (f[i] != "+" && f[i] != t[i]) return false
+        }
+        return f.size == t.size
+    }
 
     @Test
     fun `fingerprint ignores topic order`() {
@@ -58,15 +70,36 @@ class MqttSubscriptionRestoreTest {
     }
 
     @Test
-    fun `own filters still cover every inbox and group topic`() {
-        val own = MqttTransport.ownTopicFilters(me, group)
-        assertEquals(21, own.size)
-        assertTrue(MqttConfig.getLocationInboxTopic(me) in own)
-        assertTrue(MqttConfig.getVaultContainerTopic(group) in own)
-        assertTrue(MqttConfig.getGroupSyncInboxTopic(me) in own)
-        assertEquals(
-            listOf(MqttConfig.getLocationTopic(peer), MqttConfig.getPresenceTopic(peer)),
-            MqttTransport.memberTopicFilters(peer)
-        )
+    fun `wildcards cover every own and group topic`() {
+        val wildcards = listOf(MqttConfig.getOwnWildcardTopic(me), MqttConfig.getGroupWildcardTopic(group))
+        val concrete = MqttTransport.ownTopicFilters(me, group).map { it.replace("#", "f1/0") }
+        assertEquals(21, concrete.size)
+        concrete.forEach { topic ->
+            assertTrue("$topic is not covered", wildcards.any { matches(it, topic) })
+        }
+    }
+
+    @Test
+    fun `wildcards do not reach another member's inbox or another group`() {
+        val wildcards = listOf(MqttConfig.getOwnWildcardTopic(me), MqttConfig.getGroupWildcardTopic(group))
+        val foreign = MqttTransport.ownTopicFilters(peer, "g2").map { it.replace("#", "f1/0") }
+        foreign.forEach { topic ->
+            assertFalse("$topic leaks in", wildcards.any { matches(it, topic) })
+        }
+    }
+
+    @Test
+    fun `a family of nine fits the broker's 10-subscription quota`() {
+        val peers = (1..8).map { it.toString().repeat(32) }
+        assertEquals(10, MqttTransport.subscriptionFilters(me, group, peers).size)
+        assertEquals(listOf(MqttConfig.getPresenceTopic(peer)), MqttTransport.memberTopicFilters(peer))
+    }
+
+    @Test
+    fun `legacy filters include every one-by-one topic older builds held`() {
+        val legacy = MqttTransport.legacyTopicFilters(me, group, listOf(peer))
+        assertTrue(MqttTransport.ownTopicFilters(me, group).all { it in legacy })
+        assertTrue(MqttConfig.getLocationTopic(peer) in legacy)
+        assertTrue(MqttConfig.getPresenceTopic(peer) in legacy)
     }
 }
