@@ -20,10 +20,12 @@ import java.security.MessageDigest
  * - a member's keys can never change under the same member ID (no key rotation)
  * - added members must have memberId == SHA-256(ed25519 key).take(16)
  * - a member is removed by: the creator, themselves, or a majority of the current
- *   roster excluding the target (quorum vote — see [verifiedQuorumVoterIds])
- * - removal tombstones are append-only, and a tombstoned member may never reappear in
+ *   roster excluding the target (quorum vote — see [verifiedQuorumVoterIds]). The first two
+ *   may also arrive relayed by any member, carrying a [RemovalProof] the sync layer verified
+ * - removal tombstones are append-only, and a tombstoned membership may never reappear in
  *   the roster (see GroupStateMerge — merging two rosters would otherwise readmit anyone
- *   the other side had just removed)
+ *   the other side had just removed). A removed member may be let back in as a *new*
+ *   membership ([FamilyMember.joinEpoch]), which is an addition like any other
  * - only the creator may rename the group
  * - for a direct successor (version + 1), previousStateHash must match the
  *   current state's hash; across version jumps the chain cannot be verified
@@ -34,11 +36,9 @@ import java.security.MessageDigest
  * re-sign states containing changes they did not author, and cosmetic fields are
  * not worth breaking that recovery path over.
  *
- * Known limitation: a REMOVAL relayed by a non-creator, non-quorum updater (e.g. a
- * FULL_SYNC response to a peer that missed the original update) is rejected, because
- * a relayed removal is indistinguishable from a forged one. Affected peers still
- * converge: the original broadcast is QoS 1 into each member's persistent session,
- * and refresh requests are answered by every peer at or past that version.
+ * Known limitation: a quorum removal carries no [RemovalProof] (its votes are bound to one
+ * version), so relayed by anyone it is still rejected. Affected peers converge through the
+ * original QoS 1 broadcast into each member's persistent session.
  */
 object GroupTransitionValidator {
 
@@ -60,6 +60,9 @@ object GroupTransitionValidator {
     }
 
     /**
+     * @param verifiedRemovalAuthorizers tombstone → the member whose [RemovalProof] signature
+     *   for it the caller has verified against **their own current roster**. Whether that
+     *   member was entitled to authorize the removal is decided here.
      * @param verifiedQuorumVoterIds memberIds whose `REMOVE_QUORUM` signature over this
      *   exact proposal (groupId, target, proposedVersion, previousStateHash) has already
      *   been cryptographically verified by the caller against **their own current
@@ -73,8 +76,12 @@ object GroupTransitionValidator {
         current: GroupDefinition,
         remote: GroupDefinition,
         updaterMemberId: String,
-        verifiedQuorumVoterIds: Set<String> = emptySet()
-    ): String? = check(current, remote, updaterMemberId, concurrent = false, verifiedQuorumVoterIds)
+        verifiedQuorumVoterIds: Set<String> = emptySet(),
+        verifiedRemovalAuthorizers: Map<String, String> = emptyMap()
+    ): String? = check(
+        current, remote, updaterMemberId, concurrent = false,
+        verifiedQuorumVoterIds, verifiedRemovalAuthorizers
+    )
 
     /**
      * Same rules, for a state that is a concurrent sibling of ours rather than a successor
@@ -92,8 +99,12 @@ object GroupTransitionValidator {
         current: GroupDefinition,
         remote: GroupDefinition,
         updaterMemberId: String,
-        verifiedQuorumVoterIds: Set<String> = emptySet()
-    ): String? = check(current, remote, updaterMemberId, concurrent = true, verifiedQuorumVoterIds)
+        verifiedQuorumVoterIds: Set<String> = emptySet(),
+        verifiedRemovalAuthorizers: Map<String, String> = emptyMap()
+    ): String? = check(
+        current, remote, updaterMemberId, concurrent = true,
+        verifiedQuorumVoterIds, verifiedRemovalAuthorizers
+    )
 
     /**
      * Whether a majority of the current roster, excluding [targetMemberId], is present in
@@ -120,7 +131,8 @@ object GroupTransitionValidator {
         remote: GroupDefinition,
         updaterMemberId: String,
         concurrent: Boolean,
-        verifiedQuorumVoterIds: Set<String>
+        verifiedQuorumVoterIds: Set<String>,
+        verifiedRemovalAuthorizers: Map<String, String>
     ): String? {
         if (remote.groupId != current.groupId) {
             return "group ID changed"
@@ -143,8 +155,20 @@ object GroupTransitionValidator {
         val currentById = current.members.associateBy { it.memberId }
         val remoteById = remote.members.associateBy { it.memberId }
 
+        val effectiveTombstones = current.removedMemberIds + remote.removedMemberIds
+
         for ((id, member) in remoteById) {
             val existing = currentById[id]
+            if (existing != null && existing.joinEpoch != member.joinEpoch) {
+                // Removed and let back in while we weren't listening. That is a removal of the
+                // membership we hold — authorized below like any other — plus a new one, which
+                // is only legitimate if it comes after it.
+                if (member.joinEpoch < existing.joinEpoch ||
+                    Tombstones.key(existing) !in remote.removedMemberIds
+                ) {
+                    return "membership changed for member ${id.take(8)} without removing the old one"
+                }
+            }
             if (existing != null) {
                 if (!member.ed25519PublicKey.equals(existing.ed25519PublicKey, ignoreCase = true) ||
                     !member.x25519PublicKey.equals(existing.x25519PublicKey, ignoreCase = true)
@@ -177,16 +201,18 @@ object GroupTransitionValidator {
         // accepting. What still must not happen is a tombstoned member reappearing in the
         // roster — checked below against the union, so it holds whether or not the sender
         // knows about tombstones at all.
-        val effectiveTombstones = current.removedMemberIds + remote.removedMemberIds
-        val resurrected = remoteById.keys.intersect(effectiveTombstones)
+        val resurrected = remote.members.filter { Tombstones.isRemoved(it, effectiveTombstones) }
         if (resurrected.isNotEmpty()) {
-            return "removed member ${resurrected.first().take(8)} is present in the roster"
+            return "removed member ${resurrected.first().memberId.take(8)} is present in the roster"
         }
 
         // A member may also disappear from the roster without a tombstone — that is what
         // every build before tombstones existed produced, and what a relayed FULL_SYNC from
         // such a peer still looks like.
-        val removedIds = currentById.keys - remoteById.keys - remote.removedMemberIds
+        val removedIds = current.members
+            .filter { it.memberId !in remoteById && Tombstones.key(it) !in remote.removedMemberIds }
+            .map { it.memberId }
+            .toSet()
         if (!concurrent &&
             removedIds.isNotEmpty() &&
             updaterMemberId != current.creatorMemberId &&
@@ -203,10 +229,18 @@ object GroupTransitionValidator {
         val newTombstones = remote.removedMemberIds - current.removedMemberIds
         if (newTombstones.isNotEmpty()) {
             val isCreatorAuthorized = updaterMemberId == current.creatorMemberId
-            val isSelfRemoval = newTombstones == setOf(updaterMemberId)
+            val isSelfRemoval = newTombstones.map(Tombstones::memberIdOf).toSet() == setOf(updaterMemberId)
             val isQuorumAuthorized = newTombstones.size == 1 &&
-                isQuorumSufficient(current, newTombstones.first(), verifiedQuorumVoterIds)
-            if (!isCreatorAuthorized && !isSelfRemoval && !isQuorumAuthorized) {
+                isQuorumSufficient(current, Tombstones.memberIdOf(newTombstones.first()), verifiedQuorumVoterIds)
+            // Relayed: every new tombstone vouched for by the creator or by the member it
+            // removes, whoever happens to be passing it on.
+            val isProvenByProofs = newTombstones.all { tombstone ->
+                val authorizer = verifiedRemovalAuthorizers[tombstone]
+                authorizer != null &&
+                    current.findMemberById(authorizer) != null &&
+                    (authorizer == current.creatorMemberId || authorizer == Tombstones.memberIdOf(tombstone))
+            }
+            if (!isCreatorAuthorized && !isSelfRemoval && !isQuorumAuthorized && !isProvenByProofs) {
                 return "only the group creator may remove other members " +
                     "(updater ${updaterMemberId.take(8)} tombstoned ${newTombstones.size})"
             }
@@ -218,15 +252,18 @@ object GroupTransitionValidator {
         // here we only confirm the successor is the one every device would compute
         // independently, never an arbitrary replacement).
         if (remote.creatorMemberId != current.creatorMemberId) {
+            val newCreator = current.findMemberById(remote.creatorMemberId)
             val voluntaryTransfer = updaterMemberId == current.creatorMemberId &&
                 newTombstones.isEmpty() &&
-                current.findMemberById(remote.creatorMemberId) != null &&
-                remote.creatorMemberId !in effectiveTombstones
+                newCreator != null &&
+                !Tombstones.isRemoved(newCreator, effectiveTombstones)
 
-            val creatorWasQuorumRemoved = newTombstones == setOf(current.creatorMemberId) &&
+            val currentCreator = current.findMemberById(current.creatorMemberId)
+            val creatorWasQuorumRemoved = currentCreator != null &&
+                newTombstones == setOf(Tombstones.key(currentCreator)) &&
                 isQuorumSufficient(current, current.creatorMemberId, verifiedQuorumVoterIds)
             val expectedSuccessor = if (creatorWasQuorumRemoved) {
-                GroupDefinition.computeSuccessorCreator(current.members, newTombstones)
+                GroupDefinition.computeSuccessorCreator(current.members, setOf(current.creatorMemberId))
             } else null
             val quorumSuccession = creatorWasQuorumRemoved && remote.creatorMemberId == expectedSuccessor
 

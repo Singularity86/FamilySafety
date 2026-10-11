@@ -369,11 +369,13 @@ class GroupSyncManager @Inject constructor(
                 val manager = groupStateManager ?: return@withContext
 
                 val verifiedQuorumVoterIds = verifyQuorumSignatures(syncMessage)
+                val verifiedRemovalAuthorizers = verifyRemovalProofs(syncMessage.groupDefinition)
 
                 val result = manager.applyVerifiedRemoteGroupState(
                     syncMessage.groupDefinition,
                     syncMessage.updaterMemberId,
-                    verifiedQuorumVoterIds
+                    verifiedQuorumVoterIds,
+                    verifiedRemovalAuthorizers
                 )
                 if (result is GroupOperationResult.Failure) {
                     Timber.w("Rejected group update v${syncMessage.version}: ${result.error}")
@@ -499,6 +501,35 @@ class GroupSyncManager @Inject constructor(
             }
             vote.voterMemberId.takeIf { valid }
         }.toSet()
+    }
+
+    /**
+     * Check the [RemovalProof]s for tombstones this device does not hold yet, each against its
+     * authorizer's key in OUR current roster. Returns tombstone → authorizer for the ones that
+     * verified; [GroupTransitionValidator] decides whether that authorizer was entitled to make
+     * the removal. This is what lets a removal reach us through a member who did not make it.
+     */
+    private fun verifyRemovalProofs(remote: GroupDefinition): Map<String, String> {
+        val currentGroup = groupStateManager?.groupDefinition?.value ?: return emptyMap()
+        val newTombstones = remote.removedMemberIds - currentGroup.removedMemberIds
+        if (newTombstones.isEmpty()) return emptyMap()
+        return remote.removalProofs
+            .filter { it.tombstone in newTombstones }
+            .mapNotNull { proof ->
+                val authorizer = currentGroup.findMemberById(proof.authorizerMemberId)
+                    ?: return@mapNotNull null
+                val valid = try {
+                    cryptoProvider.verifySignature(
+                        message = buildRemovalProofMessage(currentGroup.groupId, proof.tombstone),
+                        signature = proof.signature.hexToByteArray(),
+                        publicKey = authorizer.ed25519PublicKey.hexToByteArray()
+                    )
+                } catch (e: Exception) {
+                    false
+                }
+                if (valid) proof.tombstone to proof.authorizerMemberId else null
+            }
+            .toMap()
     }
 
     // In-memory tally of votes seen so far, keyed by (targetMemberId, proposedVersion,

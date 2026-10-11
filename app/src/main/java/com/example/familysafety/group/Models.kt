@@ -51,6 +51,10 @@ enum class PresenceStatus {
  * @property x25519PublicKey 32-byte X25519 public key for encryption (hex-encoded)
  * @property addedAtEpochMs Timestamp when member was added to family group
  * @property addedByMemberId The memberId of who invited this member (null for group creator)
+ * @property joinEpoch Which membership this is for [memberId]: 0 the first time, one more for
+ *   each time they have been removed (or left) and let back in. A recovery phrase always
+ *   regenerates the same member ID, so the ID alone cannot tell a returning member from the
+ *   one who was removed; removals are recorded per membership instead — see [Tombstones].
  */
 @Serializable
 data class FamilyMember(
@@ -61,8 +65,66 @@ data class FamilyMember(
     val addedAtEpochMs: Long,
     val addedByMemberId: String? = null,
     val avatarHash: String? = null,
-    val colorHue: Float? = null   // 0–359; null = derive from memberId hash
+    val colorHue: Float? = null,   // 0–359; null = derive from memberId hash
+    val joinEpoch: Int = 0
 )
+
+/**
+ * Entries in [GroupDefinition.removedMemberIds]. A tombstone names one *membership*, not a
+ * person: the bare member ID for the first membership (exactly what builds before memberships
+ * existed wrote, so every existing tombstone keeps its meaning) and `"<memberId>#<n>"` for
+ * membership n. A member is removed when the tombstone for their current membership exists;
+ * letting them back in creates the next membership, which no tombstone names yet.
+ *
+ * Member IDs are hex, so `#` can never be part of one.
+ */
+object Tombstones {
+    fun key(memberId: String, joinEpoch: Int): String =
+        if (joinEpoch <= 0) memberId else "$memberId#$joinEpoch"
+
+    fun key(member: FamilyMember): String = key(member.memberId, member.joinEpoch)
+
+    fun memberIdOf(tombstone: String): String = tombstone.substringBefore('#')
+
+    fun epochOf(tombstone: String): Int =
+        if ('#' in tombstone) tombstone.substringAfter('#').toIntOrNull() ?: 0 else 0
+
+    fun isRemoved(member: FamilyMember, tombstones: Set<String>): Boolean = key(member) in tombstones
+
+    /** The membership to give [memberId] if they are let in now: one past their last removal. */
+    fun nextJoinEpoch(memberId: String, tombstones: Set<String>): Int =
+        tombstones.filter { memberIdOf(it) == memberId }.maxOfOrNull { epochOf(it) + 1 } ?: 0
+}
+
+/**
+ * Signed evidence that a removal was authorized, kept with the tombstone it covers so that any
+ * member can pass the removal on — not just whoever made it.
+ *
+ * Without one, a removal reached a phone only if that phone heard it from the creator (or from
+ * the member who left) directly; repeated by anyone else it looked exactly like a forgery and
+ * was refused. A member who left while some phones were unreachable stayed on those phones
+ * for good, because the only device that could vouch for the departure had erased itself.
+ *
+ * @property tombstone the [Tombstones] key this proves
+ * @property authorizerMemberId the creator, or the member themselves when they left
+ * @property signature by [authorizerMemberId] over [buildRemovalProofMessage]
+ */
+@Serializable
+data class RemovalProof(
+    val tombstone: String,
+    val authorizerMemberId: String,
+    val signature: String
+)
+
+/**
+ * What a [RemovalProof] signs. Bound to the group and to one membership, not to a version: a
+ * tombstone is permanent, so the proof may be repeated at any later version, and a returning
+ * member's new membership has a different key that an old proof does not cover. The prefix is
+ * distinct from "REMOVE:" and "REMOVE_QUORUM:", so no signature made for one can be read as
+ * another.
+ */
+fun buildRemovalProofMessage(groupId: String, tombstone: String): ByteArray =
+    "REMOVAL_PROOF:v1:$groupId:$tombstone".toByteArray(Charsets.UTF_8)
 
 /**
  * Runtime state for a family member (not persisted).
@@ -129,10 +191,12 @@ fun buildQuorumRemovalMessage(
  * @property removedMemberIds Tombstones for members who have been removed. **Append-only.**
  *   Without these, merging two concurrently-edited states by unioning their rosters would
  *   resurrect anyone who had just been removed — the merge cannot otherwise tell "this peer
- *   has not heard about them yet" apart from "this peer removed them". A removal is
- *   permanent for that member ID, which costs nothing: identities are self-authenticating
- *   (memberId = SHA-256(ed25519 key)), so someone rejoining generates a new mnemonic and
- *   therefore a new ID anyway.
+ *   has not heard about them yet" apart from "this peer removed them". Each entry ends one
+ *   membership (see [Tombstones]), not the person: restoring from a recovery phrase brings back
+ *   the same member ID, and a family must be able to let that person back in.
+ * @property removalProofs Signed authority for tombstones, so that any member can relay a
+ *   removal (see [RemovalProof]). Not covered by [computeStateHash]: each proof carries its own
+ *   signature, and stripping one only takes away the ability to relay, never adds anything.
  */
 @Serializable
 data class GroupDefinition(
@@ -156,7 +220,8 @@ data class GroupDefinition(
      */
     val subscriptionConfirmedAtEpochMs: Long? = null,
     /** A developer-issued grant code (`billing/GrantCode.kt`), if this family has one. */
-    val grantCode: String? = null
+    val grantCode: String? = null,
+    val removalProofs: Set<RemovalProof> = emptySet()
 ) {
     /**
      * Computes deterministic hash of this group state for hash chain integrity.
@@ -198,6 +263,11 @@ data class GroupDefinition(
                 append(member.ed25519PublicKey)
                 append(",")
                 append(member.x25519PublicKey)
+                // Only from the second membership on, so every existing roster hashes as before.
+                if (member.joinEpoch > 0) {
+                    append(",#")
+                    append(member.joinEpoch)
+                }
                 append(";")
             }
             if (removedMemberIds.isNotEmpty()) {

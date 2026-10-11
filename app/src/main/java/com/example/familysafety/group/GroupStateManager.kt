@@ -181,11 +181,17 @@ class GroupStateManager(
                 return@withLock GroupOperationResult.Failure(GroupError.InvalidSignature)
             }
 
+            // A member who left or was removed comes back as their next membership: their
+            // recovery phrase regenerates the same member ID, and the old membership's
+            // tombstone must keep meaning "removed" on every phone.
+            val joinEpoch = Tombstones.nextJoinEpoch(newMember.memberId, currentGroup.removedMemberIds)
+
             // Create updated group definition
             val updatedGroup = currentGroup.copy(
                 members = currentGroup.members + newMember.copy(
                     addedByMemberId = inviterMemberId,
-                    addedAtEpochMs = System.currentTimeMillis()
+                    addedAtEpochMs = System.currentTimeMillis(),
+                    joinEpoch = joinEpoch
                 ),
                 version = currentGroup.version + 1,
                 previousStateHash = currentGroup.computeStateHash()
@@ -254,10 +260,23 @@ class GroupStateManager(
             }
 
             // Create updated group. The tombstone is what stops a concurrent merge from
-            // quietly putting this member back — see GroupStateMerge.
+            // quietly putting this member back — see GroupStateMerge. The proof lets any
+            // member relay the removal to a phone that missed it; only a removal authorized
+            // on this device can be signed here.
+            val tombstone = Tombstones.key(targetMember)
+            val proof = if (removerMemberId == localMemberId) {
+                RemovalProof(
+                    tombstone = tombstone,
+                    authorizerMemberId = localMemberId,
+                    signature = cryptoProvider.sign(
+                        buildRemovalProofMessage(currentGroup.groupId, tombstone)
+                    ).toHexString()
+                )
+            } else null
             val updatedGroup = currentGroup.copy(
                 members = currentGroup.members.filter { it.memberId != targetMemberId }.toSet(),
-                removedMemberIds = currentGroup.removedMemberIds + targetMemberId,
+                removedMemberIds = currentGroup.removedMemberIds + tombstone,
+                removalProofs = currentGroup.removalProofs + listOfNotNull(proof),
                 version = currentGroup.version + 1,
                 previousStateHash = currentGroup.computeStateHash()
             )
@@ -396,7 +415,7 @@ class GroupStateManager(
             // if it learns of this removal only after merging with a branch that does not.
             val updatedGroup = currentGroup.copy(
                 members = currentGroup.members.filter { it.memberId != targetMemberId }.toSet(),
-                removedMemberIds = currentGroup.removedMemberIds + targetMemberId,
+                removedMemberIds = currentGroup.removedMemberIds + Tombstones.key(targetMember),
                 creatorMemberId = newCreatorMemberId,
                 version = currentGroup.version + 1,
                 previousStateHash = currentGroup.computeStateHash()
@@ -765,17 +784,21 @@ class GroupStateManager(
     suspend fun applyVerifiedRemoteGroupState(
         remoteDefinition: GroupDefinition,
         updaterMemberId: String,
-        verifiedQuorumVoterIds: Set<String> = emptySet()
+        verifiedQuorumVoterIds: Set<String> = emptySet(),
+        verifiedRemovalAuthorizers: Map<String, String> = emptyMap()
     ): GroupOperationResult<GroupDefinition> {
         return stateMutex.withLock {
-            applyRemoteGroupStateLocked(remoteDefinition, updaterMemberId, verifiedQuorumVoterIds)
+            applyRemoteGroupStateLocked(
+                remoteDefinition, updaterMemberId, verifiedQuorumVoterIds, verifiedRemovalAuthorizers
+            )
         }
     }
 
     private suspend fun applyRemoteGroupStateLocked(
         remoteDefinition: GroupDefinition,
         updaterMemberId: String,
-        verifiedQuorumVoterIds: Set<String> = emptySet()
+        verifiedQuorumVoterIds: Set<String> = emptySet(),
+        verifiedRemovalAuthorizers: Map<String, String> = emptyMap()
     ): GroupOperationResult<GroupDefinition> {
         val currentGroup = _groupDefinition.value
 
@@ -792,7 +815,8 @@ class GroupStateManager(
                     // Reconcile instead of failing — a rejection here is what left devices
                     // permanently forked.
                     return reconcileConcurrentEditLocked(
-                        currentGroup, remoteDefinition, updaterMemberId, verifiedQuorumVoterIds
+                        currentGroup, remoteDefinition, updaterMemberId,
+                        verifiedQuorumVoterIds, verifiedRemovalAuthorizers
                     )
                 }
             }
@@ -803,7 +827,8 @@ class GroupStateManager(
                 current = currentGroup,
                 remote = remoteDefinition,
                 updaterMemberId = updaterMemberId,
-                verifiedQuorumVoterIds = verifiedQuorumVoterIds
+                verifiedQuorumVoterIds = verifiedQuorumVoterIds,
+                verifiedRemovalAuthorizers = verifiedRemovalAuthorizers
             )
             if (rejection != null) {
                 // A broken chain means the two states diverged and then both moved on. That
@@ -820,7 +845,10 @@ class GroupStateManager(
                 // that advanced to different versions fell through to here.
                 if (rejection.startsWith(GroupTransitionValidator.CHAIN_MISMATCH_PREFIX)) {
                     timber.log.Timber.w("GroupStateManager: chain mismatch with ${updaterMemberId.take(8)} — reconciling diverged branches")
-                    return reconcileDivergedLocked(currentGroup, remoteDefinition, updaterMemberId, verifiedQuorumVoterIds)
+                    return reconcileDivergedLocked(
+                        currentGroup, remoteDefinition, updaterMemberId,
+                        verifiedQuorumVoterIds, verifiedRemovalAuthorizers
+                    )
                 }
                 return GroupOperationResult.Failure(GroupError.UnauthorizedChange(rejection))
             }
@@ -847,14 +875,18 @@ class GroupStateManager(
         val ours = current?.removedMemberIds ?: emptySet()
         if (ours.isEmpty()) return remote
         val merged = remote.removedMemberIds + ours
+        val proofs = remote.removalProofs +
+            current?.removalProofs.orEmpty().filter { it.tombstone in merged }
         if (merged == remote.removedMemberIds &&
-            remote.members.none { it.memberId in merged }
+            proofs == remote.removalProofs &&
+            remote.members.none { Tombstones.isRemoved(it, merged) }
         ) {
             return remote
         }
         return remote.copy(
-            members = remote.members.filterNot { it.memberId in merged }.toSet(),
-            removedMemberIds = merged
+            members = remote.members.filterNot { Tombstones.isRemoved(it, merged) }.toSet(),
+            removedMemberIds = merged,
+            removalProofs = proofs
         )
     }
 
@@ -874,7 +906,8 @@ class GroupStateManager(
         currentGroup: GroupDefinition,
         remoteDefinition: GroupDefinition,
         updaterMemberId: String,
-        verifiedQuorumVoterIds: Set<String> = emptySet()
+        verifiedQuorumVoterIds: Set<String> = emptySet(),
+        verifiedRemovalAuthorizers: Map<String, String> = emptyMap()
     ): GroupOperationResult<GroupDefinition> {
         _events.emit(
             GroupStateEvent.ConflictDetected(
@@ -897,7 +930,8 @@ class GroupStateManager(
             current = currentGroup,
             remote = remoteDefinition,
             updaterMemberId = updaterMemberId,
-            verifiedQuorumVoterIds = verifiedQuorumVoterIds
+            verifiedQuorumVoterIds = verifiedQuorumVoterIds,
+            verifiedRemovalAuthorizers = verifiedRemovalAuthorizers
         )
         if (rejection != null) {
             return GroupOperationResult.Failure(GroupError.UnauthorizedChange(rejection))
@@ -925,13 +959,15 @@ class GroupStateManager(
         currentGroup: GroupDefinition,
         remoteDefinition: GroupDefinition,
         updaterMemberId: String,
-        verifiedQuorumVoterIds: Set<String> = emptySet()
+        verifiedQuorumVoterIds: Set<String> = emptySet(),
+        verifiedRemovalAuthorizers: Map<String, String> = emptyMap()
     ): GroupOperationResult<GroupDefinition> {
         val rejection = GroupTransitionValidator.validateConcurrent(
             current = currentGroup,
             remote = remoteDefinition,
             updaterMemberId = updaterMemberId,
-            verifiedQuorumVoterIds = verifiedQuorumVoterIds
+            verifiedQuorumVoterIds = verifiedQuorumVoterIds,
+            verifiedRemovalAuthorizers = verifiedRemovalAuthorizers
         )
         if (rejection != null) {
             return GroupOperationResult.Failure(GroupError.UnauthorizedChange(rejection))
