@@ -258,7 +258,7 @@ against the QR invite's `inviterMemberId` (§8.4).
 - Broker (all environments): EMQX Cloud serverless, `ssl://r161feb1.ala.us-east-1.emqxsl.com:8883`
   (TLS, publicly trusted CA). It **requires a username and password**, which Android bakes into
   the build from a gitignored file and which are extractable from a shipped app
-  (`SECURITY_REVIEW.md` F2, accepted). Ask the project owner for the values; never commit them.
+  (`ios/CODE_REVIEW_2026-10-11.md` §6 F2, accepted). Ask the project owner for the values; never commit them.
   The earlier public HiveMQ dev broker is no longer used.
 - Client ID: `familysafe_{memberId}`. **Stable** — combined with `cleanSession = false` this
   gives the broker-side persistent session that provides offline delivery.
@@ -751,7 +751,7 @@ Rules for an implementation:
 - Decoders must tolerate the absent field. Android decodes with
   `ignoreUnknownKeys = true`; the Swift side should use an optional with a default of 1.
 
-See `SECURITY_REVIEW.md` finding F1 for why version 1 exists and why it is not safe.
+See `ios/CODE_REVIEW_2026-10-11.md` §6 finding F1 for why version 1 exists and why it is not safe.
 
 #### Manifest encryption (since 1.12.2)
 

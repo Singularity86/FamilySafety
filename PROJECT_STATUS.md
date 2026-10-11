@@ -297,7 +297,7 @@ five-member family, and cost a real household its group sync for days. Fixed in 
 
 ## Track 6 — Security review
 
-`SECURITY_REVIEW.md` is current for the relay-exposure findings. F1, F4, F5, F6, F7 fixed; F3
+`app/CODE_REVIEW_2026-10-11.md` §6 (the former `SECURITY_REVIEW.md`) is current for the relay-exposure findings. F1, F4, F5, F6, F7 fixed; F3
 partially fixed (online/offline sealed, member IDs and timing remain); **F2 accepted risk** —
 the broker operator was ruled out of the threat model on 2026-08-10, with the conditions that
 would reopen it recorded. Do not "fix" F2 without revisiting that decision.
@@ -332,7 +332,7 @@ a hint there is a prompt in disguise.
 The attack itself is untouched and cannot be fixed in the app. The only structural fix is to
 restrict who can fetch the retained container, which needs per-topic ACLs, which needs F2.
 
-**The F2 re-read is done and recorded** in `SECURITY_REVIEW.md`, and changed no decision by
+**The F2 re-read is done and recorded** in `app/CODE_REVIEW_2026-10-11.md` §6 (the former `SECURITY_REVIEW.md`), and changed no decision by
 itself. What it found: none of the three named reopening conditions has occurred, but two of
 F2's four reasoning bullets have acquired exceptions. "The broker credential is no longer a
 security boundary" is true of every message except the vault container, which is the one object
