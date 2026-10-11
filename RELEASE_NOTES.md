@@ -9,6 +9,44 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.15.2 (43) — Family sync, files and online status over the internet
+
+Wire format: unchanged. Only what each phone subscribes to changes, so phones on 1.15.1 and
+earlier keep working with it in both directions. `PROTOCOL_VERSION` stays 3.
+
+**Not yet run on a device.** Check before uploading, with two phones on 1.15.2 and WiFi off on
+both (so the LAN path can't hide anything): logcat shows `Subscribed to N topics`, never
+`subscribe incomplete`; each phone shows the other going online and offline; a group change
+(rename, colour) reaches the other phone; a shared file arrives.
+
+### Play copy
+
+```
+Fixes family updates, shared files, the vault and online status not arriving when phones
+are on different networks. Your phone now listens for everything it needs from the family
+in a way that fits within the limits of the relay service.
+```
+
+### What changed, and why it's worth a release
+
+**Most of the relay was silently off.** The relay (EMQX Serverless) accepts at most 10
+subscriptions per connection and refuses the rest without any error. Each phone asked for 21
+of its own plus 2 per family member, so only the first 10 were granted. Refused on every
+phone: group sync and removal votes, group acks, shared files, the vault, and every other
+member's online status. Location kept working (it is in the first 10), and since 1.15.1 the
+WiFi path covers phones at home, which is why this went unnoticed.
+- A phone now subscribes to two wildcards (everything addressed to it, everything for its
+  family) plus each member's online status: 2 + one per member, enough for a family of nine.
+- Phones keep their relay session between connections, and it still holds the old
+  subscriptions, which use up the 10. They are removed first; if anything is still refused,
+  the next connection starts a fresh session once.
+- The old shared location topic is no longer subscribed; nothing has published to it since
+  per-recipient location inboxes.
+
+Found while testing the iOS reconnect path against the live relay, 2026-10-11.
+
+---
+
 ## 1.15.1 (42) — Restoring from the recovery phrase works
 
 Supersedes 1.15.0 (40/41). Includes the crash-detection rework merged after 41.

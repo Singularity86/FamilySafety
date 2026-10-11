@@ -28,7 +28,7 @@ and earlier interoperate with it in both directions.
 | 1.15.0 (40) | behaviour | **Replication is scoped.** Location history is requested only from the member it belongs to (everyone only for your own history). A private conversation is requested only from the other participant. At most one outstanding request per (dataType, target, conversation). Each peer's `chatDataSummary` lists only conversations that peer may hold. | §6.6 |
 | 1.15.0 (40) | behaviour | **Replication cadence:** announcements every 30 min (was 5); minimum 15 min between full syncs (was 60 s). | §6.6 |
 | 1.15.0 (40) | behaviour | **Location publish throttling.** Skip a fix if its timestamp is not newer than the last sent; send if the last send is 5 min or older; send if accuracy is better than half the last; otherwise skip when moved < max(30 m, new fix's accuracy). A heartbeat within (stationary interval − 60 s) of a successful publish only checks the connection. Receivers are unaffected. | §6.2 |
-| 1.15.1 (42) | behaviour | **Subscribe with two wildcards.** EMQX Serverless grants at most **10 subscriptions per connection** (not adjustable) and refuses the rest with 0x80, so the 21 one-by-one filters lost everything after the tenth — group sync, removal votes, files, the vault and every peer's presence. Subscribe `familysafe/{me}/#`, `familysafe/group/{groupId}/#` and one `presence` per peer; the legacy per-peer `location` is no longer subscribed. Before subscribing, UNSUBSCRIBE the old one-by-one filters, or a kept session's leftovers fill the quota and the wildcards are refused. Nothing published changes, so mixed versions interoperate. | §4, §5 |
+| 1.15.2 (43) | behaviour | **Subscribe with two wildcards.** EMQX Serverless grants at most **10 subscriptions per connection** (not adjustable) and refuses the rest with 0x80, so the 21 one-by-one filters lost everything after the tenth — group sync, removal votes, files, the vault and every peer's presence. Subscribe `familysafe/{me}/#`, `familysafe/group/{groupId}/#` and one `presence` per peer; the legacy per-peer `location` is no longer subscribed. Before subscribing, UNSUBSCRIBE the old one-by-one filters, or a kept session's leftovers fill the quota and the wildcards are refused. Nothing published changes, so mixed versions interoperate. | §4, §5 |
 | 1.15.0 (41) | behaviour | Setup asks for the motion/activity permission (Android `ACTIVITY_RECOGNITION`) in a "Driving & Movement" step; without it crash detection can never arm. iOS needs the Core Motion equivalent plus its usage string. | §11 |
 | 1.15.0 (40) | product | **Colours:** the twelve-colour person palette, colour-blind patterns and profile photos in chat. `FamilyMember.colorHue` is unchanged on the wire (HSL hue): a chosen colour is stored as the hue of the palette colour, and one never chosen is derived from the member ID locally. For the same person to look the same on both platforms, port `PersonPalette.forHue` and `hueFromId` (`PersonColors.kt`). | §6.5; `DESIGN.md` |
 | 1.15.1 (42) | behaviour | **Restore is a join.** A phone restored from its recovery phrase scans a member's invite and sends a join request under its restored identity, now **signed** (optional `signature` field). An existing member with matching keys and a valid signature is approved automatically; a request naming an existing member with *different* keys is refused, even by hand. New optional field only, so older peers are unaffected. | §8.3, §8.4, §8.6 |
@@ -329,7 +329,7 @@ presence publishes, which are QoS 0 (§4). The presence last-will stays QoS 1.
 | Topic | Payload | E2EE | Retained |
 |---|---|---|---|
 | `familysafe/{id}/location_inbox` | Envelope(§3) of `MessageEnvelope{type:"location_update"}` | ✅ per-recipient | no |
-| `familysafe/{sender}/location` | legacy — never publish; **no longer subscribed** (since 1.15.1). Arrives through your own wildcard for your own id; ignore it | ✅ | no |
+| `familysafe/{sender}/location` | legacy — never publish; **no longer subscribed** (since 1.15.2). Arrives through your own wildcard for your own id; ignore it | ✅ | no |
 | `familysafe/{sender}/presence` | sealed presence, `{"v":2,"data":...}` (§6.2), encrypted under a group subkey because the last-will is published by the broker after the device is gone | ✅ group key | **yes** |
 | `familysafe/{id}/chat` | Envelope of `ChatMessagePayload` | ✅ | no |
 | `familysafe/{id}/chat/receipt` | Envelope of `DeliveryReceipt` (DELIVERED) | ✅ | no |
@@ -352,7 +352,7 @@ presence publishes, which are QoS 0 (§4). The presence last-will stays QoS 1.
 | `familysafe/group/{groupId}/vault/chunk/{fileId}/{chunkIndex}` | plaintext `VaultChunkMessage` (data field AES-GCM under the item's content key) | contents ✅ (per-item key, not the group key) | no |
 | `familysafe/{id}/vault/repair` | plaintext `VaultChunkRequest` | ❌ (names only an opaque id) | no |
 
-Subscriptions on connect (since 1.15.1), **2 + one per peer**, which fits a family of nine
+Subscriptions on connect (since 1.15.2), **2 + one per peer**, which fits a family of nine
 inside the 10-subscription quota (§4):
 - `familysafe/{me}/#` — every own topic: `chat`, `location_inbox`, `chat/receipt`, `chat/read`,
   `replication/request|data|announce`, `join_request`, `join_approval`, `sync_request`,
