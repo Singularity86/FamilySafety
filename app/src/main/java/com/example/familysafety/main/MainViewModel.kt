@@ -476,6 +476,21 @@ class MainViewModel @Inject constructor(
     }
 
     /**
+     * Whether leaving now would reach the family: through the relay, or directly to a member
+     * on the same Wi-Fi. Leaving erases this device's keys, so a departure that is not sent
+     * before that is never sent, and the family keeps this phone on its list until the
+     * creator removes it by hand. One delivered copy is enough — it carries a signed proof
+     * that any member can pass on to the others.
+     */
+    fun canAnnounceLeave(): Boolean {
+        if (mqttTransport.connectionState.value == MqttTransport.ConnectionState.Connected) return true
+        val me = localMemberId.value
+        return groupStateManager.memberStates.value.any { (id, state) ->
+            id != me && state.connectionState is com.example.familysafety.group.ConnectionState.Local
+        }
+    }
+
+    /**
      * Leave the family group: broadcast an authorized self-removal to the other
      * members (so they stop encrypting to our key and drop us from their rosters),
      * then wipe all local group data and cryptographic keys so the app returns to

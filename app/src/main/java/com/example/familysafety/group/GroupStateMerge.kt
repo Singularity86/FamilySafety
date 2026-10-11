@@ -65,13 +65,20 @@ object GroupStateMerge {
         // Winner's record wins for a member both sides know. Keys are immutable per
         // GroupTransitionValidator (no rotation), so the two records can only differ in
         // cosmetic fields, and preferring one side consistently keeps the result
-        // order-independent.
+        // order-independent. The exception is a later membership: one side let a removed
+        // member back in, and the other side's record is of the membership that ended.
         val byId = LinkedHashMap<String, FamilyMember>()
         ours.members.forEach { byId[it.memberId] = it }
-        winner.members.forEach { byId[it.memberId] = it }
+        winner.members.forEach { member ->
+            val held = byId[member.memberId]
+            if (held == null || member.joinEpoch >= held.joinEpoch) byId[member.memberId] = member
+        }
 
         val roster = byId.values
-            .filterNot { it.memberId in tombstones }
+            .filterNot { Tombstones.isRemoved(it, tombstones) }
+            .toSet()
+        val proofs = (winner.removalProofs + ours.removalProofs)
+            .filter { it.tombstone in tombstones }
             .toSet()
 
         // The winner's creator may have been quorum-removed on a branch it does not know
@@ -79,8 +86,10 @@ object GroupStateMerge {
         // would silently resurrect a removed creator's authority — the exact bug this whole
         // feature exists to close. Recompute the same deterministic successor every device
         // would independently reach, rather than trusting either side's copy of the field.
-        val creatorMemberId = if (winner.creatorMemberId in tombstones) {
-            GroupDefinition.computeSuccessorCreator(roster, tombstones)
+        val creatorRemoved = roster.none { it.memberId == winner.creatorMemberId } &&
+            tombstones.any { Tombstones.memberIdOf(it) == winner.creatorMemberId }
+        val creatorMemberId = if (creatorRemoved) {
+            GroupDefinition.computeSuccessorCreator(roster, setOf(winner.creatorMemberId))
                 ?: winner.creatorMemberId // no eligible successor (should not happen in practice)
         } else {
             winner.creatorMemberId
@@ -105,7 +114,8 @@ object GroupStateMerge {
             creatorMemberId == winner.creatorMemberId &&
             subscriberMemberId == winner.subscriberMemberId &&
             subscriptionConfirmedAtEpochMs == winner.subscriptionConfirmedAtEpochMs &&
-            grantCode == winner.grantCode
+            grantCode == winner.grantCode &&
+            proofs == winner.removalProofs
         if (nothingToAdd) return null
 
         return winner.copy(
@@ -120,7 +130,8 @@ object GroupStateMerge {
             fileEncryptionKey = winner.fileEncryptionKey ?: ours.fileEncryptionKey,
             subscriberMemberId = subscriberMemberId,
             subscriptionConfirmedAtEpochMs = subscriptionConfirmedAtEpochMs,
-            grantCode = grantCode
+            grantCode = grantCode,
+            removalProofs = proofs
         )
     }
 }

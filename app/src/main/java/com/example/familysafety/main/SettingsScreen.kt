@@ -116,6 +116,7 @@ fun SettingsScreen(
     // Leave family dialog state
     var showLeaveDialog by remember { mutableStateOf(false) }
     var isLeaving by remember { mutableStateOf(false) }
+    var leaveWhileOffline by remember { mutableStateOf(false) }
 
     val bgPermissionState = rememberPermissionState(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
     var showBgRationaleCard by remember { mutableStateOf(false) }
@@ -1298,19 +1299,37 @@ fun SettingsScreen(
     // Leave family confirmation dialog
     if (showLeaveDialog) {
         AlertDialog(
-            onDismissRequest = { if (!isLeaving) showLeaveDialog = false },
+            onDismissRequest = {
+                if (!isLeaving) {
+                    showLeaveDialog = false
+                    leaveWhileOffline = false
+                }
+            },
             icon = { Icon(Icons.Default.ExitToApp, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-            title = { Text("Leave Family?") },
+            title = { Text(if (leaveWhileOffline) "You're Offline" else "Leave Family?") },
             text = {
                 Text(
-                    "This will permanently erase your cryptographic keys and group membership " +
-                    "from this device. You will need your 12-word recovery phrase to rejoin.\n\n" +
-                    "This action cannot be undone."
+                    if (leaveWhileOffline) {
+                        "Your family can't be told you're leaving right now, and once this " +
+                        "device is erased it can't tell them later. You'd stay on their list " +
+                        "until the family's creator removes you.\n\n" +
+                        "Connect to the internet and try again to leave cleanly."
+                    } else {
+                        "This will permanently erase your cryptographic keys and group membership " +
+                        "from this device. You will need your 12-word recovery phrase to rejoin.\n\n" +
+                        "This action cannot be undone."
+                    }
                 )
             },
             confirmButton = {
                 TextButton(
                     onClick = {
+                        // Checked before anything is stopped or erased, so backing out here
+                        // leaves the phone exactly as it was.
+                        if (!leaveWhileOffline && !viewModel.canAnnounceLeave()) {
+                            leaveWhileOffline = true
+                            return@TextButton
+                        }
                         isLeaving = true
                         scope.launch {
                             LocationService.setSharingPaused(context, false)
@@ -1334,11 +1353,17 @@ fun SettingsScreen(
                     )
                 ) {
                     if (isLeaving) CircularProgressIndicator(modifier = Modifier.size(16.dp))
-                    else Text("Leave Family")
+                    else Text(if (leaveWhileOffline) "Leave Anyway" else "Leave Family")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showLeaveDialog = false }, enabled = !isLeaving) {
+                TextButton(
+                    onClick = {
+                        showLeaveDialog = false
+                        leaveWhileOffline = false
+                    },
+                    enabled = !isLeaving
+                ) {
                     Text("Cancel")
                 }
             }

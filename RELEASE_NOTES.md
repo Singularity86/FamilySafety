@@ -9,6 +9,68 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.15.3 (44) — Leaving and coming back
+
+Builds on 1.15.2 (43), the wildcard-subscription fix. If 42 never went to production, ship this
+instead and use the *Play copy (if 1.15.1 never shipped)* block, adding a line for the 1.15.2 fix.
+
+Wire format: **changes.** `FamilyMember.joinEpoch` and `GroupDefinition.removalProofs`, both
+optional; tombstones gain a `"<memberId>#<n>"` form. `PROTOCOL_VERSION` stays 3. Everyday traffic
+works with older phones in both directions. A phone before 1.15.3 rejects a member being let back
+in after leaving, so **update every phone in the family before anyone who left rejoins.**
+
+**Not yet run on a device.** Check with three phones (A creator, B, C):
+1. C leaves while online, restores from the phrase, scans A's invite, and A approves. C shows on
+   A *and* B, and is still there after B force-stops and reopens.
+2. With B in airplane mode, A removes C. Turn B back on. B drops C within a few minutes, even if
+   A goes offline as soon as B reconnects.
+3. Put C in airplane mode with Wi-Fi off and tap Leave Family. The offline warning appears;
+   Cancel leaves C exactly as it was, still sharing.
+
+### Play copy
+
+```
+If you leave your family and later restore from your 12-word recovery phrase, you can now be
+let back in. Removing someone, or leaving, now reaches every phone in the family even if some
+were offline at the time. Leaving while offline now warns you first, because your family
+can't be told once the phone is erased.
+```
+
+### Play copy (if 1.15.1 never shipped)
+
+```
+Restoring from your 12-word recovery phrase now brings you back into your family, even if
+you'd left it. Removals and departures reach every phone, even ones that were offline.
+Phones on the same WiFi stay connected directly. Leaving while offline warns you first.
+Also fixes a case where a join request could be approved for the wrong phone, and improves
+crash detection.
+```
+
+### What changed, and why
+
+**Leaving was forever.** Leaving recorded the member ID as removed, permanently. That was
+fine when rejoining meant a new recovery phrase and therefore a new ID, but since 1.15.1
+restoring brings back the *same* ID. The inviter's phone added them back; every other phone
+saw a removed member reappear, refused the update, and dropped them again at the next sync.
+So the 1.15.1 restore fix only worked for phones that had never left. Removals now end a
+*membership*, and someone let back in starts the next one.
+
+**A removal only counted if you heard it first-hand.** Any other phone repeating it looked like
+a forgery and was refused. A phone that missed the original kept the removed member, and
+someone who left was stuck on those phones for good, because the only phone that could vouch
+for the departure had erased itself. Removals now carry a signed proof from the creator or
+from the person who left, so any member can pass them on.
+
+**Leaving offline was silent.** The departure was sent best effort, then the keys were erased,
+so offline it was never sent at all. The phone now checks it can reach the family (relay, or a
+member on the same Wi-Fi) before erasing anything, and says what happens if you go ahead.
+
+Not fixed: a removal made by a majority vote (when the creator is gone) still can't be
+relayed. Its votes are tied to one version of the family. That case is rare and still
+reaches every phone through the original broadcast.
+
+---
+
 ## 1.15.2 (43) — Family sync, files and online status over the internet
 
 Wire format: unchanged. Only what each phone subscribes to changes, so phones on 1.15.1 and

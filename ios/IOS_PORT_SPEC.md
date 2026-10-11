@@ -4,19 +4,20 @@
 revised 2026-08-16 against `main` at 4f3c1f0 (1.12.10 plus the shared-file rebuild and the
 vault), revised again 2026-09-19 against `main` at b2d0807 (1.13.6, versionCode 35), and
 revised again 2026-09-22 for the family subscription (`billing/`), and revised again
-2026-10-10 against Android 1.15.0 (versionCode 41). **The subscription shipped in 1.14.0
+2026-10-10 against Android 1.15.0 (versionCode 41), and on 2026-10-11 for 1.15.2 (43) and 1.15.3 (44) — the
+first wire change since 1.13.6: memberships and removal proofs (§6.5). **The subscription shipped in 1.14.0
 (37–39) and is enforced; private chats are now confined to their two participants (§6.3,
 §6.6); MQTT keep-alive is 120 s and resubscribing is skipped when the session survived (§4);
 location publishing and replication are throttled (§6.2, §6.6). None of it changes a byte on
 the wire — `PROTOCOL_VERSION` is still 3 — but several items change what a correct client must
 do. See "Changes since 1.13.6" below.**
 
-## Changes since 1.13.6 (Android 1.14.0 – 1.15.0)
+## Changes since 1.13.6 (Android 1.14.0 – 1.15.3)
 
 Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the billing work.
 **wire** = changes bytes on the broker; **behaviour** = changes what a correct client must do;
-**product** = policy, not interop. No row is **wire**: 1.15.0's notes state phones on 1.14.0
-and earlier interoperate with it in both directions.
+**product** = policy, not interop. Only the 1.15.3 rows are **wire**; through 1.15.2, phones on
+1.14.0 and earlier interoperate in both directions.
 
 | Android | Kind | What changed | Where |
 |---|---|---|---|
@@ -32,6 +33,9 @@ and earlier interoperate with it in both directions.
 | 1.15.0 (41) | behaviour | Setup asks for the motion/activity permission (Android `ACTIVITY_RECOGNITION`) in a "Driving & Movement" step; without it crash detection can never arm. iOS needs the Core Motion equivalent plus its usage string. | §11 |
 | 1.15.0 (40) | product | **Colours:** the twelve-colour person palette, colour-blind patterns and profile photos in chat. `FamilyMember.colorHue` is unchanged on the wire (HSL hue): a chosen colour is stored as the hue of the palette colour, and one never chosen is derived from the member ID locally. For the same person to look the same on both platforms, port `PersonPalette.forHue` and `hueFromId` (`PersonColors.kt`). | §6.5; `DESIGN.md` |
 | 1.15.1 (42) | behaviour | **Restore is a join.** A phone restored from its recovery phrase scans a member's invite and sends a join request under its restored identity, now **signed** (optional `signature` field). An existing member with matching keys and a valid signature is approved automatically; a request naming an existing member with *different* keys is refused, even by hand. New optional field only, so older peers are unaffected. | §8.3, §8.4, §8.6 |
+| 1.15.3 (44) | **wire** | **Removals end a membership, not a person.** `FamilyMember.joinEpoch` (optional, default 0) and tombstones of the form `"<memberId>#<n>"` for membership n ≥ 1; the bare ID still means membership 0. A member who left or was removed can be let back in as membership n+1. `joinEpoch` is hashed when non-zero, so existing groups hash as before. Peers before 1.15.3 reject a readmission ("removed member present"), so update every phone before letting anyone back in. | §6.5, §7.1, §7.3 |
+| 1.15.3 (44) | **wire** | **Removal proofs.** `GroupDefinition.removalProofs` (optional): per tombstone, a signature by the creator or by the member who left, over `REMOVAL_PROOF:v1:{groupId}:{tombstone}`. Any member may now relay a removal carrying one; before, a removal heard second-hand was refused. Not hashed. Older peers ignore the field. | §6.5, §7.3 |
+| 1.15.3 (44) | product | Leaving while unable to reach the family (no relay, no member on the same Wi-Fi) warns first: the departure can't be sent once the keys are erased. | — |
 
 Not in this table because they do not touch interop: private-chat UI, Family/Chat lists, the
 Porch Light theme and typefaces, corner-radius rules, the stays/trips/gaps history view
@@ -581,10 +585,12 @@ receipt's sender (anti-forgery, see ChatRepository).
   "members": [ { "memberId": "...", "displayName": "...",
                  "ed25519PublicKey": "<hex64chars>", "x25519PublicKey": "<hex64chars>",
                  "addedAtEpochMs": 0, "addedByMemberId": null,
-                 "avatarHash": null, "colorHue": null } ],
+                 "avatarHash": null, "colorHue": null, "joinEpoch": 0 } ],
   "version": 1, "previousStateHash": null,
   "fileEncryptionKey": "<hex64chars>",
-  "removedMemberIds": ["<memberId>", "..."],
+  "removedMemberIds": ["<memberId>", "<memberId>#1", "..."],
+  "removalProofs": [ { "tombstone": "<memberId>", "authorizerMemberId": "<memberId>",
+                       "signature": "<hex Ed25519>" } ],
   "subscriberMemberId": null, "subscriptionConfirmedAtEpochMs": null, "grantCode": null }
 ```
 
@@ -601,12 +607,28 @@ encoded, generated once when the group is created. It is **absent or null** for 
 created before that, and decoders must treat it as optional.
 
 `removedMemberIds` was added in Android 1.12.7 (25) and defaults to the empty set. It is
-**append-only**: every removal adds the member's ID and nothing ever takes one out. It must
+**append-only**: every removal adds a tombstone and nothing ever takes one out. It must
 be preserved on re-serialize — a client that drops it will readmit removed members through
 the merge in §7.4 and will disagree about the state hash (§7.1) for any group that has ever
-removed anyone. A removal is permanent for that member ID, which costs nothing in practice:
-identities are self-authenticating, so anyone rejoining generates a new mnemonic and a new
-ID regardless.
+removed anyone.
+
+**Memberships (since 1.15.3).** A tombstone ends one *membership*, not the person. A recovery
+phrase always regenerates the same member ID (§8.6), so a member who left must be able to come
+back without un-removing anyone. `FamilyMember.joinEpoch` (default 0, optional) numbers the
+membership; the tombstone for membership n is the bare `memberId` when n = 0 (exactly what
+earlier builds wrote) and `"<memberId>#<n>"` otherwise. A member is removed when the tombstone
+for *their current* `joinEpoch` exists. Letting a removed member back in adds them with
+`joinEpoch` = (highest n tombstoned for that ID) + 1. When two records of one member disagree,
+the higher `joinEpoch` is the current one (merge, §7.4).
+
+**Removal proofs (since 1.15.3).** `removalProofs` (optional, default empty) holds, per
+tombstone, Ed25519-detached by `authorizerMemberId` over the UTF-8 string
+`REMOVAL_PROOF:v1:{groupId}:{tombstone}`. The authorizer is the creator, or the member the
+tombstone removes when they left. Not version-bound: a tombstone is permanent, and a later
+membership has a different tombstone the proof does not cover. Write one with every creator
+or self removal; keep proofs whose tombstone is in `removedMemberIds` when merging. Quorum
+removals (§7.5) have none. Proofs are **not** hashed (§7.1): each carries its own signature,
+and stripping one only removes the ability to relay.
 
 It lives on the definition because the definition only ever travels inside the
 per-recipient encrypted envelope (join approval, group sync) and is persisted encrypted,
@@ -1140,6 +1162,11 @@ SHA-256 (lowercase hex) of the UTF-8 canonical string:
   then for each member sorted ASCENDING by memberId:
 {memberId},{ed25519PublicKey},{x25519PublicKey};
 ```
+where a member whose `joinEpoch` is non-zero has `,#{joinEpoch}` inserted before the `;`
+(since 1.15.3 — membership 0 hashes exactly as before):
+```
+{memberId},{ed25519PublicKey},{x25519PublicKey},#{joinEpoch};
+```
 then, **only when `removedMemberIds` is non-empty**, append `|removed:` ONCE, followed by
 each tombstone sorted ASCENDING, each ending with `;`:
 ```
@@ -1176,13 +1203,19 @@ Reject the update if any of:
 - updater is not in the current local roster;
 - `remote.version == current.version + 1` but `remote.previousStateHash != current.computeStateHash()`;
 - any surviving member's keys changed (key rotation unsupported);
+- a member's `joinEpoch` changed, unless it went **up** and the remote tombstones the
+  membership you hold (removed and let back in while you weren't listening — the new
+  tombstone is then authorized like any other);
 - any **added** member's `memberId != SHA-256(their ed25519 key)[0..15]` hex;
 - members were removed and the updater is neither the creator nor removing only itself;
 - any tombstone present locally is **missing** from the remote (append-only);
-- any member appears in the roster **and** in `removedMemberIds`;
+- any member's *current membership* (§6.5) appears in the roster **and** in
+  `removedMemberIds`;
 - a **new** tombstone appears and the updater is neither the creator, nor tombstoning only
-  itself, nor authorised by a verified quorum (§7.5), which is the same authority as the
-  removal it records;
+  itself, nor authorised by a verified quorum (§7.5), **nor** is every new tombstone covered
+  by a verified removal proof (§6.5) whose authorizer is the creator or the member the
+  tombstone removes. Verify each proof against the authorizer's key in **your current local
+  roster**; an authorizer you don't know proves nothing.
 - `groupName` changed and updater is not the creator.
 
 **Concurrent siblings are validated differently.** When `remote.version == local.version`
@@ -1419,6 +1452,11 @@ straight back in by §8.4.1. A device whose member left or was removed gets the 
 approval prompt, and if approved, rejoins under the same identity. An inviter on a build
 before 1.15.1 always prompts, and approving there is safe: the member already exists, so only
 the approval is sent.
+
+Before 1.15.3 the "left or was removed" case did not actually work: the leave had tombstoned
+the member ID, the restored phrase produces the same ID, and every phone except the inviter's
+rejected the re-added member as resurrected, so they were dropped again at the next sync. Since
+1.15.3 the inviter adds them as their next membership (§6.5).
 
 ---
 
