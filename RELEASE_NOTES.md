@@ -522,7 +522,7 @@ window.**
 It also turns the accepted F2 exposure into a live one: the vault container is retained on
 the broker, so anyone holding the shared broker credential can guess the family's
 passphrase offline, forever. That was decided and accepted on 2026-08-21 with this
-consequence in view — see `SECURITY_REVIEW.md`, "Decision, 2026-08-21". Not a surprise;
+consequence in view — see `app/CODE_REVIEW_2026-10-11.md` §6 (the former `SECURITY_REVIEW.md`), "Decision, 2026-08-21". Not a surprise;
 recorded here because a release is when a decision stops being about code.
 
 ### Still true after this release

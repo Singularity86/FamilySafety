@@ -982,7 +982,7 @@ class SharedFileRepository @Inject constructor(
             // Legacy group with no shared secret. The only key available is derivable by
             // anyone on the broker, so encrypting with it would be theatre — send the
             // plaintext older peers already expect and leave the exposure recorded
-            // (SECURITY_REVIEW.md F7). Recreating the family on 1.12.0+ is the fix.
+            // (CODE_REVIEW_2026-10-11.md §6, F7). Recreating the family on 1.12.0+ is the fix.
             json.encodeToString(manifest).toByteArray()
         }
 
@@ -1009,7 +1009,7 @@ class SharedFileRepository @Inject constructor(
      *   from that point a plaintext manifest is either a stale retained message or an attempt.
      *
      * Groups predating the shared key have no key to sign against and keep the old plaintext
-     * behaviour, with the exposure recorded in SECURITY_REVIEW.md F1/F7; recreating the family
+     * behaviour, with the exposure recorded in CODE_REVIEW_2026-10-11.md §6, F1/F7; recreating the family
      * is the fix there, not a patch here.
      */
     private fun decodeManifest(raw: String, groupId: String): FileManifest? {
@@ -1365,7 +1365,7 @@ class SharedFileRepository @Inject constructor(
      * Prefers the group's random fileEncryptionKey. Falls back to the legacy derivation
      * for groups created before that field existed — those stay readable, but remain
      * exposed, because the legacy key is computable from the groupId in the topic name
-     * plus a constant in the APK. See SECURITY_REVIEW.md F1.
+     * plus a constant in the APK. See CODE_REVIEW_2026-10-11.md §6, F1.
      */
     /**
      * The key new uploads are encrypted under, and the version stamped on them.
