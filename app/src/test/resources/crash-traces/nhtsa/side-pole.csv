@@ -1,0 +1,26 @@
+# familysafety crash trace v1
+# NHTSA test 14505 — NEW CAR ASSESSMENT PROGRAM SIDE POLE BARRIER IMPACT TEST
+# NEW CAR ASSESSMENT TEST | VEHICLE INTO POLE | closing speed 32.33 kph
+# vehicle-CG accelerometer, native 20000 Hz, CFC 100 Hz low-pass,
+# attenuated to 0.25 of vehicle motion, decimated to 50 Hz at phase 0.
+# Side pole impact, damped to a quarter of vehicle motion.
+# source: https://nrd.api.nhtsa.dot.gov/nhtsa/vehicle/api/v1/vehicle-database-test-results/get-instrumentation-info/14505
+elapsed_ms,x,y,z,magnitude_ms2,speed_ms,speed_elapsed_ms
+0,-0.3334,-0.2610,-0.2901,0.5133,8.98,0
+20,0.0075,0.3230,-0.0984,0.3377,8.98,0
+40,0.2526,0.2613,-0.1931,0.4115,8.98,0
+60,-2.3004,-2.4824,2.2370,4.0569,8.98,0
+80,-2.5924,68.2108,26.9608,73.3915,8.98,0
+100,-8.2429,17.5458,-40.6180,45.0069,8.98,0
+120,-5.4053,9.8343,7.3021,13.3884,8.98,0
+140,0.0605,-2.1469,-2.3843,3.2090,8.98,0
+160,-0.5968,-2.5318,-1.5058,3.0056,8.98,0
+180,1.0666,1.0264,1.0590,1.8201,8.98,0
+200,0.4658,-2.6732,-0.4845,2.7564,8.98,0
+220,-0.0958,-0.4653,2.4509,2.4966,8.98,0
+240,0.7852,0.2963,1.8021,1.9880,8.98,0
+260,0.1358,-1.3483,3.3348,3.5996,8.98,0
+280,0.3126,0.2432,1.4422,1.4956,8.98,0
+300,0.3705,-0.4082,3.4800,3.5234,8.98,0
+320,0.2265,0.3226,2.6018,2.6315,8.98,0
+340,0.2098,0.7223,0.4657,0.8846,8.98,0
