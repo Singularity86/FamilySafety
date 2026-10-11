@@ -1,5 +1,6 @@
 import CocoaMQTT
 import FamilySafetyCore
+import HarnessSupport
 import Foundation
 
 // Unbuffer stdout — this process gets killed with SIGKILL/SIGTRAP to test the last-will,
@@ -10,12 +11,12 @@ setvbuf(stdout, nil, _IONBF, 0)
 // acceptance test: two clients see each other's presence flip online/offline over the
 // real broker, with the offline flip observed via LWT on an abrupt kill.
 //
-// Credentials come ONLY from MQTT_USERNAME / MQTT_PASSWORD env vars — never written to
-// or read from disk, never logged.
+// Credentials come from MQTT_USERNAME / MQTT_PASSWORD, else the macOS Keychain
+// (see HarnessCredentials) — never written to disk, never logged.
 //
 // Run two of these concurrently:
-//   ROLE=alice MQTT_USERNAME=... MQTT_PASSWORD=... swift run PresenceHarness
-//   ROLE=bob   MQTT_USERNAME=... MQTT_PASSWORD=... swift run PresenceHarness
+//   ROLE=alice swift run PresenceHarness
+//   ROLE=bob   swift run PresenceHarness
 //
 // Neither identity has formed a group, so presence here is plaintext (unsealed) but
 // signed — matches what Android does for a device with no fileEncryptionKey yet (§6.2).
@@ -74,8 +75,8 @@ let env = ProcessInfo.processInfo.environment
 guard let role = env["ROLE"], role == "alice" || role == "bob" else {
     print("Set ROLE=alice or ROLE=bob"); exit(1)
 }
-guard let username = env["MQTT_USERNAME"], let password = env["MQTT_PASSWORD"] else {
-    print("Set MQTT_USERNAME and MQTT_PASSWORD"); exit(1)
+guard let credentials = HarnessCredentials.load() else {
+    print(HarnessCredentials.missingMessage); exit(1)
 }
 
 // Same fixed test identities as VectorTests.swift, so memberIds are known ahead of time.
@@ -90,7 +91,7 @@ let peerName = isAlice ? "Bob" : "Alice"
 
 print("[\(myName)] memberId=\(me.memberId)  watching peer(\(peerName))=\(peer.memberId)  pid=\(ProcessInfo.processInfo.processIdentifier)")
 
-let transport = MqttTransport(memberId: me.memberId, credentials: BrokerCredentials(username: username, password: password))
+let transport = MqttTransport(memberId: me.memberId, credentials: credentials)
 let delegate = HarnessDelegate(peerMemberId: peer.memberId, peerName: peerName, peerEd25519PublicKey: peer.ed25519PublicKey)
 transport.delegate = delegate
 

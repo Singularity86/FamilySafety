@@ -29,14 +29,22 @@ public enum SubscriptionPolicy {
 /// Where the last confirmed subscription fingerprint lives.
 public protocol SubscriptionFingerprintStore: AnyObject {
     var fingerprint: String? { get set }
+    /// Set when the broker refused filters that fit the quota: the kept session holds
+    /// something we cannot name to unsubscribe, so the next connect starts a fresh one (§4).
+    var resetSession: Bool { get set }
 }
 
 public final class UserDefaultsFingerprintStore: SubscriptionFingerprintStore {
     private let defaults: UserDefaults
     private let key = "mqtt_session.subscribed_fingerprint"
+    private let resetKey = "mqtt_session.reset_session"
     public init(defaults: UserDefaults = .standard) { self.defaults = defaults }
     public var fingerprint: String? {
         get { defaults.string(forKey: key) }
         set { defaults.set(newValue, forKey: key) }
+    }
+    public var resetSession: Bool {
+        get { defaults.bool(forKey: resetKey) }
+        set { defaults.set(newValue, forKey: resetKey) }
     }
 }
