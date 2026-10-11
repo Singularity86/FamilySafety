@@ -26,6 +26,7 @@ import com.example.familysafety.ui.theme.ButtonShape
 @Composable
 fun JoinFamilyScreen(
     viewModel: OnboardingViewModel,
+    isRestore: Boolean = false,
     onComplete: () -> Unit,
     onBack: () -> Unit,
     onNavigateToScanner: () -> Unit = {},
@@ -81,7 +82,7 @@ fun JoinFamilyScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Join Family") },
+                title = { Text(if (isRestore) "Rejoin Your Family" else "Join Family") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -103,7 +104,14 @@ fun JoinFamilyScreen(
             )
 
             Text(
-                text = "Ask a family member to share their invite code or QR code with you.",
+                text = if (isRestore) {
+                    "Your recovery phrase brings back who you are, not which family you're in. " +
+                        "Ask anyone in your family for their invite code or QR code. If you're " +
+                        "still in the family, you'll be let back in automatically; if not, " +
+                        "they'll be asked to approve you."
+                } else {
+                    "Ask a family member to share their invite code or QR code with you."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 24.dp)

@@ -85,8 +85,28 @@ data class JoinRequest(
     @Serializable(with = ByteArraySerializer::class)
     val x25519PublicKey: ByteArray,
     val groupId: String,
-    val timestampMs: Long
+    val timestampMs: Long,
+    /**
+     * Hex Ed25519 signature over [signingBytes], made with the private half of
+     * [ed25519PublicKey]. Proves the requester holds that identity's keys, which is what lets a
+     * phone restored from its recovery phrase back into its family without a prompt
+     * ([RejoinPolicy]). Optional: requests from builds before 1.15.1 have none, and are always
+     * shown to the inviter for a decision.
+     */
+    val signature: String? = null
 ) {
+    /**
+     * The bytes [signature] covers. Every field except the display name, which is cosmetic and
+     * ignored when the requester is already a member.
+     */
+    fun signingBytes(): ByteArray {
+        val text = "JOIN:v1:$requestId:$requesterId:$groupId:$timestampMs:" +
+            "${ed25519PublicKey.toHex()}:${x25519PublicKey.toHex()}"
+        return text.toByteArray(Charsets.UTF_8)
+    }
+
+    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
@@ -100,6 +120,7 @@ data class JoinRequest(
         if (!x25519PublicKey.contentEquals(other.x25519PublicKey)) return false
         if (groupId != other.groupId) return false
         if (timestampMs != other.timestampMs) return false
+        if (signature != other.signature) return false
 
         return true
     }
@@ -112,6 +133,7 @@ data class JoinRequest(
         result = 31 * result + x25519PublicKey.contentHashCode()
         result = 31 * result + groupId.hashCode()
         result = 31 * result + timestampMs.hashCode()
+        result = 31 * result + (signature?.hashCode() ?: 0)
         return result
     }
 }

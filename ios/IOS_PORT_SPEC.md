@@ -30,6 +30,7 @@ and earlier interoperate with it in both directions.
 | 1.15.0 (40) | behaviour | **Location publish throttling.** Skip a fix if its timestamp is not newer than the last sent; send if the last send is 5 min or older; send if accuracy is better than half the last; otherwise skip when moved < max(30 m, new fix's accuracy). A heartbeat within (stationary interval − 60 s) of a successful publish only checks the connection. Receivers are unaffected. | §6.2 |
 | 1.15.0 (41) | behaviour | Setup asks for the motion/activity permission (Android `ACTIVITY_RECOGNITION`) in a "Driving & Movement" step; without it crash detection can never arm. iOS needs the Core Motion equivalent plus its usage string. | §11 |
 | 1.15.0 (40) | product | **Colours:** the twelve-colour person palette, colour-blind patterns and profile photos in chat. `FamilyMember.colorHue` is unchanged on the wire (HSL hue): a chosen colour is stored as the hue of the palette colour, and one never chosen is derived from the member ID locally. For the same person to look the same on both platforms, port `PersonPalette.forHue` and `hueFromId` (`PersonColors.kt`). | §6.5; `DESIGN.md` |
+| 1.15.1 (42) | behaviour | **Restore is a join.** A phone restored from its recovery phrase scans a member's invite and sends a join request under its restored identity, now **signed** (optional `signature` field). An existing member with matching keys and a valid signature is approved automatically; a request naming an existing member with *different* keys is refused, even by hand. New optional field only, so older peers are unaffected. | §8.3, §8.4, §8.6 |
 
 Not in this table because they do not touch interop: private-chat UI, Family/Chat lists, the
 Porch Light theme and typefaces, corner-radius rules, the stays/trips/gaps history view
@@ -1338,15 +1339,32 @@ the codebase but is *not* what the current invite path emits — match the map f
    subscribe `familysafe/{self}/join_approval`, then publish **retained** plaintext
    `JoinRequest` to `familysafe/{inviterMemberId}/join_request`, disconnect.
 ```json
-// JoinRequest — NOTE: keys are Base64, not hex!
+// JoinRequest — NOTE: keys are Base64, not hex! (the signature is hex)
 { "requestId": "<uuid>", "requesterId": "...", "displayName": "...",
   "ed25519PublicKey": "<base64>", "x25519PublicKey": "<base64>",
-  "groupId": "...", "timestampMs": 0 }
+  "groupId": "...", "timestampMs": 0,
+  "signature": "<hex Ed25519, since 1.15.1; absent from older builds>" }
 ```
+   `signature` is the requester's Ed25519 signature over the UTF-8 bytes of
+   `"JOIN:v1:{requestId}:{requesterId}:{groupId}:{timestampMs}:{ed25519Hex}:{x25519Hex}"`
+   (keys as lowercase hex here, though the JSON carries them as Base64; `displayName` is not
+   covered). Always send it. Treat it as optional on receipt.
 4. Wait on the pending screen (re-publish request every ~30 s), listening on `join_approval`.
 
 ### 8.4 Inviter (approval)
 1. Validate `deriveMemberId(request.ed25519PublicKey) == request.requesterId`; reject otherwise.
+   **Since 1.15.1**, before showing any prompt (`RejoinPolicy`):
+   - If `requesterId` is already a member and either key differs from the one on file,
+     **refuse silently and never offer it for approval.** The approval is encrypted to the
+     request's X25519 key, so approving would hand the family (file key included) to whoever
+     sent it. Re-check this at the moment of approving, not only on arrival.
+   - If `requesterId` is already a member, both keys match, and `signature` verifies under
+     that member's Ed25519 key: **approve automatically, with no prompt.** This is a member's
+     own phone restored from its recovery phrase (§8.6). `addMember` reports the member
+     already exists, so nothing changes in the group: no version bump, no `MEMBER_ADDED`
+     broadcast. Only the approval is (re)sent.
+   - Otherwise (a newcomer, someone who left, or an unsigned request from an older build),
+     prompt the inviter as before.
 2. Clear the retained join_request (empty retained publish).
 3. Add member locally (approval signature payload, checked by GroupStateManager:
    `"ADD:{groupId}:{preAddVersion}:{newMemberEd25519Hex}"`, Ed25519-signed by inviter).
@@ -1370,6 +1388,20 @@ Verify `SHA-256(inviterEd25519PublicKey)[0..15] == inviterMemberId` **from the s
 GroupDefinition; reconnect as a normal member. Rejection payloads must match the joiner's
 own pending `requestId` + memberId (anti-replay).
 
+### 8.6 Restoring from the recovery phrase (since 1.15.1)
+The phrase regenerates the keys and therefore the member ID, but nothing else: a restored
+device does not know its group, the members or their keys. It **cannot find its family on its
+own**, and must not wait for a sync that will never come (no stored group → no relay
+connection → every group update dropped). Android ≤ 1.15.0 did exactly that and showed an
+empty family forever.
+
+Restore therefore *is* a join: phrase → name → scan any member's invite → §8.3 with the
+restored keys (signed request) → §8.5. A device whose member is still in the group is let
+straight back in by §8.4.1. A device whose member left or was removed gets the ordinary
+approval prompt, and if approved, rejoins under the same identity. An inviter on a build
+before 1.15.1 always prompts, and approving there is safe: the member already exists, so only
+the approval is sent.
+
 ---
 
 ## 9. Security invariants checklist (verify on iOS before shipping)
@@ -1378,7 +1410,9 @@ own pending `requestId` + memberId (anti-replay).
 2. `senderMemberId` treated as unauthenticated routing metadata until signature check passes.
 3. All of §7.3 enforced on every remote group state, including sync-delivered ones.
 4. Sync signatures verified against the **local** roster (§7.2).
-5. Join request ID↔key binding checked on both sides (§8.4.1, §7.3).
+5. Join request ID↔key binding checked on both sides (§8.4.1, §7.3). A request naming an
+   existing member with keys that differ from the roster's is never approved, automatically or
+   by hand (§8.4.1).
 6. Joiner authenticates the inviter via the QR-scanned memberId, nothing else.
 7. Rejections bound to requestId + joinerMemberId (no replay canceling future joins).
 8. Receipts validated against known message IDs addressed to the receipt sender.

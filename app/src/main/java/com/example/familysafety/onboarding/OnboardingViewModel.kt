@@ -214,8 +214,9 @@ class OnboardingViewModel @Inject constructor(
             val familyName = inviteData["groupName"] ?: "your family"
             val inviterName = inviteData["inviterName"] ?: ""
 
-            // 3. Build the join request
-            val joinRequest = JoinRequest(
+            // 3. Build and sign the join request. The signature is what lets a phone restored
+            //    from a member's recovery phrase back in without a prompt (RejoinPolicy).
+            val unsigned = JoinRequest(
                 requestId = UUID.randomUUID().toString(),
                 requesterId = memberId,
                 displayName = _displayName.value,
@@ -223,6 +224,10 @@ class OnboardingViewModel @Inject constructor(
                 x25519PublicKey = cryptoProvider.getX25519PublicKey(),
                 groupId = groupId,
                 timestampMs = System.currentTimeMillis()
+            )
+            val joinRequest = unsigned.copy(
+                signature = cryptoProvider.signMessage(unsigned.signingBytes())
+                    .joinToString("") { "%02x".format(it) }
             )
             val joinRequestJson = json.encodeToString(joinRequest)
 
@@ -312,26 +317,11 @@ class OnboardingViewModel @Inject constructor(
         data class Failed(val reason: String) : JoinSubmitResult()
     }
 
-    /**
-     * Restore an existing account from a mnemonic phrase.
-     * Derives the same keys (and therefore the same member ID) as the original
-     * account. Does NOT create a new group — the group state will sync from
-     * other online family members via MQTT after the main screen loads.
-     */
-    suspend fun restoreAccount(): Boolean {
-        return try {
-            _isLoading.value = true
-            val success = initializeKeys()
-            if (success) {
-                saveOnboardingComplete()
-            }
-            success
-        } catch (e: Exception) {
-            false
-        } finally {
-            _isLoading.value = false
-        }
-    }
+    // There is no restoreAccount(). Restoring used to derive the keys, mark onboarding
+    // complete and wait for the family to sync — which never happened: a phone with no
+    // stored family never connects to the relay and drops every group update it is sent.
+    // A restored phone now rejoins through sendJoinRequest() with the restored phrase; see
+    // RejoinPolicy for why a member's own phone is let back in without a prompt.
 
     private fun saveOnboardingComplete() {
         val prefs = context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)

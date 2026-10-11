@@ -9,6 +9,48 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.15.1 (42) — Restoring from the recovery phrase works
+
+Supersedes 1.15.0 (40/41). Includes the crash-detection rework merged after 41.
+
+Wire format: one new optional field (`JoinRequest.signature`); `PROTOCOL_VERSION` stays 3.
+Older phones ignore it and keep working in both directions.
+
+**Not yet run on a device.** Builds and passes the unit tests. Check before uploading, with two
+phones: restore a phone that is still in the family (should rejoin with no prompt on the other
+phone); leave and restore (should prompt); and a normal new join.
+
+### Play copy
+
+```
+Restoring from your 12-word recovery phrase now brings you back into your family: scan an
+invite from anyone in the family and you're let straight back in. Also fixes a case where a
+join request could be approved for the wrong phone, and improves crash detection.
+```
+
+### What changed, and why it's worth a release
+
+**Restore never worked.** Entering the recovery phrase restored the identity, marked setup
+complete, and promised the family would sync once others came online. It couldn't: a phone
+with no stored family never connects to the relay, and drops every group update it is sent.
+Restored phones showed an empty family forever, which means the recovery phrase could not
+replace a lost phone.
+- Restore now continues to Join Family: scan any member's invite, and the join request goes
+  out under the restored identity, signed with its key.
+- The inviting phone lets a member back in automatically when the request comes from that
+  member's own keys (`RejoinPolicy`). Someone who left, or a newcomer, still needs approval.
+
+**Security fix.** Approving a join request that named an existing member sent the family
+definition, file key included, encrypted to whatever key the request carried. Someone with a
+member's public key could have asked to "join" as that person and, if the prompt was
+approved, read the family. Such requests are now refused outright and never shown.
+
+**Crash detection** — the detection rule was separated out and tested against recorded motion
+and 122 real lab crashes. A GPS speed older than 90 seconds no longer counts toward the 25 mph
+guard, so a phone dropped after parking can't trigger an alert from a stale highway speed.
+
+---
+
 ## 1.15.0 (40) — Porch Light, private messages, and a lighter connection
 
 Built from the commits after `0c67128` + the version bump. Supersedes 1.14.0 (39).
