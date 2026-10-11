@@ -122,6 +122,24 @@ class InviteManager @Inject constructor(
                 return
             }
 
+            val verdict = RejoinPolicy.evaluate(joinRequest, currentGroup) { message, signature, keyHex ->
+                cryptoProvider.verifySignature(message, signature, keyHex)
+            }
+            when (verdict) {
+                is RejoinPolicy.Verdict.Refuse -> {
+                    Timber.w("Refusing join request ${joinRequest.requestId}: ${verdict.reason}")
+                    return
+                }
+                RejoinPolicy.Verdict.AutoApprove -> {
+                    // A member's own phone, restored from its recovery phrase. It already
+                    // belongs here, so nothing is being decided — send the family back.
+                    Timber.i("Join request from existing member ${joinRequest.requesterId.take(8)} — restoring without a prompt")
+                    approveJoinRequest(joinRequest)
+                    return
+                }
+                RejoinPolicy.Verdict.AskInviter -> Unit
+            }
+
             // Add to pending requests only if not already present, and track whether it was new
             var isNew = false
             _pendingJoinRequests.update { current ->
@@ -249,6 +267,13 @@ class InviteManager @Inject constructor(
                 ?: return Result.failure(IllegalStateException("No current member ID"))
             val currentGroup = stateManager.groupDefinition.value
                 ?: return Result.failure(IllegalStateException("No group definition"))
+
+            // Checked here as well as on arrival: a request can sit in the pending list
+            // from before this check existed, and approving is the step that matters.
+            RejoinPolicy.keyConflict(request, currentGroup)?.let { reason ->
+                Timber.e("InviteManager: refusing to approve ${request.requesterId.take(8)} — $reason")
+                return Result.failure(IllegalArgumentException("Join request keys conflict: $reason"))
+            }
 
             val approvalMessage = "ADD:${currentGroup.groupId}:${currentGroup.version}:${newMember.ed25519PublicKey}"
                 .toByteArray(Charsets.UTF_8)

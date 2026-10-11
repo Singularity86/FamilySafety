@@ -95,22 +95,16 @@ fun OnboardingNavigation(
             EnterNameScreen(
                 viewModel = viewModel,
                 onNext = {
+                    // A restored phone holds no family and cannot find one on its own, so it
+                    // rejoins through a member's invite like anyone else (RejoinPolicy).
                     when {
-                        isJoinPath -> navController.navigate(OnboardingRoute.JoinFamily.route)
-                        isRestorePath -> navController.navigate(OnboardingRoute.RestoreComplete.route)
+                        isJoinPath || isRestorePath -> navController.navigate(OnboardingRoute.JoinFamily.route)
                         else -> navController.navigate(OnboardingRoute.CreateFamily.route)
                     }
                 },
                 onBack = {
                     navController.popBackStack()
                 }
-            )
-        }
-
-        composable(OnboardingRoute.RestoreComplete.route) {
-            RestoreCompleteScreen(
-                viewModel = viewModel,
-                onComplete = onOnboardingComplete
             )
         }
 
@@ -127,6 +121,7 @@ fun OnboardingNavigation(
         composable(OnboardingRoute.JoinFamily.route) {
             JoinFamilyScreen(
                 viewModel = viewModel,
+                isRestore = isRestorePath,
                 onComplete = onOnboardingComplete,
                 onBack = { navController.popBackStack() },
                 onNavigateToScanner = { navController.navigate("qr_scanner") },
