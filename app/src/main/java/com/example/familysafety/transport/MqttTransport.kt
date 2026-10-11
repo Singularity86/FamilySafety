@@ -96,8 +96,40 @@ class MqttTransport @Inject constructor(
         private const val SUBSCRIBE_TIMEOUT_MS = 15_000L
         private const val SESSION_PREFS = "mqtt_session"
         private const val PREF_SUBSCRIBED_FINGERPRINT = "subscribed_fingerprint"
+        private const val PREF_RESET_SESSION = "reset_session"
 
-        /** Every filter this device subscribes to for itself and its group. */
+        /** EMQX Serverless: subscriptions granted per connection; the rest are refused. */
+        const val BROKER_SUBSCRIPTION_QUOTA = 10
+
+        /**
+         * What this device holds on the broker: one wildcard for its own topics, one for its
+         * group's, and each other member's presence.
+         *
+         * EMQX Serverless grants at most 10 subscriptions per connection and refuses the
+         * rest — not adjustable on that plan. Subscribed one by one, the 21 own and group
+         * topics left everything after the tenth refused: group sync, removal votes, files,
+         * the vault and every peer's presence. As wildcards they cost 2, which leaves room
+         * for a family of nine.
+         */
+        fun subscriptionFilters(memberId: String, groupId: String, otherMemberIds: List<String>): List<String> =
+            listOf(MqttConfig.getOwnWildcardTopic(memberId), MqttConfig.getGroupWildcardTopic(groupId)) +
+                otherMemberIds.flatMap { memberTopicFilters(it) }
+
+        /**
+         * The filters builds before the wildcards subscribed one by one. A kept session still
+         * holds whichever of them the broker granted, and those count against the quota, so
+         * they are unsubscribed before the wildcards go in.
+         */
+        fun legacyTopicFilters(memberId: String, groupId: String, otherMemberIds: List<String>): List<String> =
+            ownTopicFilters(memberId, groupId) + otherMemberIds.flatMap {
+                listOf(MqttConfig.getLocationTopic(it), MqttConfig.getPresenceTopic(it))
+            }
+
+        /**
+         * Every own and group topic, one by one. No longer subscribed individually — the
+         * wildcards in [subscriptionFilters] cover all of them — but kept as the list the
+         * wildcards must cover, and as what [legacyTopicFilters] unsubscribes.
+         */
         fun ownTopicFilters(memberId: String, groupId: String): List<String> = listOf(
             MqttConfig.getChatTopic(memberId),
             // Per-recipient encrypted location inbox
@@ -130,11 +162,11 @@ class MqttTransport @Inject constructor(
         )
 
         /**
-         * Filters for one other family member. The legacy location topic is kept so peers on
-         * older builds still work; new builds publish to our location_inbox instead.
+         * Filters for one other family member: their presence only. The legacy shared
+         * location topic is no longer subscribed — no current build publishes to it (spec §5),
+         * and dropping it halves what each member costs against the 10-subscription quota.
          */
         fun memberTopicFilters(otherMemberId: String): List<String> = listOf(
-            MqttConfig.getLocationTopic(otherMemberId),
             MqttConfig.getPresenceTopic(otherMemberId)
         )
 
@@ -249,8 +281,13 @@ class MqttTransport @Inject constructor(
 
                 setupCallbacks()
 
+                // Set when the broker refused filters that fit the quota: the kept session holds
+                // something we cannot name to unsubscribe, so start one fresh session instead.
+                // Costs whatever QoS 1 traffic the broker had queued for us, once.
+                val sessionPrefs = context.getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE)
+                val resetSession = sessionPrefs.getBoolean(PREF_RESET_SESSION, false)
                 val connOpts = MqttConnectOptions().apply {
-                    isCleanSession = false
+                    isCleanSession = resetSession
                     isAutomaticReconnect = false  // we handle reconnect via scheduleReconnect()
                     connectionTimeout = MqttConfig.CONNECTION_TIMEOUT
                     keepAliveInterval = MqttConfig.KEEP_ALIVE_SECONDS
@@ -330,6 +367,10 @@ class MqttTransport @Inject constructor(
 
                 if (connectResult.isSuccess) {
                     Timber.i("$TAG: Connected to MQTT broker")
+                    if (resetSession) {
+                        Timber.w("$TAG: connected with a fresh session to clear refused subscriptions")
+                        sessionPrefs.edit().remove(PREF_RESET_SESSION).apply()
+                    }
                     _connectionState.value = ConnectionState.Connected
                     reconnectAttempts = 0
 
@@ -413,8 +454,8 @@ class MqttTransport @Inject constructor(
     private suspend fun restoreSubscriptions(sessionPresent: Boolean, memberIds: List<String>) {
         val id = memberId ?: return
         val gId = groupId ?: return
-        val topics = ownTopicFilters(id, gId) +
-            memberIds.filter { it != id }.flatMap { memberTopicFilters(it) }
+        val peers = memberIds.filter { it != id }
+        val topics = subscriptionFilters(id, gId, peers)
         val fingerprint = subscriptionFingerprint(MqttConfig.BROKER_URL, topics)
         val prefs = context.getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE)
 
@@ -426,19 +467,62 @@ class MqttTransport @Inject constructor(
         // Cleared first: if the process dies mid-subscribe, the next connect must not
         // trust a fingerprint for subscriptions that may never have reached the broker.
         prefs.edit().remove(PREF_SUBSCRIBED_FINGERPRINT).apply()
-        if (subscribeAwait(topics)) {
-            prefs.edit().putString(PREF_SUBSCRIBED_FINGERPRINT, fingerprint).apply()
-            Timber.i("$TAG: Subscribed to ${topics.size} topics (sessionPresent=$sessionPresent)")
-        } else {
-            Timber.w("$TAG: subscribe incomplete — will resubscribe on next connect")
+        // A kept session from an older build still holds its one-by-one filters, and they
+        // count against the 10-subscription quota: left in place, the wildcards are refused.
+        // Unsubscribing a filter the session does not hold is harmless.
+        unsubscribeAwait(legacyTopicFilters(id, gId, peers))
+        when (subscribeAwait(topics)) {
+            true -> {
+                prefs.edit().putString(PREF_SUBSCRIBED_FINGERPRINT, fingerprint).apply()
+                Timber.i("$TAG: Subscribed to ${topics.size} topics (sessionPresent=$sessionPresent)")
+            }
+            false -> if (topics.size <= BROKER_SUBSCRIPTION_QUOTA) {
+                Timber.w("$TAG: broker refused filters within quota — next connect starts a fresh session")
+                prefs.edit().putBoolean(PREF_RESET_SESSION, true).apply()
+            } else {
+                // A fresh session would be refused the same way; don't throw queued traffic away.
+                Timber.e("$TAG: ${topics.size} filters exceed the broker's quota of $BROKER_SUBSCRIPTION_QUOTA")
+            }
+            null -> Timber.w("$TAG: subscribe incomplete — will resubscribe on next connect")
         }
     }
 
-    /** One SUBSCRIBE for [topics], resolved true only if the broker granted every filter. */
-    private suspend fun subscribeAwait(topics: List<String>): Boolean {
+    /** One UNSUBSCRIBE for [topics]; best effort, true once the broker acknowledged it. */
+    private suspend fun unsubscribeAwait(topics: List<String>): Boolean {
         val client = mqttClient ?: return false
         return withTimeoutOrNull(SUBSCRIBE_TIMEOUT_MS) {
             suspendCancellableCoroutine { continuation ->
+                try {
+                    client.unsubscribe(
+                        topics.toTypedArray(),
+                        null,
+                        object : IMqttActionListener {
+                            override fun onSuccess(asyncActionToken: IMqttToken?) {
+                                continuation.resume(true)
+                            }
+
+                            override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                                Timber.w(exception, "$TAG: unsubscribe failed")
+                                continuation.resume(false)
+                            }
+                        }
+                    )
+                } catch (e: Exception) {
+                    Timber.w(e, "$TAG: unsubscribe threw")
+                    continuation.resume(false)
+                }
+            }
+        } ?: false
+    }
+
+    /**
+     * One SUBSCRIBE for [topics]: true if the broker granted every filter, false if it
+     * refused any, null if there was no answer (failure, timeout, no client).
+     */
+    private suspend fun subscribeAwait(topics: List<String>): Boolean? {
+        val client = mqttClient ?: return null
+        return withTimeoutOrNull(SUBSCRIBE_TIMEOUT_MS) {
+            suspendCancellableCoroutine<Boolean?> { continuation ->
                 try {
                     client.subscribe(
                         topics.toTypedArray(),
@@ -453,31 +537,34 @@ class MqttTransport @Inject constructor(
 
                             override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
                                 Timber.e(exception, "$TAG: subscribe failed")
-                                continuation.resume(false)
+                                continuation.resume(null)
                             }
                         }
                     )
                 } catch (e: Exception) {
                     Timber.e(e, "$TAG: subscribe threw")
-                    continuation.resume(false)
+                    continuation.resume(null)
                 }
             }
-        } ?: false
+        }
     }
 
-    private suspend fun subscribeToOwnTopics() {
+    /**
+     * The group changed while connected: swap the old group's wildcard for the new one.
+     * The own wildcard is (re)subscribed too, since a device with no group yet had none.
+     * The fingerprint no longer matches, so the next connect resubscribes in full.
+     */
+    private suspend fun subscribeToOwnTopics(oldGroupId: String?) {
         val id = memberId ?: return
         val gId = groupId ?: return
-        val topics = ownTopicFilters(id, gId)
-
-        try {
-            mqttClient?.subscribe(
-                topics.toTypedArray(),
-                IntArray(topics.size) { MqttConfig.DEFAULT_QOS }
-            )
+        if (oldGroupId != null) {
+            unsubscribeAwait(listOf(MqttConfig.getGroupWildcardTopic(oldGroupId)))
+        }
+        val topics = listOf(MqttConfig.getOwnWildcardTopic(id), MqttConfig.getGroupWildcardTopic(gId))
+        if (subscribeAwait(topics) == true) {
             Timber.i("$TAG: Subscribed to own topics")
-        } catch (e: Exception) {
-            Timber.e(e, "$TAG: Failed to subscribe to own topics")
+        } else {
+            Timber.e("$TAG: Failed to subscribe to own topics")
         }
     }
 
@@ -766,7 +853,7 @@ class MqttTransport @Inject constructor(
         val old = groupId
         groupId = newGroupId
         if (old != newGroupId && _connectionState.value == ConnectionState.Connected) {
-            scope.launch { subscribeToOwnTopics() }
+            scope.launch { subscribeToOwnTopics(old) }
         }
     }
 
@@ -780,6 +867,10 @@ class MqttTransport @Inject constructor(
             val removedIds = familyMemberKeys.keys - newKeys.keys
             familyMemberKeys = newKeys.toMutableMap()
             removedIds.forEach { e2eeManager.removeSharedSecret(it) }
+            // A removed member's presence filter would otherwise hold one of the 10 slots.
+            if (removedIds.isNotEmpty()) {
+                unsubscribeAwait(removedIds.filter { it != memberId }.flatMap { memberTopicFilters(it) })
+            }
             if (addedIds.isNotEmpty()) {
                 subscribeToFamilyMembers(addedIds.toList())
             }
