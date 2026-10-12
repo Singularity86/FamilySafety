@@ -24,6 +24,15 @@ public enum GroupApplyOutcome: Equatable {
     case storageFailed
 }
 
+public enum LocalEditError: Error, Equatable {
+    case noFamily
+    case alreadyInFamily
+    case alreadyMember
+    case notMember
+    /// Storage couldn't be read or written. Nothing changed (F14: never treated as "no family").
+    case storageUnavailable
+}
+
 /// The single source of truth for this device's group (§7.3, §7.4). Ports
 /// GroupStateManager.applyRemoteGroupStateLocked and its reconcile paths from Android 1.15.3,
 /// plus the iOS-only F26 rule above. An actor, so applies are strictly serial.
@@ -49,6 +58,55 @@ public actor GroupStateStore {
     public func adopt(_ group: GroupDefinition) throws {
         try persistence.save(group)
         current = group
+    }
+
+    // MARK: - Local edits
+
+    /// §8.1: a new family with `creator` as its creator and only member, and a fresh file key.
+    /// Refuses when a family is already saved, and when storage can't say whether one is
+    /// (Android 1.1: never guess "no family" and overwrite one).
+    public func create(groupName: String, creator: FamilyMember, now: Int64,
+                       groupId: String = UUID().uuidString.lowercased()) throws -> GroupDefinition {
+        guard current == nil else { throw LocalEditError.alreadyInFamily }
+        let stored: GroupDefinition?
+        do { stored = try persistence.load() } catch { throw LocalEditError.storageUnavailable }
+        guard stored == nil else { throw LocalEditError.alreadyInFamily }
+        try SodiumRaw.ensureInitialized()
+        let group = GroupDefinition(
+            groupId: groupId, groupName: groupName, createdAtEpochMs: now, creatorMemberId: creator.memberId,
+            members: [creator], version: 1, previousStateHash: nil,
+            fileEncryptionKey: Hex.encode(SodiumRaw.randomBytes(32))
+        )
+        do { try persistence.save(group) } catch { throw LocalEditError.storageUnavailable }
+        current = group
+        return group
+    }
+
+    /// Adds an approved joiner as the next version (Android GroupStateManager.addMember). Someone
+    /// who left or was removed comes back as their next membership, so the old tombstone keeps
+    /// meaning "removed". Throws `alreadyMember` for a member already in the roster: a restored
+    /// phone changes nothing and only gets the approval again (§8.4 step 1).
+    public func addMember(_ joiner: FamilyMember, inviterMemberId: String, now: Int64) throws -> GroupDefinition {
+        guard let group = current else { throw LocalEditError.noFamily }
+        guard group.containsMember(inviterMemberId) else { throw LocalEditError.notMember }
+        guard !group.containsMember(joiner.memberId) else { throw LocalEditError.alreadyMember }
+        let entry = FamilyMember(
+            memberId: joiner.memberId, displayName: joiner.displayName,
+            ed25519PublicKey: joiner.ed25519PublicKey.lowercased(), x25519PublicKey: joiner.x25519PublicKey.lowercased(),
+            addedAtEpochMs: now, addedByMemberId: inviterMemberId, avatarHash: joiner.avatarHash, colorHue: joiner.colorHue,
+            joinEpoch: Tombstones.nextJoinEpoch(memberId: joiner.memberId, tombstones: Set(group.removedMemberIds))
+        )
+        let next = GroupDefinition(
+            groupId: group.groupId, groupName: group.groupName, createdAtEpochMs: group.createdAtEpochMs,
+            creatorMemberId: group.creatorMemberId, members: group.members + [entry], version: group.version + 1,
+            previousStateHash: group.computeStateHash(), fileEncryptionKey: group.fileEncryptionKey,
+            removedMemberIds: group.removedMemberIds, subscriberMemberId: group.subscriberMemberId,
+            subscriptionConfirmedAtEpochMs: group.subscriptionConfirmedAtEpochMs, grantCode: group.grantCode,
+            removalProofs: group.removalProofs
+        )
+        do { try persistence.save(next) } catch { throw LocalEditError.storageUnavailable }
+        current = next
+        return next
     }
 
     public func apply(

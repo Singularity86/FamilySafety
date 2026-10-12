@@ -4,7 +4,7 @@ import Foundation
 /// strings. NOTE: an `InviteData` class with a signature field exists elsewhere in the
 /// Android codebase but is NOT what the current invite path emits — this map shape is the
 /// wire contract.
-public struct InviteCode: Codable, Equatable {
+public struct InviteCode: Codable, Equatable, Sendable {
     public let groupId: String
     public let groupName: String
     public let inviterMemberId: String
@@ -55,7 +55,7 @@ public struct InviteCode: Codable, Equatable {
 /// Plaintext, retained, on `familysafe/{inviterMemberId}/join_request` (§8.3). NOTE: keys
 /// are Base64 here — the one exception to the wire's hex convention (§2.4) — since this
 /// struct is shared with the pre-roster QR trust path rather than the post-join envelope.
-public struct JoinRequest: Codable, Equatable {
+public struct JoinRequest: Codable, Equatable, Sendable {
     public let requestId: String
     public let requesterId: String
     public let displayName: String

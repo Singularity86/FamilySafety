@@ -147,9 +147,28 @@ public struct PendingInvite: Codable, Equatable, Sendable {
 /// so reopening the screen can't grow the store without bound.
 public struct InviteBook: Codable, Equatable, Sendable {
     public static let cap = 20
+    public static let closedCap = 200
     public private(set) var invites: [PendingInvite] = []
+    /// Requests already approved or rejected, so a broker redelivery is ignored (§8.4).
+    public private(set) var closedRequestIds: [String] = []
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey { case invites, closedRequestIds }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        invites = try c.decodeIfPresent([PendingInvite].self, forKey: .invites) ?? []
+        closedRequestIds = try c.decodeIfPresent([String].self, forKey: .closedRequestIds) ?? []
+    }
+
+    public func isClosed(_ requestId: String) -> Bool { closedRequestIds.contains(requestId) }
+
+    public mutating func close(_ requestId: String) {
+        guard !isClosed(requestId) else { return }
+        closedRequestIds.append(requestId)
+        if closedRequestIds.count > Self.closedCap { closedRequestIds.removeFirst(closedRequestIds.count - Self.closedCap) }
+    }
 
     /// A new v2 invite for `group`, recorded here. The caller persists the book (it holds
     /// secrets: Keychain, this-device-only, excluded from backup) before showing the QR.
