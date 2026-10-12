@@ -576,7 +576,9 @@ with no priority flag on the wire. What differs is the sender's obligation:
   never settles another's copy.
 - Resend schedule per member: immediately, +15 s, +30 s, then every 60 s, and also at once on
   every reconnect. Give up 24 h after the alert was raised. Drop members who have left.
-- Show per-member status: sending, waiting for their phone, received.
+- Show per-member status: **Sending…** (no attempt yet), **Waiting for their phone** (sent, no
+  receipt, within 24 h), **Received** (signed DELIVERED or READ), **Not reached** (24 h passed
+  without a receipt), **Left the family** (left while the alert was out; no more resends).
 
 ### 6.4 Group sync
 ```json
