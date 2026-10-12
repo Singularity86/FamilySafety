@@ -262,6 +262,52 @@ class GroupStateManagerTest {
         assertEquals(GroupError.MemberNotFound, (result as GroupOperationResult.Failure).error)
     }
 
+    // ── F26: absence is not removal ─────────────────────────────────────────────
+
+    private suspend fun joinedFamily(): GroupDefinition {
+        val creator = makeLocalMember("creator_001").copy(displayName = "Pat")
+        val group = GroupDefinition(
+            groupId = "group_123", groupName = "Test Family", createdAtEpochMs = 1000L,
+            creatorMemberId = "creator_001", members = setOf(creator, makeLocalMember()), version = 1L
+        )
+        coEvery { mockPersistence.loadGroupDefinition() } returns group
+        gsm.initialize()
+        return group
+    }
+
+    @Test
+    fun `a stale creator roster without us no longer wipes this phone`() = runTest {
+        val current = joinedFamily()
+        // The creator never heard we joined: their next roster simply lacks us, no tombstone.
+        val stale = current.copy(
+            version = 2L,
+            members = current.members.filter { it.memberId == "creator_001" }.toSet(),
+            previousStateHash = current.computeStateHash()
+        )
+
+        val result = gsm.applyVerifiedRemoteGroupState(stale, "creator_001")
+
+        assertEquals(GroupError.AbsentWithoutRemoval, (result as GroupOperationResult.Failure).error)
+        assertTrue(gsm.groupDefinition.value!!.containsMember("local_001"))
+        coVerify(exactly = 0) { mockPersistence.saveGroupDefinition(any()) }
+    }
+
+    @Test
+    fun `a roster that tombstones our membership still removes us`() = runTest {
+        val current = joinedFamily()
+        val removal = current.copy(
+            version = 2L,
+            members = current.members.filter { it.memberId == "creator_001" }.toSet(),
+            removedMemberIds = setOf(Tombstones.key(makeLocalMember())),
+            previousStateHash = current.computeStateHash()
+        )
+
+        val result = gsm.applyVerifiedRemoteGroupState(removal, "creator_001")
+
+        assertTrue(result is GroupOperationResult.Success)
+        assertFalse(gsm.groupDefinition.value!!.containsMember("local_001"))
+    }
+
     // ── updateConnectionState ─────────────────────────────────────────────────
 
     @Test

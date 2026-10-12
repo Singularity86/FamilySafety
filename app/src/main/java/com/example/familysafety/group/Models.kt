@@ -377,6 +377,12 @@ sealed class GroupError {
     /** A quorum-removal vote had valid signatures but not enough of them. */
     data class InsufficientQuorum(val have: Int, val needed: Int) : GroupError()
     object StorageError : GroupError()
+
+    /**
+     * A roster that leaves this phone out without a tombstone for its membership. Stale, not a
+     * removal; the state is kept and a fresh copy should be requested.
+     */
+    object AbsentWithoutRemoval : GroupError()
     data class CryptoError(val message: String) : GroupError()
     data class NetworkError(val message: String) : GroupError()
 }
