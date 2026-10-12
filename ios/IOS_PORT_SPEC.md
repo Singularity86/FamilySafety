@@ -346,7 +346,7 @@ presence publishes, which are QoS 0 (§4). The presence last-will stays QoS 1.
 | `familysafe/{id}/group_sync` | Envelope of `GroupSyncMessage` | ✅ per-recipient | no |
 | `familysafe/group/{groupId}/ack` | plaintext `GroupUpdateAck` | ❌ | no |
 | `familysafe/{id}/sync_request` | plaintext `GroupStateRefreshRequest` | ❌ | no |
-| `familysafe/{id}/removal_vote` | Envelope of `RemovalVoteMessage` (§6.4, §7.5) | ✅ per-recipient | **yes** (never cleared; see §7.5 caveats) |
+| `familysafe/{id}/removal_vote` | Envelope of `RemovalVoteMessage` (§6.4, §7.5) | ✅ per-recipient | **yes** (cleared by the recipient once applied; see §7.5 caveats) |
 | `familysafe/{inviterId}/join_request` | plaintext `JoinRequest` | ❌ (contains only public data) | **yes** (cleared after decision) |
 | `familysafe/{joinerId}/join_approval` | plaintext `JoinApprovalMessage` **or** `JoinRejectionMessage` (each carries an inner Envelope) | inner ✅ | **yes** (joiner clears once consumed — §8.3) |
 | `familysafe/{id}/replication/request` | Envelope of `ReplicationRequest` | ✅ | no |
@@ -1418,8 +1418,10 @@ Caveats an implementer should know, taken from how Android behaves rather than d
   through refresh requests, which any peer at or past the needed version answers.
 - The `removal_vote` topic is retained, but the broker keeps **one retained message per
   topic**, so a later vote to the same inbox displaces an earlier one. Correctness rests on
-  QoS 1 persistent-session delivery, not on the retained copy, and Android never clears them.
-  Expect residual retained votes on the broker.
+  QoS 1 persistent-session delivery, not on the retained copy. **Since Android PR #33 (F33)**,
+  each phone clears the retained vote on its own `removal_vote` topic (empty retained publish)
+  once it has applied the removal. Older builds never clear them, so expect some residual
+  retained votes on the broker.
 - No cross-platform test vector exists yet for the `REMOVE_QUORUM` signature or the successor
   choice. Generate one from Android (`GroupTransitionValidatorTest` and `GroupStateMergeTest`
   cover the rules) and add it to §12 before shipping this on iOS.
@@ -1448,7 +1450,8 @@ the codebase but is *not* what the current invite path emits — match the map f
    extract `groupId`, `inviterMemberId`. Pasted codes routinely arrive with a trailing newline
    or line-wrapped by the messaging app, and a strict decoder rejects a perfectly good code.
 2. Generate own mnemonic/keys (`requesterId = own memberId`).
-3. Ephemeral MQTT client (`familysafe_join_{id8}_{ts}`, cleanSession=false):
+3. Ephemeral MQTT client (`familysafe_join_{id8}_{ts}`, **cleanSession=true** since Android
+   PR #33; it was false, which left an orphaned session on the broker for every join attempt):
    subscribe `familysafe/{self}/join_approval`, then publish **retained** plaintext
    `JoinRequest` to `familysafe/{inviterMemberId}/join_request`, disconnect.
 ```json
