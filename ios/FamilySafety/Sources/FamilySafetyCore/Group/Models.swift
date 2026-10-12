@@ -16,7 +16,7 @@ public enum MemberIdDerivation {
 }
 
 /// Mirrors FamilyMember in Models.kt.
-public struct FamilyMember: Codable, Hashable {
+public struct FamilyMember: Codable, Hashable, Sendable {
     public let memberId: String
     public let displayName: String
     public let ed25519PublicKey: String
@@ -106,7 +106,7 @@ public enum Tombstones {
 /// Signed authority for one tombstone (Android 1.15.3+, §6.5): by the creator, or by the
 /// member whose membership it ends. Lets any member relay a removal it did not witness.
 /// Not part of `computeStateHash` — each proof carries its own signature.
-public struct RemovalProof: Codable, Hashable {
+public struct RemovalProof: Codable, Hashable, Sendable {
     public let tombstone: String
     public let authorizerMemberId: String
     public let signature: String
@@ -125,7 +125,7 @@ public struct RemovalProof: Codable, Hashable {
 /// The complete family group definition — the persisted, signed group state that all
 /// members must agree upon. Mirrors GroupDefinition in Models.kt. `members` is a plain
 /// array (Android uses a Set; order carries no meaning — computeStateHash sorts it).
-public struct GroupDefinition: Codable, Equatable {
+public struct GroupDefinition: Codable, Equatable, Sendable {
     public let groupId: String
     public let groupName: String
     public let createdAtEpochMs: Int64

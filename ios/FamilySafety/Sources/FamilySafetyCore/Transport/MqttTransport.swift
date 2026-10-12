@@ -18,7 +18,7 @@ public struct BrokerCredentials {
     }
 }
 
-public enum MqttConnectionState: Equatable {
+public enum MqttConnectionState: Equatable, Sendable {
     case disconnected
     case connecting
     case connected
