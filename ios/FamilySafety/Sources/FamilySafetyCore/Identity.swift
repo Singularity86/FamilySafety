@@ -3,6 +3,12 @@ import Foundation
 
 /// Standard derivation paths for FamilySafety keys. Mirrors FamilySafeKeyPaths in
 /// Slip10KeyDerivation.kt.
+/// Bad input to key derivation. Thrown rather than trapping: a seed comes from user input
+/// (a restored phrase), and a crash is the wrong answer to a typo.
+public enum IdentityError: Error, Equatable {
+    case invalidSeedLength(Int)
+}
+
 public enum FamilySafeKeyPaths {
     public static let purpose: UInt32 = 44
     public static let coinType: UInt32 = 1984 // custom, unregistered coin type
@@ -40,7 +46,7 @@ public struct FamilySafeIdentity: Equatable {
 public enum FamilySafeKeyDerivation {
     /// Derives the full identity for `accountIndex` from a 64-byte BIP-39 seed.
     public static func deriveIdentity(seed: [UInt8], accountIndex: UInt32 = 0) throws -> FamilySafeIdentity {
-        precondition(seed.count == 64, "Seed must be 64 bytes from BIP-39")
+        guard seed.count == 64 else { throw IdentityError.invalidSeedLength(seed.count) }
 
         let edKeyPair = try Slip10.deriveEd25519(seed: seed, path: FamilySafeKeyPaths.signingKeyPath(accountIndex: accountIndex))
         let (_, edSecretKey64) = try SodiumRaw.signSeedKeypair(seed: edKeyPair.privateKey)

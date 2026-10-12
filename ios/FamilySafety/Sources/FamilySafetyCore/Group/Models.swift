@@ -25,6 +25,9 @@ public struct FamilyMember: Codable, Hashable {
     public let addedByMemberId: String?
     public let avatarHash: String?
     public let colorHue: Float?   // 0–359; nil = derive from memberId hash
+    /// Which membership this is for `memberId` (Android 1.15.3+, §6.5): 0 the first time, one
+    /// more each time someone who left or was removed is let back in. Hashed only when > 0.
+    public let joinEpoch: Int
 
     public init(
         memberId: String,
@@ -34,7 +37,8 @@ public struct FamilyMember: Codable, Hashable {
         addedAtEpochMs: Int64,
         addedByMemberId: String? = nil,
         avatarHash: String? = nil,
-        colorHue: Float? = nil
+        colorHue: Float? = nil,
+        joinEpoch: Int = 0
     ) {
         self.memberId = memberId
         self.displayName = displayName
@@ -44,6 +48,77 @@ public struct FamilyMember: Codable, Hashable {
         self.addedByMemberId = addedByMemberId
         self.avatarHash = avatarHash
         self.colorHue = colorHue
+        self.joinEpoch = joinEpoch
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case memberId, displayName, ed25519PublicKey, x25519PublicKey, addedAtEpochMs
+        case addedByMemberId, avatarHash, colorHue, joinEpoch
+    }
+
+    /// Android omits default-valued fields on the sync path, so every optional field may be
+    /// absent rather than null.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        memberId = try c.decode(String.self, forKey: .memberId)
+        displayName = try c.decode(String.self, forKey: .displayName)
+        ed25519PublicKey = try c.decode(String.self, forKey: .ed25519PublicKey)
+        x25519PublicKey = try c.decode(String.self, forKey: .x25519PublicKey)
+        addedAtEpochMs = try c.decode(Int64.self, forKey: .addedAtEpochMs)
+        addedByMemberId = try c.decodeIfPresent(String.self, forKey: .addedByMemberId)
+        avatarHash = try c.decodeIfPresent(String.self, forKey: .avatarHash)
+        colorHue = try c.decodeIfPresent(Float.self, forKey: .colorHue)
+        joinEpoch = try c.decodeIfPresent(Int.self, forKey: .joinEpoch) ?? 0
+    }
+}
+
+/// Tombstone keys (Android 1.15.3+, §6.5). A tombstone ends one *membership*: the bare
+/// memberId for membership 0, `"<memberId>#<n>"` for membership n ≥ 1. Mirrors `Tombstones`
+/// in Models.kt.
+public enum Tombstones {
+    public static func key(memberId: String, joinEpoch: Int) -> String {
+        joinEpoch <= 0 ? memberId : "\(memberId)#\(joinEpoch)"
+    }
+
+    public static func key(_ member: FamilyMember) -> String {
+        key(memberId: member.memberId, joinEpoch: member.joinEpoch)
+    }
+
+    public static func memberId(of tombstone: String) -> String {
+        tombstone.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? tombstone
+    }
+
+    public static func epoch(of tombstone: String) -> Int {
+        guard let hash = tombstone.firstIndex(of: "#") else { return 0 }
+        return Int(tombstone[tombstone.index(after: hash)...]) ?? 0
+    }
+
+    public static func isRemoved(_ member: FamilyMember, tombstones: Set<String>) -> Bool {
+        tombstones.contains(key(member))
+    }
+
+    /// The membership to give `memberId` if they are let in now: one past their last removal.
+    public static func nextJoinEpoch(memberId: String, tombstones: Set<String>) -> Int {
+        tombstones.filter { self.memberId(of: $0) == memberId }.map { epoch(of: $0) + 1 }.max() ?? 0
+    }
+}
+
+/// Signed authority for one tombstone (Android 1.15.3+, §6.5): by the creator, or by the
+/// member whose membership it ends. Lets any member relay a removal it did not witness.
+/// Not part of `computeStateHash` — each proof carries its own signature.
+public struct RemovalProof: Codable, Hashable {
+    public let tombstone: String
+    public let authorizerMemberId: String
+    public let signature: String
+
+    public init(tombstone: String, authorizerMemberId: String, signature: String) {
+        self.tombstone = tombstone
+        self.authorizerMemberId = authorizerMemberId
+        self.signature = signature
+    }
+
+    public static func signingPayload(groupId: String, tombstone: String) -> String {
+        "REMOVAL_PROOF:v1:\(groupId):\(tombstone)"
     }
 }
 
@@ -75,6 +150,8 @@ public struct GroupDefinition: Codable, Equatable {
     /// A developer-issued grant code (base64 `GrantCodePayload`, §6.9), if this family has
     /// one. Verified entirely on-device against an embedded public key — no server.
     public let grantCode: String?
+    /// Proofs for tombstones (Android 1.15.3+). Unordered on the wire (Android uses a Set).
+    public let removalProofs: [RemovalProof]
 
     public init(
         groupId: String,
@@ -88,7 +165,8 @@ public struct GroupDefinition: Codable, Equatable {
         removedMemberIds: [String] = [],
         subscriberMemberId: String? = nil,
         subscriptionConfirmedAtEpochMs: Int64? = nil,
-        grantCode: String? = nil
+        grantCode: String? = nil,
+        removalProofs: [RemovalProof] = []
     ) {
         self.groupId = groupId
         self.groupName = groupName
@@ -102,12 +180,13 @@ public struct GroupDefinition: Codable, Equatable {
         self.subscriberMemberId = subscriberMemberId
         self.subscriptionConfirmedAtEpochMs = subscriptionConfirmedAtEpochMs
         self.grantCode = grantCode
+        self.removalProofs = removalProofs
     }
 
     private enum CodingKeys: String, CodingKey {
         case groupId, groupName, createdAtEpochMs, creatorMemberId, members, version
         case previousStateHash, fileEncryptionKey, removedMemberIds
-        case subscriberMemberId, subscriptionConfirmedAtEpochMs, grantCode
+        case subscriberMemberId, subscriptionConfirmedAtEpochMs, grantCode, removalProofs
     }
 
     /// Tolerates senders that predate this field entirely (absent, not just null).
@@ -125,6 +204,7 @@ public struct GroupDefinition: Codable, Equatable {
         subscriberMemberId = try c.decodeIfPresent(String.self, forKey: .subscriberMemberId)
         subscriptionConfirmedAtEpochMs = try c.decodeIfPresent(Int64.self, forKey: .subscriptionConfirmedAtEpochMs)
         grantCode = try c.decodeIfPresent(String.self, forKey: .grantCode)
+        removalProofs = try c.decodeIfPresent([RemovalProof].self, forKey: .removalProofs) ?? []
     }
 
     /// Deterministic hash of this group state, used for hash-chain integrity; members
@@ -154,6 +234,11 @@ public struct GroupDefinition: Codable, Equatable {
             canonical += member.ed25519PublicKey
             canonical += ","
             canonical += member.x25519PublicKey
+            // Only from the second membership on, so every existing roster hashes as before.
+            if member.joinEpoch > 0 {
+                canonical += ",#"
+                canonical += String(member.joinEpoch)
+            }
             canonical += ";"
         }
         // Only appended when non-empty, so a group that has never removed anyone hashes
@@ -192,8 +277,41 @@ public struct GroupDefinition: Codable, Equatable {
         members.contains { $0.memberId == memberId }
     }
 
-    public func isTombstoned(_ memberId: String) -> Bool {
-        removedMemberIds.contains(memberId)
+    /// True when this member's *current* membership has a tombstone.
+    public func isRemoved(_ member: FamilyMember) -> Bool {
+        Tombstones.isRemoved(member, tombstones: Set(removedMemberIds))
+    }
+
+    /// A copy with the given fields replaced — Swift has no `copy(...)`, and every state
+    /// transition in the sync engine is "this group, but with …".
+    public func with(
+        groupName: String? = nil,
+        creatorMemberId: String? = nil,
+        members: [FamilyMember]? = nil,
+        version: Int64? = nil,
+        previousStateHash: String?? = .none,
+        fileEncryptionKey: String?? = .none,
+        removedMemberIds: [String]? = nil,
+        subscriberMemberId: String?? = .none,
+        subscriptionConfirmedAtEpochMs: Int64?? = .none,
+        grantCode: String?? = .none,
+        removalProofs: [RemovalProof]? = nil
+    ) -> GroupDefinition {
+        GroupDefinition(
+            groupId: groupId,
+            groupName: groupName ?? self.groupName,
+            createdAtEpochMs: createdAtEpochMs,
+            creatorMemberId: creatorMemberId ?? self.creatorMemberId,
+            members: members ?? self.members,
+            version: version ?? self.version,
+            previousStateHash: previousStateHash ?? self.previousStateHash,
+            fileEncryptionKey: fileEncryptionKey ?? self.fileEncryptionKey,
+            removedMemberIds: removedMemberIds ?? self.removedMemberIds,
+            subscriberMemberId: subscriberMemberId ?? self.subscriberMemberId,
+            subscriptionConfirmedAtEpochMs: subscriptionConfirmedAtEpochMs ?? self.subscriptionConfirmedAtEpochMs,
+            grantCode: grantCode ?? self.grantCode,
+            removalProofs: removalProofs ?? self.removalProofs
+        )
     }
 }
 

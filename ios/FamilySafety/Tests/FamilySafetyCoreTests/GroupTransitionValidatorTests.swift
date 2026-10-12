@@ -150,15 +150,26 @@ final class GroupTransitionValidatorTests: XCTestCase {
         }
     }
 
-    // MARK: - Tombstones are append-only
+    // MARK: - Tombstones: a state lacking ours is accepted, never one readmitting a removed member
 
-    func test_rejectsDroppedTombstone() throws {
+    /// Android stopped rejecting this (pre-tombstone peers send an empty set, and rejecting
+    /// them forked rosters); the store unions our tombstones back in instead. See
+    /// GroupStateStoreTests for the union.
+    func test_acceptsStateThatLacksOurTombstones() throws {
         let alice = try identity("alice")
         let bob = try identity("bob")
         let current = group(members: [member(alice, name: "Alice")], creator: alice, version: 2, removedMemberIds: [bob.memberId])
         let remote = group(members: [member(alice, name: "Alice")], creator: alice, version: 3, previousStateHash: current.computeStateHash(), removedMemberIds: [])
+        XCTAssertNoThrow(try GroupTransitionValidator.validate(current: current, remote: remote, updaterMemberId: alice.memberId))
+    }
+
+    func test_rejectsRemovedMemberReappearingEvenIfSenderLacksTombstone() throws {
+        let alice = try identity("alice")
+        let bob = try identity("bob")
+        let current = group(members: [member(alice, name: "Alice")], creator: alice, version: 2, removedMemberIds: [bob.memberId])
+        let remote = group(members: [member(alice, name: "Alice"), member(bob, name: "Bob")], creator: alice, version: 3, previousStateHash: current.computeStateHash())
         XCTAssertThrowsError(try GroupTransitionValidator.validate(current: current, remote: remote, updaterMemberId: alice.memberId)) {
-            XCTAssertEqual($0 as? GroupTransitionRejection, .tombstoneDropped)
+            XCTAssertEqual($0 as? GroupTransitionRejection, .memberBothPresentAndRemoved)
         }
     }
 
@@ -179,15 +190,28 @@ final class GroupTransitionValidatorTests: XCTestCase {
 
     // MARK: - Silent removal (successor) vs. sibling exemption
 
-    func test_rejectsSilentRemovalOnSuccessor() throws {
+    func test_rejectsSilentRemovalOnSuccessorByNonCreator() throws {
+        let alice = try identity("alice")
+        let bob = try identity("bob")
+        let carol = try identity("carol")
+        let current = group(members: [member(alice, name: "Alice"), member(bob, name: "Bob"), member(carol, name: "Carol")], creator: alice, version: 1)
+        // Carol just vanishes — no tombstone — in an update from Bob, who is not the creator.
+        let remote = group(members: [member(alice, name: "Alice"), member(bob, name: "Bob")], creator: alice, version: 2, previousStateHash: current.computeStateHash())
+        XCTAssertThrowsError(try GroupTransitionValidator.validate(current: current, remote: remote, updaterMemberId: bob.memberId)) {
+            XCTAssertEqual($0 as? GroupTransitionRejection, .unauthorizedMemberRemoval)
+        }
+    }
+
+    /// Android parity: the creator may drop a member without a tombstone (that is what every
+    /// pre-tombstone build sent). It is also how a stale creator roster can "remove" someone
+    /// it never heard of — so GroupStateStore refuses such a state when the one dropped is
+    /// *this* device (review F26), rather than the validator refusing it for everyone.
+    func test_acceptsSilentRemovalOnSuccessorByCreator() throws {
         let alice = try identity("alice")
         let bob = try identity("bob")
         let current = group(members: [member(alice, name: "Alice"), member(bob, name: "Bob")], creator: alice, version: 1)
-        // Bob just vanishes — no tombstone recorded.
         let remote = group(members: [member(alice, name: "Alice")], creator: alice, version: 2, previousStateHash: current.computeStateHash())
-        XCTAssertThrowsError(try GroupTransitionValidator.validate(current: current, remote: remote, updaterMemberId: alice.memberId)) {
-            XCTAssertEqual($0 as? GroupTransitionRejection, .unauthorizedMemberRemoval)
-        }
+        XCTAssertNoThrow(try GroupTransitionValidator.validate(current: current, remote: remote, updaterMemberId: alice.memberId))
     }
 
     func test_acceptsUntombstonedGapOnSibling() throws {
