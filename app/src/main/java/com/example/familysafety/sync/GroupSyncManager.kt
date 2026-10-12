@@ -1,6 +1,8 @@
 package com.example.familysafety.sync
 
 import com.example.familysafety.core.ErrorHandler
+import com.example.familysafety.core.RateLimiter
+import com.example.familysafety.core.RateLimiters
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.group.*
 import com.example.familysafety.transport.MqttConfig
@@ -39,6 +41,13 @@ class GroupSyncManager @Inject constructor(
     // can't trip a CME / lose entries.
     private val versionAcks = ConcurrentHashMap<Long, MutableSet<String>>()
     private val lastAbsentRefreshAt = java.util.concurrent.atomic.AtomicLong(0L)
+
+    /**
+     * Caps roster broadcasts sent *in reply* to something received: refresh requests, and
+     * outdated versions. Broadcasts this phone starts itself (an edit, a join) aren't limited.
+     * Replaceable for tests; the app-wide limiter is shared state.
+     */
+    internal var responseLimiter: RateLimiter = RateLimiters.groupSync
 
     sealed class SyncState {
         data object Idle : SyncState()
@@ -275,6 +284,15 @@ class GroupSyncManager @Inject constructor(
                 return
             }
 
+            // The request is unsigned plaintext, so anyone on the broker can send it and name
+            // any requester. Each one made this phone send the whole roster to every member
+            // (F16). One shared limit, not one per named requester, which costs nothing to
+            // forge. A single broadcast reaches every member, so ten a minute is plenty.
+            if (!responseLimiter.allowRequest(RESPONSE_LIMIT_KEY)) {
+                Timber.w("Refresh request from ${request.requesterMemberId.take(8)} dropped: rate limited")
+                return
+            }
+
             Timber.i(
                 "Responding to group refresh request from ${request.requesterMemberId.take(8)} " +
                     "for v${request.minimumVersion}"
@@ -330,7 +348,13 @@ class GroupSyncManager @Inject constructor(
         when {
             syncMessage.version < currentGroup.version -> {
                 Timber.w("Received outdated version")
-                broadcastGroupUpdate(currentGroup, ChangeType.VERSION_SYNC)
+                // Signed, but replayable until envelopes carry a replay window (3.4): one
+                // captured old update, replayed, would trigger a full broadcast each time.
+                if (responseLimiter.allowRequest(RESPONSE_LIMIT_KEY)) {
+                    broadcastGroupUpdate(currentGroup, ChangeType.VERSION_SYNC)
+                } else {
+                    Timber.w("Not answering outdated version: rate limited")
+                }
             }
 
             syncMessage.version == currentGroup.version -> {
@@ -776,6 +800,9 @@ class GroupSyncManager @Inject constructor(
 
 /** At most one "we're missing from your roster" refresh per this long. */
 private const val ABSENT_REFRESH_COOLDOWN_MS = 5 * 60_000L
+
+/** One key for every reply broadcast; see GroupSyncManager.responseLimiter. */
+private const val RESPONSE_LIMIT_KEY = "roster_reply"
 
 @Serializable
 data class GroupSyncMessage(

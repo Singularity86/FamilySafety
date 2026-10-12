@@ -24,6 +24,12 @@ import timber.log.Timber
 class BootRecoveryReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
+        // Only the broadcasts listed above. An explicit intent can reach a receiver whatever
+        // its filter says, so anything else is ignored rather than starting tracking.
+        if (intent.action !in HANDLED_ACTIONS) {
+            Timber.w("BootRecoveryReceiver: ignoring unexpected action ${intent.action}")
+            return
+        }
         val lockedBoot = intent.action == Intent.ACTION_LOCKED_BOOT_COMPLETED
         Timber.i("BootRecoveryReceiver: received ${intent.action}")
         recoverServices(context, lockedBoot)
@@ -72,5 +78,15 @@ class BootRecoveryReceiver : BroadcastReceiver() {
             Timber.w(e, "BootRecoveryReceiver: could not read prefs (direct-boot storage unavailable?)")
             null
         }
+    }
+
+    companion object {
+        internal val HANDLED_ACTIONS = setOf(
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_LOCKED_BOOT_COMPLETED,
+            "android.intent.action.QUICKBOOT_POWERON",
+            "com.htc.intent.action.QUICKBOOT_POWERON",
+            Intent.ACTION_MY_PACKAGE_REPLACED
+        )
     }
 }

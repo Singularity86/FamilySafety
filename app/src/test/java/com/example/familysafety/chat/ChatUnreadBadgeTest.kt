@@ -49,7 +49,7 @@ class ChatUnreadBadgeTest {
         every { gsm.groupDefinition } returns groupDefinition
 
         val repository = ChatRepository(dao, gsm, mockk(relaxed = true), mockk(relaxed = true),
-            mockk(relaxed = true), mockk(relaxed = true))
+            mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true))
 
         repository.observeTotalUnreadCount().test {
             assertEquals(0, awaitItem())

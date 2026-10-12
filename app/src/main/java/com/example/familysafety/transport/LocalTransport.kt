@@ -9,13 +9,14 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import timber.log.Timber
 import java.io.DataInputStream
-import java.io.DataOutputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -87,6 +88,7 @@ class LocalTransport @Inject constructor(
 
     // Outbound TCP connections — keyed by 16-char prefix
     private val connections = ConcurrentHashMap<String, Socket>()
+    private val sendLocks = ConcurrentHashMap<String, Mutex>()
 
     private var serverSocket: ServerSocket? = null
     private var serverPort = 0
@@ -252,7 +254,11 @@ class LocalTransport @Inject constructor(
     suspend fun send(topic: String, payloadString: String, recipientMemberId: String): Boolean {
         val prefix = recipientMemberId.take(LanPeerPolicy.PEER_PREFIX_LENGTH)
         val address = peerAddresses[prefix] ?: return false
-        return withContext(Dispatchers.IO) {
+        // One sender per peer at a time. Two concurrent sends could interleave on the shared
+        // socket — one frame's length header followed by another frame's body — and the
+        // receiver would read garbage until the connection was dropped.
+        val lock = sendLocks.getOrPut(prefix) { Mutex() }
+        return withContext(Dispatchers.IO) { lock.withLock {
             try {
                 val socket = connections[prefix]?.takeUnless { it.isClosed }
                     ?: Socket().apply { connect(address, 3_000) }.also { connections[prefix] = it }
@@ -278,9 +284,13 @@ class LocalTransport @Inject constructor(
                     return@withContext false
                 }
 
-                val out = DataOutputStream(socket.getOutputStream())
-                out.writeInt(bytes.size)
-                out.write(bytes)
+                // Header and body in one write, so the peer never sees a header alone.
+                val frame = java.nio.ByteBuffer.allocate(4 + bytes.size)
+                    .putInt(bytes.size)
+                    .put(bytes)
+                    .array()
+                val out = socket.getOutputStream()
+                out.write(frame)
                 out.flush()
                 Timber.d("LocalTransport sent to ${prefix.take(8)} on $topic")
                 true
@@ -296,7 +306,7 @@ class LocalTransport @Inject constructor(
                 scheduleReResolve(prefix)
                 false
             }
-        }
+        } }
     }
 
     // =========================================================================

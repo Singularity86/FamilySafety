@@ -72,7 +72,8 @@ class ChatRepositoryTest {
             mockE2EEManager,
             mockReplicationManager,
             mockTransportProvider,
-            mockNotificationHelper
+            mockNotificationHelper,
+            mockk(relaxed = true)
         )
     }
 

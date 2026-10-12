@@ -227,8 +227,14 @@ class AvatarRepository @Inject constructor(
                     return@withContext
                 }
 
-                val bytes = conn.inputStream.readBytes()
+                // Capped: this is any device on the same WiFi answering, and readBytes() on an
+                // endless response would run the phone out of memory. Avatars are a few KB.
+                val bytes = conn.inputStream.use { readCapped(it, MAX_AVATAR_BYTES) }
                 conn.disconnect()
+                if (bytes == null) {
+                    Timber.w("AvatarRepository: avatar from $memberId larger than $MAX_AVATAR_BYTES bytes — ignored")
+                    return@withContext
+                }
 
                 // Verify hash to ensure integrity
                 val actualHash = AvatarStore.sha256Hex(bytes)
@@ -261,5 +267,21 @@ class AvatarRepository @Inject constructor(
         if (w <= maxDimension && h <= maxDimension) return bitmap
         val scale = maxDimension.toFloat() / maxOf(w, h)
         return Bitmap.createScaledBitmap(bitmap, (w * scale).toInt(), (h * scale).toInt(), true)
+    }
+
+    companion object {
+        const val MAX_AVATAR_BYTES = 512 * 1024
+
+        /** Up to [limit] bytes of [input], or null if there are more. */
+        internal fun readCapped(input: java.io.InputStream, limit: Int): ByteArray? {
+            val out = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(8 * 1024)
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) return out.toByteArray()
+                if (out.size() + n > limit) return null
+                out.write(buffer, 0, n)
+            }
+        }
     }
 }

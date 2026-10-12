@@ -77,7 +77,6 @@ class SharedFileRepository @Inject constructor(
         private const val CHUNK_SIZE = 32 * 1024           // 32 KB
         private const val GCM_TAG_BITS = 128
         private const val NONCE_BYTES = 12
-        private const val FILE_KEY_SALT = "familysafety-files-v1"
         /**
          * Grid the encrypted manifest is padded to, so its size hides the file count.
          *
@@ -1408,14 +1407,8 @@ class SharedFileRepository @Inject constructor(
      * "this build is too old to read that" into an indistinguishable decryption failure.
      */
     private fun keyForVersion(groupId: String, keyVersion: Int): ByteArray? =
-        when (keyVersion) {
-            FILE_KEY_VERSION_GROUP_SUBKEY ->
-                groupKeyHex()?.let { GroupCipher.deriveSubkey(it, GroupCipher.PURPOSE_FILES) }
-            FILE_KEY_VERSION_GROUP_SECRET -> groupKeyHex()?.hexToBytes()
-            // 0 is a row written before blobKeyVersion existed; it can only be legacy.
-            FILE_KEY_VERSION_LEGACY, 0 -> deriveLegacyFileKey(groupId)
-            else -> null
-        }
+        // Refuses the public legacy key in a family that has a group key; see FileKeys.
+        FileKeys.forVersion(groupId, groupKeyHex(), keyVersion)
 
     private fun groupKeyHex(): String? =
         groupStateManager.groupDefinition.value?.fileEncryptionKey?.takeIf { it.isNotBlank() }
@@ -1428,10 +1421,7 @@ class SharedFileRepository @Inject constructor(
      * group key existed remain readable. Never use for new uploads — both inputs are
      * public, so this provides no confidentiality against a broker observer.
      */
-    private fun deriveLegacyFileKey(groupId: String): ByteArray {
-        val material = (groupId + FILE_KEY_SALT).toByteArray(Charsets.UTF_8)
-        return MessageDigest.getInstance("SHA-256").digest(material)
-    }
+    private fun deriveLegacyFileKey(groupId: String): ByteArray = FileKeys.legacy(groupId)
 
     private fun encrypt(plaintext: ByteArray, key: ByteArray): ByteArray {
         val nonce = ByteArray(NONCE_BYTES).also { java.security.SecureRandom().nextBytes(it) }

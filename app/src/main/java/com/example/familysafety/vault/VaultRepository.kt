@@ -154,7 +154,9 @@ class VaultRepository @Inject constructor(
             .onFailure { Timber.e(it, "$TAG: key derivation failed") }
             .getOrNull() ?: return@withContext null
 
-        val bytes = container.read()
+        val bytes = runCatching { container.read() }
+            .onFailure { Timber.e(it, "$TAG: vault container unreadable") }
+            .getOrNull() ?: return@withContext null
         val items = VaultSlots.openAll(bytes, key)
         VaultSession(key = key, items = items.filter { it.isActive }, reclaimed = items.filterNot { it.isActive })
     }
@@ -404,6 +406,12 @@ class VaultRepository @Inject constructor(
             try {
                 val message = json.decodeFromString<VaultContainerMessage>(String(payload))
                 if (message.version <= currentVersion()) return@launch
+                // Versions are wall-clock based. One stamped far in the future would become
+                // the high-water mark and lock out every genuine update until that date (F29).
+                if (!VaultContainerRules.versionIsPlausible(message.version, System.currentTimeMillis())) {
+                    Timber.w("$TAG: container version ${message.version} is too far in the future — discarding")
+                    return@launch
+                }
                 if (!verify(message)) return@launch
 
                 val bytes = runCatching { Base64.getDecoder().decode(message.data) }.getOrNull()

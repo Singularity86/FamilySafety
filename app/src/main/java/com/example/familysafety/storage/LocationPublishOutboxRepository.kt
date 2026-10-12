@@ -7,6 +7,18 @@ import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** What a flush of queued location fixes sends live. */
+object LocationOutboxPolicy {
+    /**
+     * The newest fix to publish, and every older one to drop. Older fixes stay in location
+     * history and reach members through the replication back-fill instead.
+     */
+    fun split(pending: List<PendingLocationPublishEntity>): Pair<PendingLocationPublishEntity?, List<PendingLocationPublishEntity>> {
+        val newest = pending.maxByOrNull { it.timestamp }
+        return newest to pending.filter { it !== newest }
+    }
+}
+
 @Singleton
 class LocationPublishOutboxRepository @Inject constructor(
     private val pendingLocationPublishDao: PendingLocationPublishDao
