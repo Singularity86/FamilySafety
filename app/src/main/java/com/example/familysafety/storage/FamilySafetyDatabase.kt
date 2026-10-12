@@ -28,9 +28,10 @@ import java.util.Base64
         FileAvailabilityEntity::class,
         FileTransferLogEntity::class,
         PendingLocationPublishEntity::class,
-        VaultBlobEntity::class
+        VaultBlobEntity::class,
+        EmergencyOutboxEntity::class
     ],
-    version = 8,
+    version = 9,
     // Exported so each version's schema is committed as JSON under app/schemas/. That is what
     // makes a migration testable — MigrationTestHelper builds the old schema from the exported
     // file, applies the migration and asserts the result. Without it a migration can only be
@@ -47,6 +48,7 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
     abstract fun fileTransferLogDao(): FileTransferLogDao
     abstract fun pendingLocationPublishDao(): PendingLocationPublishDao
     abstract fun vaultBlobDao(): VaultBlobDao
+    abstract fun emergencyOutboxDao(): EmergencyOutboxDao
 
     companion object {
         private const val DATABASE_NAME = "familysafety_encrypted.db"
@@ -243,6 +245,32 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Crash alerts owed to each family member, retried until that member's phone
+         * confirms delivery. See [EmergencyOutboxEntity]. Additive: a new, empty table.
+         */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `emergency_outbox` (
+                        `alertId` TEXT NOT NULL,
+                        `recipientId` TEXT NOT NULL,
+                        `groupId` TEXT NOT NULL,
+                        `content` TEXT NOT NULL,
+                        `timestamp` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `attemptCount` INTEGER NOT NULL,
+                        `nextAttemptAt` INTEGER NOT NULL,
+                        `lastAttemptAt` INTEGER,
+                        `lastError` TEXT,
+                        `deliveredAt` INTEGER,
+                        PRIMARY KEY(`alertId`, `recipientId`)
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_emergency_outbox_nextAttemptAt ON emergency_outbox(nextAttemptAt)")
+            }
+        }
+
         private fun buildRoomDatabase(context: Context): FamilySafetyDatabase {
             // The retired android-database-sqlcipher artifact loaded its native library
             // implicitly; net.zetetic:sqlcipher-android requires the caller to do it. Without
@@ -263,7 +291,7 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
                 )
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
-                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8
+                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
                 )
                 // Deliberately NOT fallbackToDestructiveMigration(). It used to be here, and
                 // it turns any mistake in a migration into a silent wipe of every user's chat

@@ -73,6 +73,14 @@ object StorageModule {
 
     @Provides
     @Singleton
+    fun provideEmergencyOutboxDao(
+        database: FamilySafetyDatabase
+    ): EmergencyOutboxDao {
+        return database.emergencyOutboxDao()
+    }
+
+    @Provides
+    @Singleton
     fun provideVaultBlobDao(
         database: FamilySafetyDatabase
     ): VaultBlobDao {
