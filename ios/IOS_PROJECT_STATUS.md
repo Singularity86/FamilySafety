@@ -13,15 +13,15 @@ own test runs; nothing here is user-reported unless marked so.
 | 0 — Crypto core | ✅ Done | 7 cross-platform test vectors (libsodium ground truth) |
 | 1 — Models & validation | ✅ Done | Validator re-ported from Android 1.15.3 (memberships, removal proofs); 24 validator tests |
 | 2 — Transport | ✅ Done | Unit tests, plus the live EMQX broker: presence/LWT (two-simulator harness) and, after the wildcard change, `ReconnectHarness` — all phases passed (commit `7da375d`) |
-| 3 — Group sync + join | **Partly done (core library only)** | See below. 104 tests, macOS host and iOS Simulator |
+| 3 — Group sync + join | **Partly done (core library only)** | See below. 114 tests, macOS host and iOS Simulator |
 | 4 — Location & map | Not started | — |
 | 5 — Chat | Not started | — |
 | 6 — Files | Not started | — |
 | 6.5 — Vault | Not started | — |
 | 7 — Polish / App Store prep | Not started | — |
 
-**104 unit tests, 0 failures**, on `swift test` (macOS) and `xcodebuild test -scheme
-FamilySafety-Package` on the iPhone 18 Pro Simulator.
+**114 unit tests, 0 failures**, on `swift test` (macOS) and
+`xcodebuild test -scheme FamilySafety-Package` on the iPhone 18 Pro Simulator.
 
 ## Phase 3 in detail
 
@@ -43,6 +43,15 @@ FamilySafety-Package` on the iPhone 18 Pro Simulator.
 - **Joiner side of joining:** `JoinFlow.makeRequest` (signed `JOIN:v1`, like Android 1.15.1+),
   `JoinFlow.evaluate` (approval/rejection checks ported from `MembershipViewModel`), and
   `JoinCoordinator` (re-publish every 30 s, save then clear retained messages).
+- **Join v2** (Android 2.1, PR #27; spec §8.2–§8.4), in `JoinV2.swift`:
+  - joiner: `JoinFlow.prepare` sends a v2 request for a v2 invite (encrypted to the inviter,
+    signed over `JOIN:v2:…`, HMAC under the invite secret), and a v1 request only for a v1
+    invite from an older inviter. It refuses an expired invite or one whose keys don't hash to
+    `inviterMemberId`, and pins the inviter's X25519 from the QR on the approval and rejection.
+    `JoinFlow.fingerprint` is for the pending screen.
+  - inviter core: `InviteBook` issues one-time 24 h invites (pruned, capped at 20) and
+    `JoinV2Verifier` runs §8.4 step 0's seven checks in order. v1 requests are not accepted.
+  - the §12 vectors (fingerprint 367443, HMAC) pass.
 
 **Review rules built in (iOS-only, wire-compatible):**
 
@@ -54,11 +63,13 @@ FamilySafety-Package` on the iPhone 18 Pro Simulator.
 | Refresh requests answered only for members, rate-limited per requester and overall; stale replays rebroadcast at most once a minute; no refresh on decrypt failure | F16 |
 | Acks recorded, never waited on; inbound handled serially by the engine actor | E5 |
 | The joiner refuses an approval whose roster lists it with different keys | F13 (joiner's half) |
+| Join v2: the joiner pins the inviter's X25519 from the QR, not only the Ed25519 hash | F13 |
 
 **Not done in Phase 3:**
 
-- **Inviter side** (approving someone else's join) — deliberately waiting for join v2
-  (`app/REMEDIATION_PLAN.md` 2.1). Building it on today's protocol would port review F13.
+- **Inviter side, beyond verification:** `RejoinPolicy`, adding the member (`ADD:v2` signature),
+  publishing the approval or rejection, using up the invite, and storing the `InviteBook` in
+  the Keychain (this device only, excluded from backup).
 - **Removal votes** — casting and tallying. Receiving a quorum removal *is* supported:
   the votes ride in the sync message and are verified.
 - **Local edits** — rename, colour, avatar, leave, transfer creator.
