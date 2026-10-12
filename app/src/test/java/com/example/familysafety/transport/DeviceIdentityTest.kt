@@ -13,39 +13,67 @@ class DeviceIdentityTest {
     private val min = 60_000L
 
     @Test
-    fun `two devices for one member within the window are announced`() {
+    fun `two devices online for one member within the window are announced`() {
         val d = CloneDetector()
-        assertFalse(d.observe("alice", "phone-a", 0))
-        assertTrue(d.observe("alice", "phone-b", 5 * min))
+        assertFalse(d.observe("alice", "phone-a", isOnline = true, now = 0))
+        assertTrue(d.observe("alice", "phone-b", isOnline = true, now = 5 * min))
     }
 
     @Test
-    fun `the same device, or a switch after the window, is not`() {
+    fun `A offline (LWT) then B online 3 min later is a reinstall, not a clone`() {
+        // The old install's last-will arrives a few minutes after it dies, then the new
+        // install comes online. Every reinstall or restore looks like this.
         val d = CloneDetector()
-        d.observe("alice", "phone-a", 0)
-        assertFalse(d.observe("alice", "phone-a", 1 * min))
-        // Old phone silent for over ten minutes, then a new one: a switch, not a clone.
-        assertFalse(d.observe("alice", "phone-b", 30 * min))
+        d.observe("alice", "phone-a", isOnline = true, now = 0)
+        assertFalse(d.observe("alice", "phone-a", isOnline = false, now = 3 * min))
+        assertFalse(d.observe("alice", "phone-b", isOnline = true, now = 6 * min))
+    }
+
+    @Test
+    fun `another device's offline proves nothing and is ignored`() {
+        val d = CloneDetector()
+        d.observe("alice", "phone-a", isOnline = true, now = 0)
+        // A stale offline from some other install doesn't end A's sighting...
+        assertFalse(d.observe("alice", "phone-z", isOnline = false, now = 1 * min))
+        // ...so a second device appearing online is still caught.
+        assertTrue(d.observe("alice", "phone-b", isOnline = true, now = 2 * min))
+    }
+
+    @Test
+    fun `the same device, or a switch after the window, is not announced`() {
+        val d = CloneDetector()
+        d.observe("alice", "phone-a", isOnline = true, now = 0)
+        assertFalse(d.observe("alice", "phone-a", isOnline = true, now = 1 * min))
+        // Not heard from for over ten minutes, then a new one: a switch, not a clone.
+        assertFalse(d.observe("alice", "phone-b", isOnline = true, now = 30 * min))
     }
 
     @Test
     fun `alternating devices are announced once per cooldown`() {
         val d = CloneDetector()
-        d.observe("alice", "a", 0)
-        assertTrue(d.observe("alice", "b", 1 * min))
-        assertFalse(d.observe("alice", "a", 2 * min))
-        assertFalse(d.observe("alice", "b", 3 * min))
+        d.observe("alice", "a", true, 0)
+        assertTrue(d.observe("alice", "b", true, 1 * min))
+        assertFalse(d.observe("alice", "a", true, 2 * min))
+        assertFalse(d.observe("alice", "b", true, 3 * min))
         // After the cooldown, a fresh overlap is announced again.
         val later = CloneDetector.COOLDOWN_MS + 10 * min
-        d.observe("alice", "a", later)
-        assertTrue(d.observe("alice", "b", later + 1 * min))
+        d.observe("alice", "a", true, later)
+        assertTrue(d.observe("alice", "b", true, later + 1 * min))
     }
 
     @Test
     fun `members are tracked separately`() {
         val d = CloneDetector()
-        d.observe("alice", "a", 0)
-        assertFalse(d.observe("bob", "b", 1 * min))
+        d.observe("alice", "a", true, 0)
+        assertFalse(d.observe("bob", "b", true, 1 * min))
+    }
+
+    @Test
+    fun `own topic warns only about another install that is online`() {
+        // A restored phone finds its previous install's retained offline on its own topic.
+        assertFalse(CloneDetector.ownPresenceIsAnotherDevice(isOnline = false, deviceId = "old", myDeviceId = "me"))
+        assertFalse(CloneDetector.ownPresenceIsAnotherDevice(isOnline = true, deviceId = "me", myDeviceId = "me"))
+        assertTrue(CloneDetector.ownPresenceIsAnotherDevice(isOnline = true, deviceId = "other", myDeviceId = "me"))
     }
 
     @Test

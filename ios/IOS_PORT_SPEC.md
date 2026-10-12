@@ -437,6 +437,8 @@ a family member. Presence now names the install it came from:
 
 - `deviceId`: 16 random bytes as 32 lowercase hex, generated once per install, kept in app
   storage and **excluded from backup and device transfer** (a copied phone must not share it).
+  iOS: Keychain, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` (survives a reinstall on
+  the same phone, which only means fewer ID changes).
 - `deviceSignature`: Ed25519 by the member's identity key, lowercase hex, over
   `presence-device:v1:{memberId}:{timestamp}:{deviceId}` (UTF-8), using the same `timestamp`
   as the presence. Separate from `signature` so the shipped presence signing string stays
@@ -449,15 +451,21 @@ Receivers, after the existing presence checks pass:
 
 1. Use `deviceId` only if `deviceSignature` verifies under that member's Ed25519 key;
    otherwise ignore it for detection (presence still applies).
-2. Keep, per member, the last verified `deviceId` and the **local receive time**. Use local time,
-   not the sender's `timestamp`, so clock skew can't hide or fake an overlap.
-3. A different `deviceId` within **10 minutes** of the previous one is two phones at once:
-   notify locally, *"{name} is signed in on another phone"*. At most once per member per
-   **6 hours**. A different ID after a longer gap is a change of phone, and nothing is shown.
-4. **Your own topic too.** Presence on `familysafe/{me}/presence` with a valid device signature
-   under your own key and a `deviceId` that isn't yours means your identity is in use
-   elsewhere: *"Your account is signed in on another phone"*, with the same 6-hour cap. (Your
-   own retained presence comes back to you with your own ID; ignore that.)
+2. Keep, per member, the last verified `deviceId`, whether it was **online**, and the **local
+   receive time**. Use local time, not the sender's `timestamp`, so clock skew can't hide or fake
+   an overlap. An **offline** from the device you're tracking marks it offline. An offline from
+   any *other* device proves nothing about overlap: record nothing.
+3. Alert only on an **online** sighting of a different `deviceId` while the tracked device's last
+   state is **online** and it was seen within **10 minutes**: two phones running at once. Notify
+   locally, *"{name} is signed in on another phone"*, at most once per member per **6 hours**.
+   Anything else is a change of phone and shows nothing. This matters for the common case:
+   after a reinstall or a restore, the old install's last-will offline arrives about 3 minutes
+   after it dies, then the new install comes online. That's a switch, not a clone.
+4. **Your own topic too.** Presence on `familysafe/{me}/presence` that is **online**, has a valid
+   device signature under your own key, and has a `deviceId` that isn't yours means your
+   identity is in use elsewhere: *"Your account is signed in on another phone"*, with the same
+   6-hour cap. Ignore your own ID, and ignore any offline. A restored phone finds its previous
+   install's retained offline there.
 
 An inviter that auto-approves a restored member (§8.4.1) also notifies locally, *"{name} was
 restored on a new phone"*.

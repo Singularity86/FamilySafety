@@ -1032,7 +1032,7 @@ class MqttTransport @Inject constructor(
         }
         if (update.memberId != myId) return
         val deviceId = verifiedDeviceId(update, cryptoProvider.getLocalEd25519PublicKey()) ?: return
-        if (deviceId == DeviceIdentity.get(context)) return
+        if (!CloneDetector.ownPresenceIsAnotherDevice(update.isOnline, deviceId, DeviceIdentity.get(context))) return
 
         val now = System.currentTimeMillis()
         val last = lastSelfCloneAlertAt.get()
@@ -1070,7 +1070,7 @@ class MqttTransport @Inject constructor(
 
         familyMemberKeys[senderId]?.ed25519PublicKey?.let { key ->
             verifiedDeviceId(presenceUpdate, key)?.let { deviceId ->
-                if (cloneDetector.observe(senderId, deviceId, System.currentTimeMillis())) {
+                if (cloneDetector.observe(senderId, deviceId, presenceUpdate.isOnline, System.currentTimeMillis())) {
                     val name = groupStateManager.groupDefinition.value
                         ?.findMemberById(senderId)?.displayName ?: senderId.take(8)
                     Timber.w("$TAG: ${senderId.take(8)} is publishing from two devices")
