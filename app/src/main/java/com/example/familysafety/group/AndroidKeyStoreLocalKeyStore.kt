@@ -2,13 +2,13 @@ package com.example.familysafety.group
 
 import android.content.Context
 import android.content.SharedPreferences
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
+import com.example.familysafety.storage.AndroidEncryptedPrefsBackend
+import com.example.familysafety.storage.DedicatedEncryptedPrefs
+import com.example.familysafety.storage.StorageUnavailableException
 import com.goterl.lazysodium.LazySodiumAndroid
 import com.goterl.lazysodium.SodiumAndroid
 import timber.log.Timber
 import java.io.File
-import java.security.GeneralSecurityException
 import java.security.KeyStore
 
 /**
@@ -29,8 +29,25 @@ class AndroidKeyStoreLocalKeyStore(
 ) : LocalKeyStore {
 
     companion object {
-        private const val PREFS_NAME = "familysafe_keys"
-        private const val KEYSTORE_ALIAS = "familysafe_key_encryption_key"
+        private const val PREFS_NAME = "familysafe_keys_v2"
+        private const val LEGACY_PREFS_NAME = "familysafe_keys"
+        private const val KEYSTORE_ALIAS = "familysafe_identity_master"
+        private const val STORE = "Identity"
+
+        /**
+         * Delete the identity store and its Keystore key. Only for the reset the user confirms
+         * with their recovery phrase on the storage-unavailable screen, which re-creates the
+         * identity from that phrase straight afterwards.
+         */
+        fun resetUnreadableStorage(context: Context) {
+            runCatching { context.deleteSharedPreferences(PREFS_NAME) }
+            runCatching { context.deleteSharedPreferences(LEGACY_PREFS_NAME) }
+            runCatching {
+                val keyStore = KeyStore.getInstance("AndroidKeyStore")
+                keyStore.load(null)
+                if (keyStore.containsAlias(KEYSTORE_ALIAS)) keyStore.deleteEntry(KEYSTORE_ALIAS)
+            }
+        }
 
         // SharedPreferences keys - storing SEEDS not full keys
         private const val KEY_ED25519_SEED = "ed25519_seed"
@@ -44,66 +61,30 @@ class AndroidKeyStoreLocalKeyStore(
 
     private val sodium = LazySodiumAndroid(SodiumAndroid())
 
+    // Not cached on failure (lazy retries its initializer), so a transient Keystore error
+    // clears on its own once the Keystore answers again.
+    //
+    // This used to catch GeneralSecurityException, delete the file, the shared default
+    // Keystore alias and the onboarding flag, and start over: one transient failure silently
+    // cost the user their identity and recovery phrase, and through the shared alias, the
+    // database. Now a failure is reported, and nothing is deleted without the user's say-so.
     private val encryptedPrefs: SharedPreferences by lazy {
-        createEncryptedPrefs()
+        DedicatedEncryptedPrefs.open(
+            backend = AndroidEncryptedPrefsBackend(context),
+            store = STORE,
+            name = PREFS_NAME,
+            keyAlias = KEYSTORE_ALIAS,
+            legacyName = LEGACY_PREFS_NAME
+        )
     }
 
-    private fun createEncryptedPrefs(): SharedPreferences {
-        return try {
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            EncryptedSharedPreferences.create(
-                context,
-                PREFS_NAME,
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-        } catch (e: GeneralSecurityException) {
-            // Keyset is corrupted or encrypted with a key that no longer exists
-            // (common after reinstall with cloud-restored SharedPreferences, or key rotation).
-            // The stored keys are unrecoverable — wipe and start fresh so the app can launch.
-            clearCorruptedKeyStorage()
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            EncryptedSharedPreferences.create(
-                context,
-                PREFS_NAME,
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-        }
-    }
-
-    private fun clearCorruptedKeyStorage() {
-        // Clear the SharedPreferences XML file (holds the encrypted Tink keyset)
-        try { context.deleteSharedPreferences(PREFS_NAME) } catch (_: Exception) {}
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().commit()
-        File(context.dataDir, "shared_prefs/$PREFS_NAME.xml").delete()
-
-        try {
-            // Delete possible master-key aliases from AndroidKeyStore so a fresh key is generated.
-            val keyStore = KeyStore.getInstance("AndroidKeyStore")
-            keyStore.load(null)
-            listOf(MasterKey.DEFAULT_MASTER_KEY_ALIAS, KEYSTORE_ALIAS).forEach { alias ->
-                if (keyStore.containsAlias(alias)) {
-                    keyStore.deleteEntry(alias)
-                }
-            }
-        } catch (_: Exception) {
-            // Best-effort cleanup. Recreating EncryptedSharedPreferences below will surface
-            // any unrecoverable platform failure.
-        }
-
-        // If keys are gone, onboarding must be recalculated on next launch. commit(),
-        // because "next launch" may well be a restart that kills this process first.
-        context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)
-            .edit()
-            .remove("onboarding_complete")
-            .commit()
+    /** A read that fails to decrypt is the store being unavailable, not the value being absent. */
+    private inline fun <T> read(block: () -> T): T = try {
+        block()
+    } catch (e: StorageUnavailableException) {
+        throw e
+    } catch (e: Exception) {
+        throw StorageUnavailableException(STORE, e)
     }
 
     // Cached keys (loaded once from encrypted storage)
@@ -116,8 +97,8 @@ class AndroidKeyStoreLocalKeyStore(
     // LocalKeyStore Interface Implementation
     // =========================================================================
 
-    override fun isInitialized(): Boolean {
-        return encryptedPrefs.getBoolean(KEY_INITIALIZED, false)
+    override fun isInitialized(): Boolean = read {
+        encryptedPrefs.getBoolean(KEY_INITIALIZED, false)
     }
 
     override fun initializeFromSeed(seed: ByteArray, accountIndex: Int) {
@@ -205,7 +186,7 @@ class AndroidKeyStoreLocalKeyStore(
     }
 
     private fun loadKey(name: String): ByteArray {
-        val hex = encryptedPrefs.getString(name, null)
+        val hex = read { encryptedPrefs.getString(name, null) }
             ?: throw IllegalStateException("Key $name not found in storage")
         return hex.hexToByteArray()
     }
@@ -234,7 +215,7 @@ class AndroidKeyStoreLocalKeyStore(
      * saved (e.g. the user set up the account before this feature was added).
      */
     fun getMnemonic(): List<String>? {
-        val raw = encryptedPrefs.getString(KEY_MNEMONIC, null) ?: return null
+        val raw = read { encryptedPrefs.getString(KEY_MNEMONIC, null) } ?: return null
         return raw.split(" ").filter { it.isNotBlank() }
     }
 
@@ -272,12 +253,14 @@ class AndroidKeyStoreLocalKeyStore(
         //
         // If the normal clear did not take, delete the backing file outright. The keys are
         // meant to be unrecoverable at this point, so there is nothing to preserve.
-        if (!cleared || isInitialized()) {
+        if (!cleared || runCatching { isInitialized() }.getOrDefault(true)) {
             Timber.w("destroyKeys: clear did not take, deleting the keystore file")
             runCatching { context.deleteSharedPreferences(PREFS_NAME) }
             runCatching { File(context.dataDir, "shared_prefs/$PREFS_NAME.xml").delete() }
             runCatching { deleteKeystoreKey() }
         }
+        // An install that never opened the store since the move may still hold the old file.
+        runCatching { context.deleteSharedPreferences(LEGACY_PREFS_NAME) }
     }
 
     /**

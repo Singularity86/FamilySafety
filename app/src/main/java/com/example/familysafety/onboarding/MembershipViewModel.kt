@@ -5,9 +5,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.group.AndroidKeyStoreLocalKeyStore
+import com.example.familysafety.group.Bip39
 import com.example.familysafety.group.EncryptedGroupStatePersistence
+import com.example.familysafety.group.FamilySafeKeyDerivation
 import com.example.familysafety.group.GroupDefinition
+import com.example.familysafety.group.GroupTransitionValidator
 import com.example.familysafety.group.MembershipState
+import com.example.familysafety.storage.FamilySafetyDatabase
+import com.example.familysafety.storage.StorageArea
+import com.example.familysafety.storage.StorageHealth
 import com.example.familysafety.invite.JoinApprovalMessage
 import com.example.familysafety.invite.JoinApprovalValidator
 import com.example.familysafety.invite.JoinRejectionMessage
@@ -28,6 +34,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -66,6 +73,18 @@ class MembershipViewModel @Inject constructor(
 
     private fun readInitialState(): MembershipState {
         if (prefs.getBoolean(KEY_ONBOARDING_COMPLETE, false)) {
+            // A throw is NOT an answer. It means a store could not be read, which is a
+            // different thing from there being nothing in it. This used to send the user to
+            // the welcome screen, where the obvious action is "Create New Family": a fresh
+            // identity, abandoning the real one along with the family, its history and a
+            // recovery phrase the user still believes works. Keep the flag and say what is
+            // wrong instead.
+            //
+            // Blocking, like the keystore read it extends: this decides the first screen.
+            val unreadable = runBlocking { StorageHealth.unreadableStores(context) }
+            if (unreadable.isNotEmpty()) {
+                return MembershipState.StorageUnavailable(unreadable)
+            }
             return try {
                 if (AndroidKeyStoreLocalKeyStore(context).isInitialized()) {
                     MembershipState.Approved
@@ -77,22 +96,8 @@ class MembershipViewModel @Inject constructor(
                     MembershipState.Unauthenticated
                 }
             } catch (e: Exception) {
-                // A throw is NOT an answer. It means we could not read the keystore, which is
-                // a different thing from there being nothing in it — and the two used to be
-                // treated identically, deleting the flag either way.
-                //
-                // Hardening, not a fix for an observed failure: no case of this has been seen.
-                // It matters because of what follows from it. A device with a perfectly good
-                // identity would land on the welcome screen, where the obvious action is
-                // "Create New Family" — generating a fresh identity and abandoning the real
-                // one, along with the group, its history, and a recovery phrase the user still
-                // believes works. A momentary read error should not be able to cost that.
-                //
-                // Keep the flag. Show onboarding for this launch only, so the next start can
-                // recover on its own. A clean `false` above still clears it, so leaving the
-                // family behaves exactly as before.
                 Timber.e(e, "Could not read the keystore; keeping onboarding flag for retry")
-                MembershipState.Unauthenticated
+                MembershipState.StorageUnavailable(listOf(StorageArea.IDENTITY))
             }
         }
         val familyName = prefs.getString(KEY_PENDING_FAMILY_NAME, null)
@@ -141,6 +146,74 @@ class MembershipViewModel @Inject constructor(
     /** Called from RejectedScreen once the user has seen the notice. */
     fun acknowledgeRejection() {
         _membershipState.value = MembershipState.Unauthenticated
+    }
+
+    sealed class StorageResetResult {
+        /** Done (or no longer needed); restart to pick it up. */
+        data object Done : StorageResetResult()
+        data object InvalidPhrase : StorageResetResult()
+        /** A valid phrase, but not this phone's. */
+        data object WrongPhrase : StorageResetResult()
+        data class Failed(val message: String) : StorageResetResult()
+    }
+
+    /**
+     * Erase the stores that can't be read and set them up again, once the user has proved
+     * with their recovery phrase that they can.
+     *
+     * The phrase is checked against whatever can still be read (the stored public key, or
+     * membership of the stored family) so a phrase for some other identity can't replace
+     * this one. Readable stores are left alone. If the family is gone or was never readable,
+     * onboarding runs after the restart and the user rejoins with the same phrase.
+     */
+    suspend fun resetUnreadableStorage(phrase: String): StorageResetResult = withContext(Dispatchers.IO) {
+        try {
+            val words = phrase.trim().lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
+            val mnemonic = words.joinToString(" ")
+            Bip39.initialize(context)
+            if (!Bip39.validateMnemonic(mnemonic)) return@withContext StorageResetResult.InvalidPhrase
+
+            val unreadable = StorageHealth.unreadableStores(context)
+            if (unreadable.isEmpty()) return@withContext StorageResetResult.Done
+
+            val seed = Bip39.mnemonicToSeed(mnemonic)
+            val derivedPublicKey = FamilySafeKeyDerivation(seed.copyOf())
+                .deriveKeysForAccount(0).signingKeyPair.publicKey
+            val derivedMemberId = GroupTransitionValidator.deriveMemberIdFromKey(
+                derivedPublicKey.joinToString("") { "%02x".format(it) }
+            )
+
+            if (StorageArea.IDENTITY !in unreadable) {
+                val storedPublicKey = AndroidKeyStoreLocalKeyStore(context).getEd25519PublicKey()
+                if (!storedPublicKey.contentEquals(derivedPublicKey)) {
+                    return@withContext StorageResetResult.WrongPhrase
+                }
+            }
+            val family = if (StorageArea.FAMILY !in unreadable) {
+                EncryptedGroupStatePersistence.getInstance(context).loadGroupDefinition()
+            } else null
+            if (family != null && family.findMemberById(derivedMemberId) == null) {
+                return@withContext StorageResetResult.WrongPhrase
+            }
+
+            if (StorageArea.IDENTITY in unreadable) AndroidKeyStoreLocalKeyStore.resetUnreadableStorage(context)
+            if (StorageArea.DATABASE in unreadable) FamilySafetyDatabase.resetUnreadableStorage(context)
+            if (StorageArea.FAMILY in unreadable) EncryptedGroupStatePersistence.resetUnreadableStorage(context)
+
+            if (StorageArea.IDENTITY in unreadable) {
+                val keyStore = AndroidKeyStoreLocalKeyStore(context)
+                keyStore.initializeFromSeed(seed, accountIndex = 0)
+                keyStore.storeMnemonic(words)
+            }
+            if (family == null) {
+                prefs.edit().remove(KEY_ONBOARDING_COMPLETE).commit()
+            }
+            Timber.w("Storage reset with recovery phrase: $unreadable")
+            StorageResetResult.Done
+        } catch (e: Exception) {
+            Timber.e(e, "Storage reset failed")
+            StorageResetResult.Failed(e.message ?: "unknown error")
+        }
     }
 
     private fun clearPendingPrefs() {
