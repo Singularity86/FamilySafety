@@ -247,6 +247,11 @@ JSON (field order irrelevant; decode must ignore unknown keys):
 2. **Verify signature first** against the roster's Ed25519 key for that sender; reject on failure.
 3. Compute the same `shared` with the roster's X25519 key; `crypto_secretbox_open_easy`.
 
+If you cache shared secrets, key the cache by **(memberId, peer X25519 key)**, never by the
+envelope's unauthenticated `senderMemberId` alone. Otherwise an envelope that names an existing
+member but carries someone else's key poisons that member's entry (Android PR #29; iOS
+`SodiumCrypto` already does this).
+
 The same envelope also wraps the join approval/rejection payloads, where the sender is not
 yet in a roster — there the sender's keys arrive alongside and are authenticated by hashing
 against the QR invite's `inviterMemberId` (§8.4).
@@ -342,7 +347,7 @@ presence publishes, which are QoS 0 (§4). The presence last-will stays QoS 1.
 | `familysafe/{id}/group_sync` | Envelope of `GroupSyncMessage` | ✅ per-recipient | no |
 | `familysafe/group/{groupId}/ack` | plaintext `GroupUpdateAck` | ❌ | no |
 | `familysafe/{id}/sync_request` | plaintext `GroupStateRefreshRequest` | ❌ | no |
-| `familysafe/{id}/removal_vote` | Envelope of `RemovalVoteMessage` (§6.4, §7.5) | ✅ per-recipient | **yes** (never cleared; see §7.5 caveats) |
+| `familysafe/{id}/removal_vote` | Envelope of `RemovalVoteMessage` (§6.4, §7.5) | ✅ per-recipient | **yes** (cleared by the recipient once applied; see §7.5 caveats) |
 | `familysafe/{inviterId}/join_request` | plaintext `JoinRequest` | ❌ (contains only public data) | **yes** (cleared after decision) |
 | `familysafe/{joinerId}/join_approval` | plaintext `JoinApprovalMessage` **or** `JoinRejectionMessage` (each carries an inner Envelope) | inner ✅ | **yes** (joiner clears once consumed — §8.3) |
 | `familysafe/{id}/replication/request` | Envelope of `ReplicationRequest` | ✅ | no |
@@ -428,6 +433,12 @@ padding is a bandwidth trade rather than a free win).
   "signature": "<hex128chars>", "protocolVersion": 2,
   "deviceId": "<32 hex>", "deviceSignature": "<hex128chars>" }   // PresenceUpdate
 ```
+
+**Receivers drop a `LocationUpdate` whose `memberId` ≠ the authenticated sender** (the
+member whose signature verified when the envelope was decrypted). Otherwise any member could
+move anyone else's pin. Senders already put their own id there, so this breaks no conforming
+peer. Android enforces it since PR #19 (F23). This covers live
+location only; replicated location history is covered by author signatures (Android 3.2, F24).
 
 #### Device identity (remediation 2.2, F15)
 
@@ -599,6 +610,26 @@ published plaintext + retained on **own** presence topic.
 Receipt handling must reject receipts for message IDs that were never addressed to the
 receipt's sender (anti-forgery, see ChatRepository).
 
+**Receipt a duplicate (since Android 1.5, F27).** When a chat message arrives whose `messageId`
+you already hold, don't drop it silently. Send a `DELIVERED` receipt for it to the sender again,
+on the normal receipt path. A sender that is retrying cannot otherwise tell "lost receipt" from
+"never arrived". Older Android peers drop duplicates silently, and against them the sender
+retries until its cap.
+
+**Emergency (crash) alerts** are ordinary group chat messages: the same payload, topic and QoS,
+with no priority flag on the wire. What differs is the sender's obligation:
+- Store one copy per member durably *before* the first send, and keep sending after the alert
+  screen closes, after the process dies and after the device restarts.
+- Every resend reuses the original `messageId` and `timestamp`, so receivers keep one copy.
+- A member's copy is done when a `DELIVERED` or `READ` receipt for that `messageId` arrives in
+  an envelope signed by that member, with `recipientId` equal to them. One member's receipt
+  never settles another's copy.
+- Resend schedule per member: immediately, +15 s, +30 s, then every 60 s, and also at once on
+  every reconnect. Give up 24 h after the alert was raised. Drop members who have left.
+- Show per-member status: **Sending…** (no attempt yet), **Waiting for their phone** (sent, no
+  receipt, within 24 h), **Received** (signed DELIVERED or READ), **Not reached** (24 h passed
+  without a receipt), **Left the family** (left while the alert was out; no more resends).
+
 ### 6.4 Group sync
 ```json
 // GroupSyncMessage (plaintext inside per-recipient envelope)
@@ -623,6 +654,11 @@ receipt's sender (anti-forgery, see ChatRepository).
 { "groupId": "...", "requesterMemberId": "...", "minimumVersion": 0,
   "changedMemberId": null, "reason": "...", "timestamp": 0 }
 ```
+**Replies are rate-limited (since Android PR #25, F16).** A peer MAY rate-limit the roster
+broadcasts it sends in reply to refresh requests or to stale versions (Android: 10 per minute
+in total). The limit must be global, never keyed only by `requesterMemberId`, which is unsigned.
+Requesters must not assume one reply per request. A broadcast a phone starts for itself is
+never limited.
 
 ### 6.5 GroupDefinition / FamilyMember
 ```json
@@ -719,6 +755,13 @@ two non-empty parts, else null (group chat).
   if `mayShare(conv, us)` and `mayShare(conv, sender)`. Refuse a request for a conversation the
   requester may not hold. Filter received `messages` the same way (both us and sender).
 - Never send a backup copy of a private message to third parties.
+- **No push replication.** A `ReplicationResponse` is only ever an answer to a
+  `ReplicationRequest`. Never push one unsolicited, whether to back up a message you sent or to
+  re-broadcast one you received: in a family of N, that multiplied each message into N² publishes.
+  Gaps are filled only by announce → request → response. Android stopped pushing in PR #20 (E1).
+  Older Android peers still push single messages
+  with `requestId` `"realtime-…"`. Accept those under the filtering rules above and dedupe by
+  `messageId`.
 - Request sources: location history -> only `targetMemberId` if it is a peer, else all peers;
   chat -> the other participant for a private conversation, else all peers. Do not issue a request
   while an unexpired one for the same (dataType, target, conversation) is outstanding.
@@ -774,7 +817,16 @@ both.
 |---|---|---|
 | 1 (default when field absent) | `SHA-256(groupId + "familysafety-files-v1")` | Legacy. Both inputs are public — the salt is a constant in the binary and the groupId appears in the topic name — so this provides **no confidentiality against anyone who can reach the broker**. Implement for read compatibility only. |
 | 2 | `GroupDefinition.fileEncryptionKey`, hex-decoded to 32 bytes | Random per group, distributed only inside the encrypted group definition. **What Android publishes today.** |
-| 3 | `SHA-256(fileEncryptionKey ‖ "files")` — the §6.2 subkey derivation with purpose `files` | Purpose separation, so recovering a file key does not also yield presence. **Android has written this since 1.13.2 (32); the reader shipped in 1.13.0 (29).** New uploads use version 3 whenever a group key exists. Android 1.12.10 and earlier map an unrecognised version to the legacy key, fail GCM authentication and drop the chunk, so files simply stop arriving for anyone on those builds. The flip is not reversible for files already published under it. **Read 1, 2 and 3 forever; write 3.** |
+| 3 | `SHA-256(fileEncryptionKey ‖ "files")` — the §6.2 subkey derivation with purpose `files` | Purpose separation, so recovering a file key does not also yield presence. **Android has written this since 1.13.2 (32); the reader shipped in 1.13.0 (29).** New uploads use version 3 whenever a group key exists. Android 1.12.10 and earlier map an unrecognised version to the legacy key, fail GCM authentication and drop the chunk, so files simply stop arriving for anyone on those builds. The flip is not reversible for files already published under it. **Write 3.** Which versions to read depends on the family (below). |
+
+**Which versions a receiver accepts (since Android PR #24, F22).** In a family whose
+`GroupDefinition` has a `fileEncryptionKey`, receivers **MUST refuse `keyVersion` 1** for chunks,
+manifests and file messages alike. Its key is public, so accepting it lets anyone on the broker
+plant files in a keyed family. Versions 2 and 3 **MUST** stay readable: files from 1.12.0–1.13.1
+still circulate as version 2, because stored ciphertext is re-served verbatim, and only members
+hold that key. Any other version is refused. A family with no group key (created before
+1.12.0) reads version 1 only. Vector: the legacy key for groupId `group_123` is
+`SHA-256("group_123familysafety-files-v1")`.
 
 Rules for an implementation:
 
@@ -1062,6 +1114,12 @@ Retained, versioned, signed, on rules identical to the file manifest:
   family's vault with random bytes, which is indistinguishable from erasing it.
 - **Ignore any version at or below the highest already seen**, and refuse anything that is not
   exactly 131072 bytes.
+- **Refuse a version more than 24 h in the future** (`version > now + 86_400_000`, since
+  Android PR #26, F29). Versions are wall-clock milliseconds and the high-water mark is
+  persisted. One signed container stamped far in the future, by a member with a wrong clock or
+  by a malicious one, would otherwise freeze the vault until that time arrived.
+- On the device, **never replace an unreadable container with a fresh one**: fail and retry.
+  Write by atomic replace, never delete-then-write (F31).
 - **Persist that high-water mark** (since 1.13.0, F8). Versions are wall-clock milliseconds, so
   every container ever published outranks a mark that resets to zero on launch; keeping it in
   memory let a captured, genuinely signed old container overwrite a device's vault after any
@@ -1286,8 +1344,12 @@ unchanged for siblings.
 - `version == local + 1` → validate (§7.3), apply, ack; if `MEMBER_ADDED`, also fire a
   `GroupStateRefreshRequest` so laggards catch up.
 - `version > local + 1` → flag conflict state, still validate & apply.
-- If the local member is absent from an accepted new roster → emit **RemovedFromGroup**
-  (wipe group state, return to onboarding).
+- **Absence is not removal (since Android PR #28, F26).** A roster that omits the local member
+  is a removal **only** if its `removedMemberIds` contains the tombstone for the local member's
+  *current* membership (`Tombstones.key(self)`, joinEpoch-aware, §6.5). Then emit
+  **RemovedFromGroup** (wipe group state, return to onboarding). Otherwise it's a stale or
+  partial roster: keep the current state, emit nothing, and send a `GroupStateRefreshRequest`
+  (Android: at most one per 5 min).
 - After broadcasting an update, wait up to **30 s** (poll 500 ms) for acks from
   `memberCount − 1` peers before reporting synced.
 
@@ -1401,8 +1463,10 @@ Caveats an implementer should know, taken from how Android behaves rather than d
   through refresh requests, which any peer at or past the needed version answers.
 - The `removal_vote` topic is retained, but the broker keeps **one retained message per
   topic**, so a later vote to the same inbox displaces an earlier one. Correctness rests on
-  QoS 1 persistent-session delivery, not on the retained copy, and Android never clears them.
-  Expect residual retained votes on the broker.
+  QoS 1 persistent-session delivery, not on the retained copy. **Since Android PR #33 (F33)**,
+  each phone clears the retained vote on its own `removal_vote` topic (empty retained publish)
+  once it has applied the removal. Older builds never clear them, so expect some residual
+  retained votes on the broker.
 - No cross-platform test vector exists yet for the `REMOVE_QUORUM` signature or the successor
   choice. Generate one from Android (`GroupTransitionValidatorTest` and `GroupStateMergeTest`
   cover the rules) and add it to §12 before shipping this on iOS.
@@ -1431,7 +1495,8 @@ the codebase but is *not* what the current invite path emits — match the map f
    extract `groupId`, `inviterMemberId`. Pasted codes routinely arrive with a trailing newline
    or line-wrapped by the messaging app, and a strict decoder rejects a perfectly good code.
 2. Generate own mnemonic/keys (`requesterId = own memberId`).
-3. Ephemeral MQTT client (`familysafe_join_{id8}_{ts}`, cleanSession=false):
+3. Ephemeral MQTT client (`familysafe_join_{id8}_{ts}`, **cleanSession=true** since Android
+   PR #33; it was false, which left an orphaned session on the broker for every join attempt):
    subscribe `familysafe/{self}/join_approval`, then publish **retained** plaintext
    `JoinRequest` to `familysafe/{inviterMemberId}/join_request`, disconnect.
 ```json

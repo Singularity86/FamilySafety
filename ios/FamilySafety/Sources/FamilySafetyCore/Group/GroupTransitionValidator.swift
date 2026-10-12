@@ -1,24 +1,22 @@
 import Foundation
 
-/// Why a remote `GroupDefinition` was rejected. Mirrors the reasons enumerated in
-/// IOS_PORT_SPEC.md §7.3 (plus the §7.5 creator-transfer/quorum-removal authorization
-/// that §7.3 itself defers to).
+/// Why a remote `GroupDefinition` was rejected. Mirrors the reasons returned by
+/// GroupTransitionValidator.check on Android (IOS_PORT_SPEC.md §7.3, §7.5).
 public enum GroupTransitionRejection: Error, Equatable {
     case immutableFieldChanged
     case updaterNotInRoster
     case chainMismatch
+    case membershipChangedWithoutRemoval
     case memberKeyRotation
     case addedMemberIdMismatch
-    case unauthorizedMemberRemoval
-    case tombstoneDropped
     case memberBothPresentAndRemoved
+    case unauthorizedMemberRemoval
     case unauthorizedNewTombstone
-    case unauthorizedRename
     case unauthorizedCreatorChange
+    case unauthorizedRename
 }
 
-/// One already-collected vote toward a quorum removal (§7.5). The signature is verified
-/// inside `GroupTransitionValidator`, not by the caller.
+/// One already-collected vote toward a quorum removal (§7.5).
 public struct QuorumVote {
     public let voterMemberId: String
     public let signatureHex: String
@@ -28,27 +26,27 @@ public struct QuorumVote {
     }
 }
 
-/// Ports GroupTransitionValidator.kt (§7.3). Apply before accepting ANY remote
-/// `GroupDefinition` — both a successor (`remote.version == current.version + 1`) and a
-/// sibling (`remote.version == current.version`, a concurrent edit per §7.4) go through
-/// this same entry point, since only two of the rules below differ between the two cases.
+/// Ports GroupTransitionValidator.kt as of Android 1.15.3 (§7.3) line for line. Signatures
+/// are verified *before* this runs — by `verifiedQuorumVoters` and
+/// `verifiedRemovalAuthorizers` below, exactly as GroupSyncManager does on Android — so the
+/// rules here only ever see member IDs that have already proven themselves.
 public enum GroupTransitionValidator {
 
     /// - Parameters:
-    ///   - quorumVotes: verified-elsewhere-collected votes authorizing each of this
-    ///     remote's *new* tombstones, keyed by the target member being removed. Only
-    ///     consulted when the removal isn't otherwise authorized by the creator or by
-    ///     the target removing itself.
+    ///   - concurrent: true for a sibling (same version, §7.4) or a diverged branch being
+    ///     reconciled. Relaxes exactly two rules: the hash-chain check, and "a member missing
+    ///     without a tombstone was removed" (on a branch it just means "not heard of yet").
+    ///     nil = decide from the versions (equal → concurrent).
     public static func validate(
         current: GroupDefinition,
         remote: GroupDefinition,
         updaterMemberId: String,
-        quorumVotes: [String: [QuorumVote]] = [:]
+        concurrent: Bool? = nil,
+        verifiedQuorumVoterIds: Set<String> = [],
+        verifiedRemovalAuthorizers: [String: String] = [:]
     ) throws {
-        let isSibling = remote.version == current.version
+        let concurrent = concurrent ?? (remote.version == current.version)
 
-        // Immutable identity fields — creatorMemberId is checked separately below, since
-        // it has two narrow legal transitions (§7.5) rather than being simply immutable.
         guard remote.groupId == current.groupId,
               remote.createdAtEpochMs == current.createdAtEpochMs else {
             throw GroupTransitionRejection.immutableFieldChanged
@@ -58,133 +56,173 @@ public enum GroupTransitionValidator {
             throw GroupTransitionRejection.updaterNotInRoster
         }
 
-        // Hash-chain continuity. Siblings share a parent, not a chain — §7.3 relaxes this
-        // rule for them explicitly.
-        if !isSibling && remote.version == current.version + 1 {
-            guard remote.previousStateHash == current.computeStateHash() else {
-                throw GroupTransitionRejection.chainMismatch
-            }
+        if !concurrent && remote.version == current.version + 1 &&
+            remote.previousStateHash != current.computeStateHash() {
+            throw GroupTransitionRejection.chainMismatch
         }
 
-        // No key rotation: any member present in both states must carry identical keys.
-        for remoteMember in remote.members {
-            if let localMember = current.findMember(byId: remoteMember.memberId) {
-                guard localMember.ed25519PublicKey == remoteMember.ed25519PublicKey,
-                      localMember.x25519PublicKey == remoteMember.x25519PublicKey else {
+        let currentById = Dictionary(current.members.map { ($0.memberId, $0) }, uniquingKeysWith: { a, _ in a })
+        let remoteById = Dictionary(remote.members.map { ($0.memberId, $0) }, uniquingKeysWith: { a, _ in a })
+        let remoteTombstones = Set(remote.removedMemberIds)
+        let currentTombstones = Set(current.removedMemberIds)
+        let effectiveTombstones = currentTombstones.union(remoteTombstones)
+
+        for (id, member) in remoteById {
+            let existing = currentById[id]
+            if let existing, existing.joinEpoch != member.joinEpoch {
+                // A new membership is only legal once the old one has been ended.
+                if member.joinEpoch < existing.joinEpoch ||
+                    !remoteTombstones.contains(Tombstones.key(existing)) {
+                    throw GroupTransitionRejection.membershipChangedWithoutRemoval
+                }
+            }
+            if let existing {
+                guard member.ed25519PublicKey.lowercased() == existing.ed25519PublicKey.lowercased(),
+                      member.x25519PublicKey.lowercased() == existing.x25519PublicKey.lowercased() else {
                     throw GroupTransitionRejection.memberKeyRotation
+                }
+            } else {
+                guard let derived = MemberIdDerivation.deriveMemberId(fromEd25519PublicKeyHex: member.ed25519PublicKey),
+                      derived == id else {
+                    throw GroupTransitionRejection.addedMemberIdMismatch
                 }
             }
         }
 
-        // Added members must self-authenticate: memberId == SHA-256(their ed25519 key)[0..15].
-        let currentIds = Set(current.members.map(\.memberId))
-        let addedMembers = remote.members.filter { !currentIds.contains($0.memberId) }
-        for added in addedMembers {
-            guard let derivedId = MemberIdDerivation.deriveMemberId(fromEd25519PublicKeyHex: added.ed25519PublicKey),
-                  derivedId == added.memberId else {
-                throw GroupTransitionRejection.addedMemberIdMismatch
-            }
-        }
-
-        // Tombstones are append-only.
-        let remoteRemoved = Set(remote.removedMemberIds)
-        let currentRemoved = Set(current.removedMemberIds)
-        guard currentRemoved.isSubset(of: remoteRemoved) else {
-            throw GroupTransitionRejection.tombstoneDropped
-        }
-
-        // No member may be simultaneously present and tombstoned.
-        let remoteMemberIds = Set(remote.members.map(\.memberId))
-        guard remoteMemberIds.isDisjoint(with: remoteRemoved) else {
+        // A tombstoned membership reappearing in the roster. Checked against the union, so it
+        // holds whether or not the sender knows about our tombstones — a peer that lacks them
+        // is not rejected for that alone (the store unions them back in).
+        if remote.members.contains(where: { Tombstones.isRemoved($0, tombstones: effectiveTombstones) }) {
             throw GroupTransitionRejection.memberBothPresentAndRemoved
         }
 
-        // A successor that silently drops a member (present locally, absent remotely, no
-        // tombstone) is an unauthorized removal. Siblings are exempt: an untombstoned gap
-        // there just means "hasn't learned about this member yet" (§7.3) — the actual
-        // removal-authorization check below still applies to any *new* tombstone either way.
-        if !isSibling {
-            let silentlyDropped = currentIds.subtracting(remoteMemberIds).subtracting(remoteRemoved)
-            guard silentlyDropped.isEmpty else {
-                throw GroupTransitionRejection.unauthorizedMemberRemoval
-            }
+        let silentlyRemoved = Set(current.members
+            .filter { remoteById[$0.memberId] == nil && !remoteTombstones.contains(Tombstones.key($0)) }
+            .map(\.memberId))
+        if !concurrent && !silentlyRemoved.isEmpty &&
+            updaterMemberId != current.creatorMemberId &&
+            silentlyRemoved != [updaterMemberId] {
+            throw GroupTransitionRejection.unauthorizedMemberRemoval
         }
 
-        // Every new tombstone needs authorization: the creator, the target removing only
-        // itself, or a verified quorum (§7.5).
-        let newTombstones = remoteRemoved.subtracting(currentRemoved)
+        let newTombstones = remoteTombstones.subtracting(currentTombstones)
         if !newTombstones.isEmpty {
-            try SodiumRaw.ensureInitialized()
-        }
-        for target in newTombstones {
-            // Authority to remove is judged against the CURRENT creator, not whatever
-            // creatorMemberId this same update proposes — otherwise a legitimate creator
-            // bundling a removal with a voluntary transfer would misclassify itself.
-            let updaterIsCreator = updaterMemberId == current.creatorMemberId
-            let isSelfRemoval = updaterMemberId == target && newTombstones == [target]
-            if updaterIsCreator || isSelfRemoval {
-                continue
-            }
-            let remaining = current.members.count - 1 // target never votes
-            guard remaining > 0 else {
-                throw GroupTransitionRejection.unauthorizedNewTombstone
-            }
-            let needed = remaining / 2 + 1
-            let payload = RemovalVoteMessage.signingPayload(
-                groupId: remote.groupId, targetMemberId: target,
-                proposedVersion: remote.version, previousStateHash: current.computeStateHash()
+            let isCreatorAuthorized = updaterMemberId == current.creatorMemberId
+            let isSelfRemoval = Set(newTombstones.map(Tombstones.memberId(of:))) == [updaterMemberId]
+            let isQuorumAuthorized = newTombstones.count == 1 && isQuorumSufficient(
+                current: current,
+                targetMemberId: Tombstones.memberId(of: newTombstones.first!),
+                verifiedQuorumVoterIds: verifiedQuorumVoterIds
             )
-            let payloadBytes = Array(payload.utf8)
-
-            var validVoters = Set<String>()
-            for vote in quorumVotes[target] ?? [] {
-                guard vote.voterMemberId != target,
-                      let voter = current.findMember(byId: vote.voterMemberId),
-                      let voterKey = Hex.decode(voter.ed25519PublicKey),
-                      let signature = Hex.decode(vote.signatureHex) else { continue }
-                if SodiumRaw.signVerifyDetached(signature: signature, message: payloadBytes, publicKey: voterKey) {
-                    validVoters.insert(vote.voterMemberId)
-                }
+            let isProvenByProofs = newTombstones.allSatisfy { tombstone in
+                guard let authorizer = verifiedRemovalAuthorizers[tombstone],
+                      current.containsMember(authorizer) else { return false }
+                return authorizer == current.creatorMemberId || authorizer == Tombstones.memberId(of: tombstone)
             }
-            guard validVoters.count >= needed else {
+            guard isCreatorAuthorized || isSelfRemoval || isQuorumAuthorized || isProvenByProofs else {
                 throw GroupTransitionRejection.unauthorizedNewTombstone
             }
         }
 
-        // Rename is creator-only.
-        if remote.groupName != current.groupName {
-            guard updaterMemberId == current.creatorMemberId else {
-                throw GroupTransitionRejection.unauthorizedRename
+        if remote.creatorMemberId != current.creatorMemberId {
+            let newCreator = current.findMember(byId: remote.creatorMemberId)
+            let voluntaryTransfer = updaterMemberId == current.creatorMemberId &&
+                newTombstones.isEmpty &&
+                newCreator.map { !Tombstones.isRemoved($0, tombstones: effectiveTombstones) } == true
+
+            let currentCreator = current.findMember(byId: current.creatorMemberId)
+            let creatorWasQuorumRemoved = currentCreator.map {
+                newTombstones == [Tombstones.key($0)]
+            } == true && isQuorumSufficient(
+                current: current,
+                targetMemberId: current.creatorMemberId,
+                verifiedQuorumVoterIds: verifiedQuorumVoterIds
+            )
+            let quorumSuccession = creatorWasQuorumRemoved && remote.creatorMemberId ==
+                GroupDefinition.computeSuccessorCreator(members: current.members, excludedIds: [current.creatorMemberId])
+
+            guard voluntaryTransfer || quorumSuccession else {
+                throw GroupTransitionRejection.unauthorizedCreatorChange
             }
         }
 
-        // Creator change. Two, and only two, legal paths (§7.5 points 1 and 7):
-        if remote.creatorMemberId != current.creatorMemberId {
-            if newTombstones.contains(current.creatorMemberId) {
-                // The creator is being removed in this very update (by themselves, by
-                // the creator's own authority, or by quorum — already authorized above).
-                // The successor is COMPUTED, never voted on or chosen by the updater, so
-                // every device reaches the same answer independently. Removing the
-                // creator must be the update's only new tombstone: a second one would
-                // mean two different remaining rosters could disagree about who the
-                // deterministic successor even is.
-                guard newTombstones == [current.creatorMemberId],
-                      remote.creatorMemberId == GroupDefinition.computeSuccessorCreator(
-                          members: current.members, excludedIds: newTombstones
-                      ) else {
-                    throw GroupTransitionRejection.unauthorizedCreatorChange
-                }
-            } else {
-                // Voluntary transfer: only the current creator may hand it off, to a
-                // roster member who isn't tombstoned, with no new tombstone riding along
-                // in the same update (that would be ambiguous with the successor path).
-                guard updaterMemberId == current.creatorMemberId,
-                      newTombstones.isEmpty,
-                      remoteMemberIds.contains(remote.creatorMemberId),
-                      !remoteRemoved.contains(remote.creatorMemberId) else {
-                    throw GroupTransitionRejection.unauthorizedCreatorChange
-                }
+        if remote.groupName != current.groupName && updaterMemberId != current.creatorMemberId {
+            throw GroupTransitionRejection.unauthorizedRename
+        }
+    }
+
+    /// Convenience for callers holding raw votes rather than verified voter IDs: verifies
+    /// them first (against `remote.version` and our current state hash, as Android does),
+    /// then validates.
+    public static func validate(
+        current: GroupDefinition,
+        remote: GroupDefinition,
+        updaterMemberId: String,
+        quorumVotes: [String: [QuorumVote]]
+    ) throws {
+        var voters = Set<String>()
+        for (target, votes) in quorumVotes {
+            voters.formUnion(verifiedQuorumVoters(
+                current: current, targetMemberId: target, proposedVersion: remote.version, votes: votes
+            ))
+        }
+        try validate(
+            current: current, remote: remote, updaterMemberId: updaterMemberId,
+            verifiedQuorumVoterIds: voters,
+            verifiedRemovalAuthorizers: verifiedRemovalAuthorizers(current: current, remote: remote)
+        )
+    }
+
+    /// Voters whose signature over `REMOVE_QUORUM:{gid}:{target}:{proposedVersion}:{ourHash}`
+    /// verifies against *our* roster. Mirrors GroupSyncManager.verifyQuorumSignatures.
+    public static func verifiedQuorumVoters(
+        current: GroupDefinition,
+        targetMemberId: String,
+        proposedVersion: Int64,
+        votes: [QuorumVote]
+    ) -> Set<String> {
+        guard (try? SodiumRaw.ensureInitialized()) != nil else { return [] }
+        let payload = Array(RemovalVoteMessage.signingPayload(
+            groupId: current.groupId, targetMemberId: targetMemberId,
+            proposedVersion: proposedVersion, previousStateHash: current.computeStateHash()
+        ).utf8)
+        var valid = Set<String>()
+        for vote in votes {
+            guard let voter = current.findMember(byId: vote.voterMemberId),
+                  let key = Hex.decode(voter.ed25519PublicKey),
+                  let signature = Hex.decode(vote.signatureHex),
+                  SodiumRaw.signVerifyDetached(signature: signature, message: payload, publicKey: key) else { continue }
+            valid.insert(vote.voterMemberId)
+        }
+        return valid
+    }
+
+    /// Tombstone → authorizer, for each *new* tombstone in `remote` whose proof verifies
+    /// against our roster. Mirrors GroupSyncManager.verifyRemovalProofs.
+    public static func verifiedRemovalAuthorizers(current: GroupDefinition, remote: GroupDefinition) -> [String: String] {
+        let newTombstones = Set(remote.removedMemberIds).subtracting(current.removedMemberIds)
+        guard !newTombstones.isEmpty, (try? SodiumRaw.ensureInitialized()) != nil else { return [:] }
+        var result: [String: String] = [:]
+        for proof in remote.removalProofs where newTombstones.contains(proof.tombstone) {
+            guard let authorizer = current.findMember(byId: proof.authorizerMemberId),
+                  let key = Hex.decode(authorizer.ed25519PublicKey),
+                  let signature = Hex.decode(proof.signature) else { continue }
+            let message = Array(RemovalProof.signingPayload(groupId: current.groupId, tombstone: proof.tombstone).utf8)
+            if SodiumRaw.signVerifyDetached(signature: signature, message: message, publicKey: key) {
+                result[proof.tombstone] = proof.authorizerMemberId
             }
         }
+        return result
+    }
+
+    private static func isQuorumSufficient(
+        current: GroupDefinition,
+        targetMemberId: String,
+        verifiedQuorumVoterIds: Set<String>
+    ) -> Bool {
+        let eligible = verifiedQuorumVoterIds.filter { $0 != targetMemberId && current.containsMember($0) }.count
+        let remaining = current.members.count - 1
+        guard remaining > 0 else { return false }
+        return eligible >= remaining / 2 + 1
     }
 }

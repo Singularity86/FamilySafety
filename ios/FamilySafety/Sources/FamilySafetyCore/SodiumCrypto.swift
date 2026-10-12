@@ -112,7 +112,7 @@ public final class E2EECrypto {
 
     public func removeSharedSecret(memberId: String) {
         cacheLock.lock()
-        sharedSecretCache.removeValue(forKey: memberId)
+        sharedSecretCache = sharedSecretCache.filter { !$0.key.hasPrefix(memberId + ":") }
         cacheLock.unlock()
     }
 
@@ -122,9 +122,12 @@ public final class E2EECrypto {
         cacheLock.unlock()
     }
 
+    /// Cached per (member, key), not per member alone: if a caller ever passed a different key
+    /// for the same ID, a member-keyed cache would keep answering with the first secret.
     private func sharedSecret(otherMemberId: String, otherX25519PublicKey: [UInt8]) throws -> [UInt8] {
+        let cacheKey = otherMemberId + ":" + Hex.encode(otherX25519PublicKey)
         cacheLock.lock()
-        if let cached = sharedSecretCache[otherMemberId] {
+        if let cached = sharedSecretCache[cacheKey] {
             cacheLock.unlock()
             return cached
         }
@@ -133,7 +136,7 @@ public final class E2EECrypto {
         let shared = try SodiumRaw.boxBeforenm(recipientPublicKey: otherX25519PublicKey, senderSecretKey: localX25519SecretKey)
 
         cacheLock.lock()
-        sharedSecretCache[otherMemberId] = shared
+        sharedSecretCache[cacheKey] = shared
         cacheLock.unlock()
         return shared
     }

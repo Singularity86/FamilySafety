@@ -53,6 +53,15 @@ class BackupExportSourcesTest {
     }
 
     @Test
+    fun `a leftover export is swept once it has had time to be shared`() {
+        // F33: the file holds the recovery phrase under the backup password.
+        val now = 1_000_000_000L
+        assertTrue(BackupManager.isStale(true, now - BackupManager.EXPORT_FILE_LIFETIME_MS, now))
+        assertTrue(!BackupManager.isStale(true, now - 60_000, now))
+        assertTrue(!BackupManager.isStale(false, 0, now))
+    }
+
+    @Test
     fun `file failure names the reason`() {
         assertTrue(BackupExportSources.fileNotSaved("No space left on device").contains("No space left on device"))
     }

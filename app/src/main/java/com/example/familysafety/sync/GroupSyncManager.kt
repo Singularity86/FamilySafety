@@ -40,6 +40,8 @@ class GroupSyncManager @Inject constructor(
     // Concurrent maps so concurrent ack arrivals + waitForAcknowledgments polling
     // can't trip a CME / lose entries.
     private val versionAcks = ConcurrentHashMap<Long, MutableSet<String>>()
+    /** Acks received per version, for [waitForAcknowledgments] to wait on. */
+    private val ackCounts = MutableStateFlow<Map<Long, Int>>(emptyMap())
     private val lastAbsentRefreshAt = java.util.concurrent.atomic.AtomicLong(0L)
 
     /**
@@ -245,10 +247,12 @@ class GroupSyncManager @Inject constructor(
                 java.util.Collections.synchronizedSet(mutableSetOf())
             }
             set.add(ack.memberId)
+            ackCounts.update { it + (ack.version to set.size) }
             // Evict buckets for versions well behind the current one so the map
             // doesn't grow for the life of the process.
             groupStateManager?.groupDefinition?.value?.version?.let { currentVersion ->
                 versionAcks.keys.removeIf { it < currentVersion - 5 }
+                ackCounts.update { counts -> counts.filterKeys { it >= currentVersion - 5 } }
             }
             Timber.d("Received ack for v${ack.version} from ${ack.memberId.take(8)} (${set.size} total)")
         } catch (e: Exception) {
@@ -442,6 +446,11 @@ class GroupSyncManager @Inject constructor(
                 _syncState.value = SyncState.Synced(syncMessage.version)
                 Timber.i("Applied group update: ${syncMessage.changeType}")
 
+                // Any vote retained on our topic was about a removal that's now done.
+                if (syncMessage.changeType == ChangeType.MEMBER_REMOVED && syncMessage.quorumSignatures.isNotEmpty()) {
+                    scope.launch { clearRetainedVotes() }
+                }
+
                 if (syncMessage.changeType == ChangeType.MEMBER_ADDED) {
                     scope.launch {
                         requestGroupStateRefresh(
@@ -483,27 +492,27 @@ class GroupSyncManager @Inject constructor(
         }
     }
 
+    /**
+     * Wait until every other member has acknowledged [version], or 30 s.
+     *
+     * Woken by each ack as it arrives (E5). This polled every half second before, so a
+     * broadcast whose acks had all come in still held its caller for up to 500 ms more, and
+     * a phone with no one online woke 60 times to find nothing.
+     */
     private suspend fun waitForAcknowledgments(version: Long, memberCount: Int) {
-        withContext(Dispatchers.IO) {
-            val timeout = 30_000L
-            val startTime = System.currentTimeMillis()
-
-            // Initialize the bucket so handleAckMessage has somewhere to write into
-            // even if it arrives before this function gets a chance to look.
-            versionAcks.computeIfAbsent(version) {
-                java.util.Collections.synchronizedSet(mutableSetOf())
-            }
-
-            while ((versionAcks[version]?.size ?: 0) < memberCount - 1) {
-                if (System.currentTimeMillis() - startTime > timeout) {
-                    Timber.w("Timeout waiting for acks")
-                    break
-                }
-                delay(500)
-            }
-
-            Timber.i("Received ${versionAcks[version]?.size ?: 0}/${memberCount - 1} acks")
+        val needed = memberCount - 1
+        // Initialize the bucket so handleAckMessage has somewhere to write into
+        // even if it arrives before this function gets a chance to look.
+        val set = versionAcks.computeIfAbsent(version) {
+            java.util.Collections.synchronizedSet(mutableSetOf())
         }
+        ackCounts.update { it + (version to set.size) }
+
+        val complete = withTimeoutOrNull(ACK_TIMEOUT_MS) {
+            ackCounts.first { (it[version] ?: 0) >= needed }
+        }
+        if (complete == null) Timber.w("Timeout waiting for acks")
+        Timber.i("Received ${versionAcks[version]?.size ?: 0}/$needed acks")
     }
 
     /**
@@ -637,6 +646,27 @@ class GroupSyncManager @Inject constructor(
         }
     }
 
+    /**
+     * Clear the retained vote on our own removal_vote topic once a removal has been applied
+     * (F33). Votes are retained so an offline member still gets them, but nothing removed
+     * them afterwards, so the broker replayed the last vote to this phone on every reconnect,
+     * long after it meant anything. Each phone clears its own topic; any client may clear a
+     * retained message by publishing an empty one.
+     */
+    private suspend fun clearRetainedVotes() {
+        val me = currentMemberId ?: return
+        try {
+            transportProvider.broadcastMessage(
+                topic = MqttConfig.getRemovalVoteTopic(me),
+                payload = ByteArray(0),
+                qos = MqttConfig.DEFAULT_QOS,
+                retained = true
+            )
+        } catch (e: Exception) {
+            Timber.w(e, "Could not clear the retained removal vote")
+        }
+    }
+
     private suspend fun broadcastVote(
         currentGroup: GroupDefinition,
         myMemberId: String,
@@ -726,6 +756,7 @@ class GroupSyncManager @Inject constructor(
         val result = manager.removeMemberByQuorum(targetMemberId, signatures)
         if (result is GroupOperationResult.Success) {
             pendingVotes.remove(key)
+            clearRetainedVotes()
             broadcastGroupUpdate(
                 result.value,
                 ChangeType.MEMBER_REMOVED,
@@ -782,6 +813,7 @@ class GroupSyncManager @Inject constructor(
     fun cleanup() {
         scope.cancel()
         versionAcks.clear()
+        ackCounts.value = emptyMap()
     }
 
     private fun extractSenderMemberId(encryptedPayload: String): String? {
@@ -800,6 +832,9 @@ class GroupSyncManager @Inject constructor(
 
 /** At most one "we're missing from your roster" refresh per this long. */
 private const val ABSENT_REFRESH_COOLDOWN_MS = 5 * 60_000L
+
+/** How long a broadcast waits for every other member's ack before reporting anyway. */
+private const val ACK_TIMEOUT_MS = 30_000L
 
 /** One key for every reply broadcast; see GroupSyncManager.responseLimiter. */
 private const val RESPONSE_LIMIT_KEY = "roster_reply"
