@@ -1,115 +1,98 @@
 # FamilySafety iOS Port — Project Status
 
-Snapshot date: 2026-10-03. Branch: `main`, HEAD `a71b5c0`. Companion to
-[IOS_PORT_SPEC.md](IOS_PORT_SPEC.md) (the interop contract and phase plan) — this document
-tracks progress against that plan and records what's been verified, how, and what's
-still outstanding. Built from `git log`, the working tree, and this session's own test
-runs; nothing here is user-reported unless marked so.
+Snapshot date: 2026-10-11. Branch `ios/phase3-group-sync`, cut from `main` at `12e1543`
+(Android 1.15.3 / versionCode 44). Companion to [IOS_PORT_SPEC.md](IOS_PORT_SPEC.md) (the
+interop contract and phase plan) and [REMEDIATION_PLAN.md](REMEDIATION_PLAN.md) (what the
+2026-10-11 code review asks of iOS). Built from `git log`, the working tree and this session's
+own test runs; nothing here is user-reported unless marked so.
 
 ## Where this stands against the phase plan (spec §14)
 
 | Phase | Status | Verified how |
 |---|---|---|
-| 0 — Crypto core | ✅ Done | 7 test vectors (ground truth from `tools/gen_test_vectors.py`, real libsodium), macOS + iPhone Simulator |
-| 1 — Models & validation | ✅ Done | 20 validator tests + 24 wire-format round-trip tests |
-| 2 — Transport | ✅ Done | 12 offline unit tests, **plus live verification against the real EMQX broker** — see below |
-| 3 — Group sync + join | Not started | — |
+| 0 — Crypto core | ✅ Done | 7 cross-platform test vectors (libsodium ground truth) |
+| 1 — Models & validation | ✅ Done | Validator re-ported from Android 1.15.3 (memberships, removal proofs); 24 validator tests |
+| 2 — Transport | ✅ Done | Unit tests, plus the live EMQX broker: presence/LWT (two-simulator harness) and, after the wildcard change, `ReconnectHarness` — all phases passed (commit `7da375d`) |
+| 3 — Group sync + join | **Partly done (core library only)** | See below. 104 tests, macOS host and iOS Simulator |
 | 4 — Location & map | Not started | — |
 | 5 — Chat | Not started | — |
 | 6 — Files | Not started | — |
 | 6.5 — Vault | Not started | — |
 | 7 — Polish / App Store prep | Not started | — |
 
-**66 unit tests, 0 failures**, verified on both `swift test` (macOS host) and the iOS
-Simulator (iPhone 18 Pro, iOS 27) via `xcodebuild test -scheme FamilySafety-Package`.
+**104 unit tests, 0 failures**, on `swift test` (macOS) and `xcodebuild test -scheme
+FamilySafety-Package` on the iPhone 18 Pro Simulator.
 
-## Phase 2's live-broker verification
+## Phase 3 in detail
 
-The spec's own acceptance test for Phase 2 is two clients seeing each other's presence
-flip online/offline over the real broker, with the last-will observed on an abrupt kill.
-This was run twice, both against the real EMQX Cloud broker
-(`r161feb1.ala.us-east-1.emqxsl.com:8883`) with credentials supplied by the user at
-runtime (never written to disk):
+**Done, in `FamilySafetyCore` (no UI, no app wiring yet):**
 
-1. **CLI harness** (`ios/FamilySafety/Sources/PresenceHarness/`) — two macOS processes
-   sharing the production `MqttTransport`/crypto code. Confirmed mutual signed presence,
-   then confirmed the last-will after `kill -9` on one process.
-2. **Visual two-simulator harness** (`ios/FamilySafetyApp/`) — a small SwiftUI app running
-   the same code on two actual iOS Simulator instances (iPhone 17 = Alice, iPhone 18 Pro =
-   Bob), installed via `xcrun simctl`. Screenshotted both mid-test showing mutual "Online,
-   signature valid," then SIGKILLed Bob's simulator process and re-screenshotted Alice
-   showing Bob flip to "Offline, signature valid."
+- **Models at Android 1.15.3:** `FamilyMember.joinEpoch`, `GroupDefinition.removalProofs`,
+  `Tombstones` (`"<id>#<n>"` keys), `RemovalProof`. The state hash appends `,#n` for memberships
+  after the first, checked against a hash computed independently from Android's canonical form.
+  `CREATOR_TRANSFERRED` added; before this, iOS could not decode that Android message.
+- **`GroupTransitionValidator`** re-ported line for line from Android 1.15.3. Two behaviours
+  changed from the old iOS port to match Android:
+  - a state that lacks our tombstones is accepted, and the store unions them back in;
+  - the creator may drop a member without a tombstone.
+- **`GroupStateMerge`**, **`GroupStateStore`** (apply, concurrent and diverged-branch
+  reconciliation, tombstone preservation) and **`GroupSyncEngine`** (decrypt, verify, apply, ack,
+  rebroadcast, refresh).
+- **Persistence:** `FileGroupStatePersistence`, AES-GCM with the key in the Keychain
+  (`KeychainGroupStateKeyProvider`).
+- **Joiner side of joining:** `JoinFlow.makeRequest` (signed `JOIN:v1`, like Android 1.15.1+),
+  `JoinFlow.evaluate` (approval/rejection checks ported from `MembershipViewModel`), and
+  `JoinCoordinator` (re-publish every 30 s, save then clear retained messages).
 
-Both harnesses are throwaway scaffolding, not part of the shipping app — kept in the repo
-because they're the only thing that's actually exercised the transport layer against a
-live broker, and they'll be useful again for Phase 3+'s own live-broker acceptance tests.
+**Review rules built in (iOS-only, wire-compatible):**
 
-## Bugs found and fixed this session (2026-09-26)
+| Rule | Ref |
+|---|---|
+| A roster that drops this device without a tombstone is refused and a refresh requested — never obeyed | F26 |
+| Storage errors throw; nothing deletes data or keys on an error; "unreadable" is never "no group" | F14 |
+| The envelope sender must be the update's `updaterMemberId` | F25 (part) |
+| Refresh requests answered only for members, rate-limited per requester and overall; stale replays rebroadcast at most once a minute; no refresh on decrypt failure | F16 |
+| Acks recorded, never waited on; inbound handled serially by the engine actor | E5 |
+| The joiner refuses an approval whose roster lists it with different keys | F13 (joiner's half) |
 
-Before starting Phase 3, audited the iOS port against the actual Android Kotlin source
-directly rather than trusting the spec's own prose summary. Found two real
-incompatibilities, both now fixed and covered by tests (commit `a71b5c0`):
+**Not done in Phase 3:**
 
-1. **Creator succession on quorum removal was entirely missing.** Android computes a
-   deterministic successor when the creator is quorum-removed and accepts
-   `creatorMemberId` changing in the *same* update as that removal
-   (`GroupDefinition.computeSuccessorCreator`). The iOS validator rejected any creator
-   change bundled with a new tombstone, which would have rejected every legitimate
-   Android-originated quorum-succession update.
-2. **`computeStateHash`'s tombstone section repeated `"removed:"` per tombstone** instead
-   of once before the whole list. Coincidentally matched Android for exactly one removal
-   (the only case previously tested) and silently diverged for two or more — a family
-   with multiple departures would have had iOS and Android permanently disagree about the
-   state hash. Fixed in both the Swift code and the spec's own prose, which read
-   ambiguously in a way that led to the wrong implementation the first time.
+- **Inviter side** (approving someone else's join) — deliberately waiting for join v2
+  (`app/REMEDIATION_PLAN.md` 2.1). Building it on today's protocol would port review F13.
+- **Removal votes** — casting and tallying. Receiving a quorum removal *is* supported:
+  the votes ride in the sync message and are verified.
+- **Local edits** — rename, colour, avatar, leave, transfer creator.
+- **App wiring:** connecting `GroupSyncEngine` and `JoinCoordinator` to `MqttTransport` inbound
+  topics, persisting `PendingJoin`, and any UI.
+- **Acceptance test:** an iPhone joining a family created on Android, via a real QR code. It
+  needs the app wiring above and an Android phone.
 
-Confirmed via `git log b2d0807..HEAD` that no Android commits had landed since the spec
-was last synced (`28b75fa`) — these were latent bugs in the existing port, not drift from
-new Android work.
+## Other changes this session
 
-**Open question from this audit:** only Phase 0/1/2 code has been checked against Kotlin
-source directly; Phase 3+ work should get the same treatment as it's built, not just
-trust the spec's summary.
+- Plan Part A:
+  - `Hex` works on UTF-8 bytes (linear; non-ASCII can't pass as hex);
+  - a wrong-length seed throws `IdentityError` instead of trapping;
+  - the shared-secret cache is keyed by member *and* key.
+- `HarnessSupport`'s Keychain lookup is macOS-only. It shells out to `security`, and had
+  stopped `FamilySafety-Package` building for iOS since PR #13.
 
 ## Known outstanding items
 
-- **`main` has diverged from `origin/main`.** Local `main` is 5 commits ahead of the
-  merge-base (`98b54b3`) with the iOS work; `origin/main` is 3 commits ahead with
-  location-history UI work (`b18bfc6`, `238d129`, `20fb14d`). Nothing has been pushed from
-  this branch yet — will need a merge or rebase before it is.
-- **Phase 3's own acceptance test** (an iOS device joining a group created on the Android
-  build via a real QR code) will need an actual Android device or emulator alongside the
-  iOS Simulator — out of scope for what's been built so far.
-- A billing/subscription branch was mentioned as existing on another of the user's
-  machines, not yet pushed to GitHub. Not part of this repo's history as of this
-  snapshot — nothing to reconcile here until it's pushed.
+- **The subscription count still grows with family size** (2 + one presence filter per
+  peer), so a family of 10+ exceeds the broker quota. The fix needs Android to move presence
+  under the group topic first (`ios/REMEDIATION_PLAN.md` A.1, `app/REMEDIATION_PLAN.md` 4.2).
+- **Phase 3+ code should be checked against Kotlin source,** not just the spec's summary.
+  That is how two latent hash/validator bugs were found on 2026-09-26, and it's how this
+  session's port was done.
 
 ## Repo layout added by the iOS port
 
-- `ios/IOS_PORT_SPEC.md` — the interop contract and phase plan (source of truth for wire
-  formats; never "improve" them on the iOS side without updating Android too).
-- `ios/FamilySafety/` — the SwiftPM package (`FamilySafetyCore` library + its test target).
-  Open directly in Xcode or `cd` in and run `swift test`.
-- `ios/FamilySafetyApp/` — throwaway SwiftUI two-simulator harness (XcodeGen-generated;
-  `project.yml` is the source of truth if it needs regenerating).
-- `ios/tools/gen_test_vectors.py` — regenerates the spec's cross-platform ground-truth
-  test vectors using real libsodium (`pip install pynacl`, then `python gen_test_vectors.py`).
-
-## Android spec drift to absorb (2026-10-08)
-
-`IOS_PORT_SPEC.md` was brought up to Android 1.15.0 (40).
-
-**Done in code:** keep-alive is now 120 s; `SubscriptionPolicy` (fingerprint + skip rule),
-`MqttTransport.restoreSubscriptions` (SUBACK-gated, fingerprint cleared first and stored only on
-full grant) replace the old unconditional `subscribeOwnTopics`/`subscribePeerTopics`. 74 tests pass.
-
-**Resubscribe skip is live in code, unverified on a broker.** CocoaMQTT does not expose the
-CONNACK session-present flag, so CocoaMQTT 2.4.1 is vendored in `ios/Vendor/CocoaMQTT` with a
-small patch adding `sessionPresent` (see `ios/Vendor/PATCHES.md`); `Package.swift` points at it
-and `MqttTransport` reads it in `didConnectAck`. Unit tests cover the policy only — nothing has
-yet shown a second connect to the real broker skipping SUBSCRIBE. Check that with the two-simulator
-harness (reconnect one side and confirm no retained replay / no SUBSCRIBE in the debug log).
-
-**Still to do in later phases:** Phase 3 (group sync) and Phase 5 (chat) must implement the
-private-conversation confinement and replication scoping in spec §6.3/§6.6 from the start;
-location publishing (Phase 4) should follow the throttle in the "Changes since 1.13.6" table.
+- `ios/IOS_PORT_SPEC.md` — the interop contract and phase plan. It is the source of truth for
+  wire formats; never "improve" them on iOS without updating Android too.
+- `ios/FamilySafety/` — the SwiftPM package: `FamilySafetyCore` library, test target, and two
+  macOS-only live-broker harnesses (`PresenceHarness`, `ReconnectHarness`; credentials from
+  env vars or the Keychain entry `FamilySafety-MQTT`).
+- `ios/FamilySafetyApp/` — throwaway SwiftUI two-simulator harness (XcodeGen; `project.yml`).
+- `ios/Vendor/CocoaMQTT` — CocoaMQTT 2.4.1 with a small patch exposing CONNACK session-present
+  (`ios/Vendor/PATCHES.md`).
+- `ios/tools/gen_test_vectors.py` — regenerates the cross-platform test vectors with libsodium.

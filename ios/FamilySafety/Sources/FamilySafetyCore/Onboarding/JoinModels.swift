@@ -45,10 +45,14 @@ public struct JoinRequest: Codable, Equatable {
     public let x25519PublicKey: String
     public let groupId: String
     public let timestampMs: Int64
+    /// Hex Ed25519 signature over `signingBytes()` (Android 1.15.1+). Optional on the wire;
+    /// iOS always sends it — it is what lets a restored phone back in (`RejoinPolicy`).
+    public let signature: String?
 
     public init(
         requestId: String, requesterId: String, displayName: String,
-        ed25519PublicKey: String, x25519PublicKey: String, groupId: String, timestampMs: Int64
+        ed25519PublicKey: String, x25519PublicKey: String, groupId: String, timestampMs: Int64,
+        signature: String? = nil
     ) {
         self.requestId = requestId
         self.requesterId = requesterId
@@ -57,6 +61,16 @@ public struct JoinRequest: Codable, Equatable {
         self.x25519PublicKey = x25519PublicKey
         self.groupId = groupId
         self.timestampMs = timestampMs
+        self.signature = signature
+    }
+
+    /// `JOIN:v1:{requestId}:{requesterId}:{groupId}:{timestampMs}:{ed25519 hex}:{x25519 hex}`
+    /// — mirrors JoinRequest.signingBytes() on Android (keys hex here, though Base64 in JSON).
+    /// Nil if the Base64 keys don't decode.
+    public func signingBytes() -> [UInt8]? {
+        guard let ed = Data(base64Encoded: ed25519PublicKey), let x = Data(base64Encoded: x25519PublicKey) else { return nil }
+        let text = "JOIN:v1:\(requestId):\(requesterId):\(groupId):\(timestampMs):\(Hex.encode(Array(ed))):\(Hex.encode(Array(x)))"
+        return Array(text.utf8)
     }
 }
 
