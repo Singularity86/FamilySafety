@@ -246,6 +246,11 @@ JSON (field order irrelevant; decode must ignore unknown keys):
 2. **Verify signature first** against the roster's Ed25519 key for that sender; reject on failure.
 3. Compute the same `shared` with the roster's X25519 key; `crypto_secretbox_open_easy`.
 
+If you cache shared secrets, key the cache by **(memberId, peer X25519 key)**, never by the
+envelope's unauthenticated `senderMemberId` alone. Otherwise an envelope that names an existing
+member but carries someone else's key poisons that member's entry (Android PR #29; iOS
+`SodiumCrypto` already does this).
+
 The same envelope also wraps the join approval/rejection payloads, where the sender is not
 yet in a roster — there the sender's keys arrive alongside and are authenticated by hashing
 against the QR invite's `inviterMemberId` (§8.4).
@@ -604,6 +609,11 @@ with no priority flag on the wire. What differs is the sender's obligation:
 { "groupId": "...", "requesterMemberId": "...", "minimumVersion": 0,
   "changedMemberId": null, "reason": "...", "timestamp": 0 }
 ```
+**Replies are rate-limited (since Android PR #25, F16).** A peer MAY rate-limit the roster
+broadcasts it sends in reply to refresh requests or to stale versions (Android: 10 per minute
+in total). The limit must be global, never keyed only by `requesterMemberId`, which is unsigned.
+Requesters must not assume one reply per request. A broadcast a phone starts for itself is
+never limited.
 
 ### 6.5 GroupDefinition / FamilyMember
 ```json
@@ -762,7 +772,16 @@ both.
 |---|---|---|
 | 1 (default when field absent) | `SHA-256(groupId + "familysafety-files-v1")` | Legacy. Both inputs are public — the salt is a constant in the binary and the groupId appears in the topic name — so this provides **no confidentiality against anyone who can reach the broker**. Implement for read compatibility only. |
 | 2 | `GroupDefinition.fileEncryptionKey`, hex-decoded to 32 bytes | Random per group, distributed only inside the encrypted group definition. **What Android publishes today.** |
-| 3 | `SHA-256(fileEncryptionKey ‖ "files")` — the §6.2 subkey derivation with purpose `files` | Purpose separation, so recovering a file key does not also yield presence. **Android has written this since 1.13.2 (32); the reader shipped in 1.13.0 (29).** New uploads use version 3 whenever a group key exists. Android 1.12.10 and earlier map an unrecognised version to the legacy key, fail GCM authentication and drop the chunk, so files simply stop arriving for anyone on those builds. The flip is not reversible for files already published under it. **Read 1, 2 and 3 forever; write 3.** |
+| 3 | `SHA-256(fileEncryptionKey ‖ "files")` — the §6.2 subkey derivation with purpose `files` | Purpose separation, so recovering a file key does not also yield presence. **Android has written this since 1.13.2 (32); the reader shipped in 1.13.0 (29).** New uploads use version 3 whenever a group key exists. Android 1.12.10 and earlier map an unrecognised version to the legacy key, fail GCM authentication and drop the chunk, so files simply stop arriving for anyone on those builds. The flip is not reversible for files already published under it. **Write 3.** Which versions to read depends on the family (below). |
+
+**Which versions a receiver accepts (since Android PR #24, F22).** In a family whose
+`GroupDefinition` has a `fileEncryptionKey`, receivers **MUST refuse `keyVersion` 1** for chunks,
+manifests and file messages alike. Its key is public, so accepting it lets anyone on the broker
+plant files in a keyed family. Versions 2 and 3 **MUST** stay readable: files from 1.12.0–1.13.1
+still circulate as version 2, because stored ciphertext is re-served verbatim, and only members
+hold that key. Any other version is refused. A family with no group key (created before
+1.12.0) reads version 1 only. Vector: the legacy key for groupId `group_123` is
+`SHA-256("group_123familysafety-files-v1")`.
 
 Rules for an implementation:
 
@@ -1050,6 +1069,12 @@ Retained, versioned, signed, on rules identical to the file manifest:
   family's vault with random bytes, which is indistinguishable from erasing it.
 - **Ignore any version at or below the highest already seen**, and refuse anything that is not
   exactly 131072 bytes.
+- **Refuse a version more than 24 h in the future** (`version > now + 86_400_000`, since
+  Android PR #26, F29). Versions are wall-clock milliseconds and the high-water mark is
+  persisted. One signed container stamped far in the future, by a member with a wrong clock or
+  by a malicious one, would otherwise freeze the vault until that time arrived.
+- On the device, **never replace an unreadable container with a fresh one**: fail and retry.
+  Write by atomic replace, never delete-then-write (F31).
 - **Persist that high-water mark** (since 1.13.0, F8). Versions are wall-clock milliseconds, so
   every container ever published outranks a mark that resets to zero on launch; keeping it in
   memory let a captured, genuinely signed old container overwrite a device's vault after any
@@ -1274,8 +1299,12 @@ unchanged for siblings.
 - `version == local + 1` → validate (§7.3), apply, ack; if `MEMBER_ADDED`, also fire a
   `GroupStateRefreshRequest` so laggards catch up.
 - `version > local + 1` → flag conflict state, still validate & apply.
-- If the local member is absent from an accepted new roster → emit **RemovedFromGroup**
-  (wipe group state, return to onboarding).
+- **Absence is not removal (since Android PR #28, F26).** A roster that omits the local member
+  is a removal **only** if its `removedMemberIds` contains the tombstone for the local member's
+  *current* membership (`Tombstones.key(self)`, joinEpoch-aware, §6.5). Then emit
+  **RemovedFromGroup** (wipe group state, return to onboarding). Otherwise it's a stale or
+  partial roster: keep the current state, emit nothing, and send a `GroupStateRefreshRequest`
+  (Android: at most one per 5 min).
 - After broadcasting an update, wait up to **30 s** (poll 500 ms) for acks from
   `memberCount − 1` peers before reporting synced.
 
