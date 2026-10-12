@@ -26,6 +26,7 @@ import com.example.familysafety.chat.ChatRepository
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.location.LocationRepository
 import com.example.familysafety.storage.EmergencyOutboxEntity
+import com.example.familysafety.storage.EmergencyRetrySchedule
 import com.example.familysafety.ui.theme.FamilySafetyTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
@@ -168,6 +169,11 @@ private fun AlertDeliveryScreen(
                     Text(
                         text = when {
                             row.deliveredAt != null -> "Received"
+                            // Never retried once they're gone; see ChatRepository.flushEmergencyAlerts.
+                            row.nextAttemptAt == Long.MAX_VALUE -> "Left the family"
+                            // Retries have stopped, so "waiting" would no longer be true.
+                            System.currentTimeMillis() - row.createdAt >
+                                EmergencyRetrySchedule.GIVE_UP_AFTER_MS -> "Not reached"
                             row.attemptCount == 0 -> "Sending…"
                             else -> "Waiting for their phone"
                         },
