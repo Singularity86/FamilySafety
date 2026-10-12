@@ -40,6 +40,7 @@ class GroupSyncManager @Inject constructor(
     // Concurrent maps so concurrent ack arrivals + waitForAcknowledgments polling
     // can't trip a CME / lose entries.
     private val versionAcks = ConcurrentHashMap<Long, MutableSet<String>>()
+    private val lastAbsentRefreshAt = java.util.concurrent.atomic.AtomicLong(0L)
 
     /**
      * Caps roster broadcasts sent *in reply* to something received: refresh requests, and
@@ -402,6 +403,19 @@ class GroupSyncManager @Inject constructor(
                     verifiedRemovalAuthorizers
                 )
                 if (result is GroupOperationResult.Failure) {
+                    if (result.error is GroupError.AbsentWithoutRemoval) {
+                        // A stale roster without us, not a removal. Ask the family for the
+                        // current one instead of erasing ourselves.
+                        Timber.w("Group update v${syncMessage.version} leaves us out without removing us — requesting a refresh")
+                        // Bounded: a peer stuck on a stale roster would otherwise turn every
+                        // one of its broadcasts into another round of refresh traffic.
+                        val now = System.currentTimeMillis()
+                        val last = lastAbsentRefreshAt.get()
+                        if (now - last > ABSENT_REFRESH_COOLDOWN_MS && lastAbsentRefreshAt.compareAndSet(last, now)) {
+                            scope.launch { requestGroupStateRefresh(reason = "absent_from_roster") }
+                        }
+                        return@withContext
+                    }
                     Timber.w("Rejected group update v${syncMessage.version}: ${result.error}")
                     _syncState.value = SyncState.Error("Rejected group update: ${result.error}")
                     return@withContext
@@ -783,6 +797,9 @@ class GroupSyncManager @Inject constructor(
     private fun String.hexToByteArray(): ByteArray =
         chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }
+
+/** At most one "we're missing from your roster" refresh per this long. */
+private const val ABSENT_REFRESH_COOLDOWN_MS = 5 * 60_000L
 
 /** One key for every reply broadcast; see GroupSyncManager.responseLimiter. */
 private const val RESPONSE_LIMIT_KEY = "roster_reply"
