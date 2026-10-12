@@ -6,7 +6,18 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.SecureRandom
+
+/** Checks on a received container that need no Android, kept apart so they can be tested. */
+object VaultContainerRules {
+    /** Clock skew between family phones is minutes, not days. */
+    const val MAX_FUTURE_SKEW_MS = 24 * 60 * 60 * 1000L
+
+    /** Container versions are wall-clock based (see VaultRepository); refuse ones far ahead. */
+    fun versionIsPlausible(version: Long, now: Long): Boolean = version <= now + MAX_FUTURE_SKEW_MS
+}
 
 /**
  * The container on disk: one fixed-size file that always exists.
@@ -29,8 +40,10 @@ class VaultContainer(
      * Read the container, creating it from random bytes if this is the first run.
      *
      * A container of the wrong length — truncated by a failed write on a build before the
-     * rename, or corrupted — is replaced rather than repaired. There is nothing to repair
-     * towards: without a key, no part of it can be told from any other part.
+     * rename, or corrupted — is set aside and replaced rather than repaired. There is nothing
+     * to repair towards: without a key, no part of it can be told from any other part.
+     *
+     * @throws java.io.IOException when an existing container can't be read. Not replaced.
      */
     suspend fun read(): ByteArray = withContext(Dispatchers.IO) {
         lock.withLock { readLocked() }
@@ -39,10 +52,16 @@ class VaultContainer(
     private fun readLocked(): ByteArray {
         val file = fileProvider()
         if (file.exists() && file.length() == VaultSlots.CONTAINER_BYTES.toLong()) {
-            return runCatching { file.readBytes() }.getOrElse { fresh() }
+            // A failed read is not an empty vault (F31). Returning random bytes here, as this
+            // used to, meant the next write replaced the family's documents with nothing.
+            // Let the caller fail and try again later; the file is left alone.
+            return file.readBytes()
         }
         if (file.exists()) {
-            Timber.w("Vault container was ${file.length()} bytes; replacing")
+            // Unusable at this length, but kept rather than deleted: it is still the only
+            // local copy, and the family's container will arrive over the network anyway.
+            Timber.w("Vault container was ${file.length()} bytes; setting it aside")
+            file.renameTo(File(file.parentFile, "${file.name}.corrupt"))
         }
         return fresh().also { writeLocked(it) }
     }
@@ -67,12 +86,13 @@ class VaultContainer(
         file.parentFile?.mkdirs()
         val scratch = File(file.parentFile, "${file.name}.part")
         scratch.writeBytes(container)
-        if (file.exists() && !file.delete()) {
-            Timber.e("Could not clear the old vault container")
-            scratch.delete()
-            return@runCatching false
-        }
-        scratch.renameTo(file)
+        // One atomic replace. Deleting the old file first left a window in which a process
+        // death meant no container at all (F31).
+        Files.move(
+            scratch.toPath(), file.toPath(),
+            StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE
+        )
+        true
     }.getOrElse {
         Timber.e(it, "Could not write the vault container")
         false
