@@ -169,6 +169,48 @@ class InviteManagerTest {
         assertTrue(json.contains("Test Family"))
     }
 
+    @Test
+    fun `buildInviteCode works before initialize and names the inviter`() {
+        // The invite screen builds the code without waiting for start-up to reach
+        // initialize(); that wait is what left the screen blank.
+        val groupDef = GroupDefinition(
+            groupId = "group_123",
+            groupName = "Test Family",
+            createdAtEpochMs = 1000L,
+            creatorMemberId = "member_001",
+            members = setOf(
+                FamilyMember(
+                    memberId = "member_001",
+                    displayName = "Alice",
+                    ed25519PublicKey = "a".repeat(64),
+                    x25519PublicKey = "b".repeat(64),
+                    addedAtEpochMs = 1000L
+                )
+            ),
+            version = 1L
+        )
+
+        val json = String(java.util.Base64.getDecoder().decode(
+            inviteManager.buildInviteCode(groupDef, "member_001")
+        ))
+
+        assertTrue(json.contains("\"inviterMemberId\":\"member_001\""))
+        assertTrue(json.contains("\"inviterName\":\"Alice\""))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `buildInviteCode refuses an invite with no inviter`() {
+        val groupDef = GroupDefinition(
+            groupId = "group_123",
+            groupName = "Test Family",
+            createdAtEpochMs = 1000L,
+            creatorMemberId = "member_001",
+            members = emptySet(),
+            version = 1L
+        )
+        inviteManager.buildInviteCode(groupDef, "")
+    }
+
     // ── JoinRequest data class ───────────────────────────────────
 
     @Test
