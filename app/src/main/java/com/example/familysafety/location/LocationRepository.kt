@@ -9,6 +9,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import javax.inject.Inject
@@ -80,15 +81,23 @@ class LocationRepository @Inject constructor(
         // The timestamp is inside the signed+encrypted payload, so a replayed old
         // ciphertext cannot override a newer position. (Historical backfill goes
         // through updateMemberLocations, which persists regardless.)
-        val existing = _memberLocations.value[location.memberId]
-        if (existing != null && location.timestamp <= existing.timestamp) {
+        //
+        // Check and write in one atomic update. Read-then-assign, as before, let two updates
+        // arriving together each copy the old map, so one member's new position was erased
+        // by the other's write.
+        var accepted = false
+        _memberLocations.update { current ->
+            val existing = current[location.memberId]
+            if (existing != null && location.timestamp <= existing.timestamp) {
+                current
+            } else {
+                accepted = true
+                current + (location.memberId to location)
+            }
+        }
+        if (!accepted) {
             Timber.d("LocationRepository: ignoring stale location for ${location.memberId.take(8)}")
             return
-        }
-
-        // Update in-memory cache immediately
-        _memberLocations.value = _memberLocations.value.toMutableMap().apply {
-            put(location.memberId, location)
         }
 
         // Check geofences and speed for this location update
@@ -135,16 +144,18 @@ class LocationRepository @Inject constructor(
     ) {
         if (locations.isEmpty()) return
 
-        // Update in-memory cache
-        val updatedMap = _memberLocations.value.toMutableMap()
-        locations.forEach { location ->
-            // Only update if newer than existing
-            val existing = updatedMap[location.memberId]
-            if (existing == null || location.timestamp > existing.timestamp) {
-                updatedMap[location.memberId] = location
+        // Update in-memory cache, atomically (see updateMemberLocation)
+        _memberLocations.update { current ->
+            val updatedMap = current.toMutableMap()
+            locations.forEach { location ->
+                // Only update if newer than existing
+                val existing = updatedMap[location.memberId]
+                if (existing == null || location.timestamp > existing.timestamp) {
+                    updatedMap[location.memberId] = location
+                }
             }
+            updatedMap
         }
-        _memberLocations.value = updatedMap
 
         // Persist to database asynchronously
         scope.launch {
@@ -170,9 +181,10 @@ class LocationRepository @Inject constructor(
     fun pruneToMembers(memberIds: Collection<String>) {
         if (memberIds.isEmpty()) return
         val allowed = memberIds.toSet()
-        val before = _memberLocations.value.size
-        _memberLocations.value = _memberLocations.value.filterKeys { it in allowed }
-        val dropped = before - _memberLocations.value.size
+        var dropped = 0
+        _memberLocations.update { current ->
+            current.filterKeys { it in allowed }.also { dropped = current.size - it.size }
+        }
         if (dropped > 0) {
             Timber.i("LocationRepository: dropped $dropped location(s) for departed members")
         }
@@ -183,8 +195,8 @@ class LocationRepository @Inject constructor(
      */
     fun removeStaleLocations(thresholdMs: Long = 24 * 60 * 60 * 1000) {
         val now = System.currentTimeMillis()
-        _memberLocations.value = _memberLocations.value.filterValues {
-            now - it.timestamp < thresholdMs
+        _memberLocations.update { current ->
+            current.filterValues { now - it.timestamp < thresholdMs }
         }
     }
 
@@ -225,7 +237,7 @@ class LocationRepository @Inject constructor(
      * Delete all history for a member (when they leave).
      */
     suspend fun deleteHistoryForMember(memberId: String) {
-        _memberLocations.value = _memberLocations.value.filterKeys { it != memberId }
+        _memberLocations.update { current -> current.filterKeys { it != memberId } }
         locationHistoryRepository.deleteDataForMember(memberId)
     }
 

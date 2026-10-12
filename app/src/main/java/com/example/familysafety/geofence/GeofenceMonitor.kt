@@ -10,6 +10,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import timber.log.Timber
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -30,16 +31,15 @@ class GeofenceMonitor @Inject constructor(
     private val geofences = geofenceRepository.geofences
         .stateIn(scope, SharingStarted.Eagerly, emptyList())
 
+    // Concurrent maps (F32): these are also read and cleared outside checkLocation's lock.
     // memberId -> set of geofence IDs the member is currently inside
-    private val memberGeofenceState = mutableMapOf<String, Set<String>>()
+    private val memberGeofenceState = ConcurrentHashMap<String, Set<String>>()
 
     // memberId:zoneId -> last accepted enter/exit state change
-    private val lastZoneTransitionTime = mutableMapOf<String, Long>()
+    private val lastZoneTransitionTime = ConcurrentHashMap<String, Long>()
 
     // memberId -> last time we sent a speed alert
-    private val lastSpeedAlertTime = mutableMapOf<String, Long>()
-
-    private val distanceResult = FloatArray(1)
+    private val lastSpeedAlertTime = ConcurrentHashMap<String, Long>()
 
     @Synchronized
     fun checkLocation(location: MemberLocation, memberDisplayName: String) {
@@ -49,6 +49,9 @@ class GeofenceMonitor @Inject constructor(
         val now = System.currentTimeMillis()
         val currentlyInside = mutableSetOf<String>()
         val previouslyInside = memberGeofenceState[location.memberId] ?: emptySet()
+        // Per call, not a shared field: a shared result buffer is only safe while every
+        // caller holds this lock, and nothing enforced that.
+        val distanceResult = FloatArray(1)
 
         for (zone in activeZones) {
             // Skip if zone watches specific members and this one isn't included

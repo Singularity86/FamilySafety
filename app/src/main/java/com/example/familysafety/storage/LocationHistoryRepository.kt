@@ -21,6 +21,14 @@ class LocationHistoryRepository @Inject constructor(
         /** Default retention period: 30 days */
         const val DEFAULT_RETENTION_DAYS = 30L
         private const val MS_PER_DAY = 24 * 60 * 60 * 1000L
+
+        /**
+         * Local midnight. `now - now % day` is midnight UTC, so "today" began at 7 or 8 pm
+         * the evening before on the US east coast and showed part of yesterday.
+         */
+        internal fun startOfLocalDay(now: Long, zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): Long =
+            java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+                .atStartOfDay(zone).toInstant().toEpochMilli()
     }
 
     // =========================================================================
@@ -148,8 +156,7 @@ class LocationHistoryRepository @Inject constructor(
      */
     suspend fun getTodayHistory(memberId: String): List<MemberLocation> {
         val now = System.currentTimeMillis()
-        val startOfDay = now - (now % MS_PER_DAY)
-        return getLocationHistory(memberId, startOfDay, now)
+        return getLocationHistory(memberId, startOfLocalDay(now), now)
     }
 
     /**
