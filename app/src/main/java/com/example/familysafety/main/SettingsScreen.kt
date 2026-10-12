@@ -1225,20 +1225,21 @@ fun SettingsScreen(
                                 backupError = DeviceCredentialGate.explain(gate)
                                 return@launch
                             }
-                            val uri = viewModel.exportBackup(backupPassword)
+                            val result = viewModel.exportBackup(backupPassword)
                             isBackupLoading = false
-                            if (uri != null) {
-                                showExportDialog = false
-                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "application/octet-stream"
-                                    putExtra(Intent.EXTRA_STREAM, uri)
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            when (result) {
+                                is MainViewModel.ExportResult.Ready -> {
+                                    showExportDialog = false
+                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "application/octet-stream"
+                                        putExtra(Intent.EXTRA_STREAM, result.uri)
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(
+                                        Intent.createChooser(shareIntent, "Save Backup")
+                                    )
                                 }
-                                context.startActivity(
-                                    Intent.createChooser(shareIntent, "Save Backup")
-                                )
-                            } else {
-                                backupError = "Export failed — no family group or mnemonic found"
+                                is MainViewModel.ExportResult.Failed -> backupError = result.message
                             }
                         }
                     },

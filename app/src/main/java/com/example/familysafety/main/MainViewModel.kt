@@ -8,6 +8,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.familysafety.avatar.AvatarRepository
+import com.example.familysafety.backup.BackupExportSources
 import com.example.familysafety.backup.BackupManager
 import com.example.familysafety.core.NetworkMonitor
 import com.example.familysafety.core.SecurityEventRepository
@@ -424,24 +425,37 @@ class MainViewModel @Inject constructor(
     }
 
     /** Export an encrypted backup file and return a share-ready [Uri], or null on failure. */
-    suspend fun exportBackup(password: String): Uri? = withContext(Dispatchers.IO) {
+    sealed class ExportResult {
+        data class Ready(val uri: Uri) : ExportResult()
+        /** [message] says which part failed and what to do next. */
+        data class Failed(val message: String) : ExportResult()
+    }
+
+    suspend fun exportBackup(password: String): ExportResult = withContext(Dispatchers.IO) {
+        val sources = BackupExportSources.gather(
+            readPhrase = { AndroidKeyStoreLocalKeyStore(context).getMnemonic() },
+            readFamily = { EncryptedGroupStatePersistence.getInstance(context).loadGroupDefinition() }
+        )
+        val ready = when (sources) {
+            is BackupExportSources.Result.Missing -> return@withContext ExportResult.Failed(sources.message)
+            is BackupExportSources.Result.Ready -> sources
+        }
         try {
-            val mnemonic = AndroidKeyStoreLocalKeyStore(context).getMnemonic()
-                ?: return@withContext null
-            val groupDef = EncryptedGroupStatePersistence.getInstance(context).loadGroupDefinition()
-                ?: return@withContext null
             val groupDefJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-                .encodeToString(groupDef)
-            val bytes = BackupManager.export(mnemonic, groupDefJson, password)
+                .encodeToString(ready.family)
+            val bytes = BackupManager.export(ready.mnemonic, groupDefJson, password)
 
             val dir = File(context.getExternalFilesDir(null), "familysafety_files")
             dir.mkdirs()
             val file = File(dir, "familysafety_backup.familysafe")
             file.writeBytes(bytes)
 
-            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            ExportResult.Ready(
+                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            )
         } catch (e: Exception) {
-            null
+            Timber.e(e, "Backup export: writing the file failed")
+            ExportResult.Failed(BackupExportSources.fileNotSaved(e.message))
         }
     }
 

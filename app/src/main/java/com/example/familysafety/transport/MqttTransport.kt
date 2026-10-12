@@ -88,8 +88,11 @@ class MqttTransport @Inject constructor(
     var groupSyncManager: GroupSyncManager? = null
     var securityEventRepository: SecurityEventRepository? = null
 
-    // Throttle group-sync requests triggered by decrypt failures to once per sender per minute.
-    private val decryptFailureSyncCooldowns = ConcurrentHashMap<String, Long>()
+    // Group-sync requests triggered by decrypt failures: at most once a minute in total. This
+    // was once per sender, but the sender is read from the unauthenticated envelope, so
+    // forging failures under each member's ID in turn multiplied it (F16). A real key change
+    // is healed by the first refresh anyway.
+    private val lastDecryptFailureSyncAt = java.util.concurrent.atomic.AtomicLong(0L)
     companion object {
         /**
          * The location in a decrypted `location_update` from [senderId], or null to drop it.
@@ -1087,9 +1090,11 @@ class MqttTransport @Inject constructor(
         val decryptedPayload = decryptResult.getOrElse {
             Timber.w("$TAG: Failed to decrypt message from $senderId")
             securityEventRepository?.recordDecryptFailure(senderId)
-            val lastSync = decryptFailureSyncCooldowns[senderId] ?: 0L
-            if (System.currentTimeMillis() - lastSync > DECRYPT_SYNC_COOLDOWN_MS) {
-                decryptFailureSyncCooldowns[senderId] = System.currentTimeMillis()
+            val now = System.currentTimeMillis()
+            val lastSync = lastDecryptFailureSyncAt.get()
+            if (now - lastSync > DECRYPT_SYNC_COOLDOWN_MS &&
+                lastDecryptFailureSyncAt.compareAndSet(lastSync, now)
+            ) {
                 scope.launch {
                     groupSyncManager?.requestGroupStateRefresh(
                         reason = "decrypt_failure",

@@ -18,6 +18,7 @@ import com.example.familysafety.core.ValidationResult
 import com.example.familysafety.crash.CrashDetectionMonitor
 import com.example.familysafety.crash.CrashTraceRecorder
 import com.example.familysafety.crash.ImpactDecider
+import com.example.familysafety.storage.LocationOutboxPolicy
 import com.example.familysafety.storage.LocationPublishOutboxRepository
 import com.example.familysafety.storage.StorageHealth
 import com.example.familysafety.transport.MqttConfig
@@ -761,20 +762,21 @@ class LocationService : Service() {
         val pending = locationPublishOutboxRepository.getPendingForMember(id)
         if (pending.isEmpty()) return false
 
-        var anyDelivered = false
-        pending.forEach { pendingLocation ->
-            val delivered = publishLocationToPeers(pendingLocation.toMemberLocation())
-            if (delivered) {
-                anyDelivered = true
-                locationPublishOutboxRepository.delete(pendingLocation.id)
-            } else {
-                locationPublishOutboxRepository.markAttempt(
-                    pendingLocation.id,
-                    "publish deferred"
-                )
-            }
+        // Only the newest fix goes out live (E2). After an hour offline every queued fix used
+        // to be published to every member, each one moving the pin backwards in time on
+        // arrival. Older fixes are already in this phone's location history, which members
+        // fetch through the replication back-fill, so nothing is lost by dropping them here.
+        val (newest, older) = LocationOutboxPolicy.split(pending)
+        older.forEach { locationPublishOutboxRepository.delete(it.id) }
+        newest ?: return false
+
+        val delivered = publishLocationToPeers(newest.toMemberLocation())
+        if (delivered) {
+            locationPublishOutboxRepository.delete(newest.id)
+        } else {
+            locationPublishOutboxRepository.markAttempt(newest.id, "publish deferred")
         }
-        return anyDelivered
+        return delivered
     }
 
     private fun String.hexToByteArray(): ByteArray =

@@ -1003,6 +1003,20 @@ class GroupStateManager(
     private suspend fun commitStateLocked(
         newState: GroupDefinition
     ): GroupOperationResult<GroupDefinition> {
+        // A roster without us is only a removal if it carries a tombstone for our membership
+        // (F26). Otherwise it's stale: a member who never heard we joined, or a reconcile that
+        // fell back to their branch. Taking it used to emit RemovedFromGroup, and this phone
+        // wiped its own family data. Keep what we have; the caller asks for a fresh copy.
+        val me = _groupDefinition.value?.findMemberById(localMemberId)
+        if (me != null && !newState.containsMember(localMemberId) &&
+            Tombstones.key(me) !in newState.removedMemberIds
+        ) {
+            timber.log.Timber.w(
+                "GroupStateManager: v${newState.version} leaves this phone out without removing it — keeping our state"
+            )
+            return GroupOperationResult.Failure(GroupError.AbsentWithoutRemoval)
+        }
+
         try {
             persistence.saveGroupDefinition(newState)
         } catch (e: Exception) {

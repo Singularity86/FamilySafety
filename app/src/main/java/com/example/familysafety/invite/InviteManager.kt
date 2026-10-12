@@ -47,6 +47,10 @@ class InviteManager @Inject constructor(
     private var groupSyncManager: GroupSyncManager? = null
     private var currentMemberId: String? = null
 
+    /** Replaceable for tests; the app-wide limiter is shared state. */
+    internal var joinRequestLimiter: com.example.familysafety.core.RateLimiter =
+        com.example.familysafety.core.RateLimiters.joinRequests
+
     private val _pendingJoinRequests = MutableStateFlow<List<JoinRequest>>(emptyList())
     val pendingJoinRequests: StateFlow<List<JoinRequest>> = _pendingJoinRequests.asStateFlow()
     private val closedJoinRequestIds = ConcurrentHashMap.newKeySet<String>()
@@ -119,6 +123,17 @@ class InviteManager @Inject constructor(
             val currentGroup = groupStateManager?.groupDefinition?.value
             if (currentGroup?.groupId != joinRequest.groupId) {
                 Timber.w("Join request for different group: ${joinRequest.groupId}")
+                return
+            }
+
+            // New requests only, per requester (F16). A joiner re-publishes its pending
+            // request every 30 seconds until answered, and those re-deliveries must keep
+            // arriving. Each new request costs a signature check and a notification, so a
+            // flood of them is limited. Requester IDs are self-chosen until join v2 (2.1),
+            // so this slows a flood rather than stopping one.
+            val alreadyPending = _pendingJoinRequests.value.any { it.requestId == joinRequest.requestId }
+            if (!alreadyPending && !joinRequestLimiter.allowRequest(joinRequest.requesterId)) {
+                Timber.w("Join request from ${joinRequest.requesterId.take(8)} dropped: rate limited")
                 return
             }
 
