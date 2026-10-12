@@ -7,6 +7,7 @@ public enum GroupChangeType: String, Codable {
     case versionSync = "VERSION_SYNC"
     case conflictResolution = "CONFLICT_RESOLUTION"
     case fullSync = "FULL_SYNC"
+    case creatorTransferred = "CREATOR_TRANSFERRED"
 }
 
 /// One entry in `GroupSyncMessage.quorumSignatures` (§6.4, §7.5). Each signature is

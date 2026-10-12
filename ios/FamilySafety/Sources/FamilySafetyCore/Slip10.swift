@@ -18,7 +18,7 @@ public enum Slip10 {
     /// Android's Slip10.KeyPair semantics. Use FamilySafeKeyDerivation to also get
     /// the expanded 64-byte secret key needed for signing.
     public static func deriveEd25519(seed: [UInt8], path: [UInt32]) throws -> KeyPair {
-        precondition(seed.count == 64, "Seed must be 64 bytes (512 bits)")
+        guard seed.count == 64 else { throw IdentityError.invalidSeedLength(seed.count) }
         var (privateKey, chainCode) = masterKey(seed: seed)
         for index in path {
             (privateKey, chainCode) = childKey(parentPrivateKey: privateKey, parentChainCode: chainCode, index: index | hardenedOffset)
@@ -32,7 +32,7 @@ public enum Slip10 {
     /// crypto_scalarmult_base — NOT crypto_box_seed_keypair, which hashes the seed
     /// first and would produce a different key.
     public static func deriveX25519(seed: [UInt8], path: [UInt32]) throws -> KeyPair {
-        precondition(seed.count == 64, "Seed must be 64 bytes")
+        guard seed.count == 64 else { throw IdentityError.invalidSeedLength(seed.count) }
         var (privateKey, chainCode) = masterKey(seed: seed)
         for index in path {
             (privateKey, chainCode) = childKey(parentPrivateKey: privateKey, parentChainCode: chainCode, index: index | hardenedOffset)

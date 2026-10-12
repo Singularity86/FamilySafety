@@ -16,6 +16,7 @@ public enum HarnessCredentials {
         if let username = env["MQTT_USERNAME"], let password = env["MQTT_PASSWORD"] {
             return BrokerCredentials(username: username, password: password)
         }
+        #if os(macOS)
         guard let attributes = security(["find-generic-password", "-s", keychainService]),
               let username = account(in: attributes),
               let password = security(["find-generic-password", "-s", keychainService, "-w"])?
@@ -23,12 +24,16 @@ public enum HarnessCredentials {
               !password.isEmpty
         else { return nil }
         return BrokerCredentials(username: username, password: password)
+        #else
+        return nil
+        #endif
     }
 
     public static let missingMessage =
         "No broker credentials. Set MQTT_USERNAME and MQTT_PASSWORD, or store them once with:\n" +
         "  security add-generic-password -U -s \(keychainService) -a <broker-username> -w"
 
+    #if os(macOS)
     private static func security(_ arguments: [String]) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
@@ -52,4 +57,5 @@ public enum HarnessCredentials {
         }
         return nil
     }
+    #endif
 }

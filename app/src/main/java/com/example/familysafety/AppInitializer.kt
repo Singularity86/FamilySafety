@@ -247,6 +247,9 @@ class AppInitializer @Inject constructor(
                     }
                 }
 
+                // 8b2. An exported backup holds the recovery phrase; don't leave one behind.
+                com.example.familysafety.backup.BackupManager.sweepExportFile(context)
+
                 // 8c. Keep retrying any crash alert still owed to someone, including one
                 // raised before the app was last killed.
                 chatRepository.startEmergencyRetryLoop()
