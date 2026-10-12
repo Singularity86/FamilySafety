@@ -209,26 +209,33 @@ class InviteManager @Inject constructor(
         return try {
             val groupDef = groupStateManager?.groupDefinition?.value
                 ?: return Result.failure(IllegalStateException("No group state available"))
-
-            val inviterName = groupDef.members
-                .find { it.memberId == currentMemberId }
-                ?.displayName ?: ""
-            val inviteData = mapOf(
-                "groupId" to groupDef.groupId,
-                "groupName" to groupDef.groupName,
-                "inviterMemberId" to (currentMemberId ?: ""),
-                "inviterName" to inviterName,
-                "timestamp" to System.currentTimeMillis().toString()
-            )
-
-            val inviteJson = json.encodeToString(inviteData)
-            val inviteCode = Base64.getEncoder().encodeToString(inviteJson.toByteArray())
-
-            Result.success(inviteCode)
+            Result.success(buildInviteCode(groupDef, currentMemberId ?: ""))
         } catch (e: Exception) {
             Timber.e(e, "Failed to generate invite code")
             Result.failure(e)
         }
+    }
+
+    /**
+     * The invite code for [groupDef], issued by [inviterMemberId]. Needs nothing from
+     * [initialize], so the invite screen can build one as soon as the family has loaded
+     * rather than waiting for start-up to reach this manager.
+     */
+    fun buildInviteCode(groupDef: GroupDefinition, inviterMemberId: String): String {
+        // An invite with no inviter can't be answered: the join request has nowhere to go.
+        require(inviterMemberId.isNotBlank()) { "This phone's identity hasn't loaded." }
+        val inviterName = groupDef.members
+            .find { it.memberId == inviterMemberId }
+            ?.displayName ?: ""
+        val inviteData = mapOf(
+            "groupId" to groupDef.groupId,
+            "groupName" to groupDef.groupName,
+            "inviterMemberId" to inviterMemberId,
+            "inviterName" to inviterName,
+            "timestamp" to System.currentTimeMillis().toString()
+        )
+        val inviteJson = json.encodeToString(inviteData)
+        return Base64.getEncoder().encodeToString(inviteJson.toByteArray())
     }
 
     /**

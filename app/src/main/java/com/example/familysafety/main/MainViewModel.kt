@@ -36,6 +36,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import timber.log.Timber
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -554,8 +556,19 @@ class MainViewModel @Inject constructor(
             .edit().remove("onboarding_complete").commit()
     }
 
+    /**
+     * Waits for the family to load instead of failing straight away. The invite manager is
+     * only handed the family partway through start-up, after the location history loads,
+     * so opening this screen soon after launch used to fail, and the screen showed nothing.
+     */
     suspend fun generateInviteCode(): Result<String> = withContext(Dispatchers.IO) {
-        inviteManager.generateInviteCode()
+        val group = withTimeoutOrNull(15_000) {
+            groupStateManager.groupDefinition.filterNotNull().first()
+        } ?: return@withContext Result.failure(
+            IllegalStateException("Your family hasn't finished loading on this phone yet.")
+        )
+        runCatching { inviteManager.buildInviteCode(group, localMemberId.value) }
+            .onFailure { Timber.e(it, "Failed to build invite code") }
     }
 
     fun approveJoinRequest(request: JoinRequest) {

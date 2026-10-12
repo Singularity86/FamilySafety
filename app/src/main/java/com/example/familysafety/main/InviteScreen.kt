@@ -27,6 +27,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.example.familysafety.ui.theme.ButtonShape
 import com.example.familysafety.ui.theme.NumericFamily
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -38,12 +39,19 @@ fun InviteScreen(
     val clipboard = LocalClipboardManager.current
     var inviteCode by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var attempt by remember { mutableIntStateOf(0) }
     var copied by remember { mutableStateOf(false) }
     val pendingRequests by viewModel.pendingJoinRequests.collectAsState()
 
-    LaunchedEffect(Unit) {
+    // A failure used to be dropped here, leaving a screen with no code, no QR and no
+    // explanation. It now says why, and Try again reruns this.
+    LaunchedEffect(attempt) {
+        isLoading = true
+        loadError = null
         viewModel.generateInviteCode()
             .onSuccess { inviteCode = it }
+            .onFailure { loadError = it.message ?: "The invite code couldn't be made." }
         isLoading = false
     }
 
@@ -113,8 +121,19 @@ fun InviteScreen(
                 textAlign = TextAlign.Center
             )
 
+            val error = loadError
             if (isLoading) {
                 CircularProgressIndicator()
+            } else if (error != null) {
+                Text(
+                    text = "$error Wait a moment and try again.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center
+                )
+                OutlinedButton(shape = ButtonShape, onClick = { attempt++ }) {
+                    Text("Try again")
+                }
             } else {
                 // QR code card
                 val bmp = qrBitmap
