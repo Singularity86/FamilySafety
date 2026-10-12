@@ -34,6 +34,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.familysafety.ui.theme.statusColors
 import com.example.familysafety.invite.JoinRequest
+import com.example.familysafety.invite.JoinV2
+import com.example.familysafety.ui.theme.NumericFamily
 import com.example.familysafety.ui.components.ShimmerBox
 import com.example.familysafety.ui.theme.ChipShape
 import com.example.familysafety.ui.theme.PersonPalette
@@ -188,6 +190,24 @@ internal fun JoinRequestCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer
                 )
+                if (request.verifiedByInvite) {
+                    // Their phone shows the same six digits while it waits.
+                    val code = JoinV2.fingerprint(request.ed25519PublicKey, request.x25519PublicKey)
+                    Text(
+                        text = "Code ${code.take(3)} ${code.drop(3)}",
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = NumericFamily),
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                } else {
+                    // A request from an older build can't prove it came from someone who saw
+                    // the invite: anyone on the relay could have sent it under this name.
+                    Text(
+                        text = "Unverified: sent from an older app version. Only approve if " +
+                            "you're with this person.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = statusColors.warningText
+                    )
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 IconButton(onClick = onReject) {

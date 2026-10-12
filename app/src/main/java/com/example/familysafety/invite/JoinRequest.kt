@@ -93,17 +93,43 @@ data class JoinRequest(
      * ([RejoinPolicy]). Optional: requests from builds before 1.15.1 have none, and are always
      * shown to the inviter for a decision.
      */
-    val signature: String? = null
+    val signature: String? = null,
+    /**
+     * Set on a v2 request: the invite it answers ([JoinV2]). Null for v1. Also selects which
+     * bytes [signature] covers; see [signedBytes].
+     */
+    val inviteId: String? = null,
+    /**
+     * True only after [JoinV2Verifier] has checked this request against its invite's secret.
+     * Never sent or read over the wire; a v1 request is always false and is shown as
+     * unverified.
+     */
+    @kotlinx.serialization.Transient
+    val verifiedByInvite: Boolean = false
 ) {
     /**
-     * The bytes [signature] covers. Every field except the display name, which is cosmetic and
-     * ignored when the requester is already a member.
+     * The bytes [signature] covers in a v1 request. Every field except the display name,
+     * which is cosmetic and ignored when the requester is already a member.
      */
     fun signingBytes(): ByteArray {
         val text = "JOIN:v1:$requestId:$requesterId:$groupId:$timestampMs:" +
             "${ed25519PublicKey.toHex()}:${x25519PublicKey.toHex()}"
         return text.toByteArray(Charsets.UTF_8)
     }
+
+    /**
+     * The bytes a v2 request's signature and MAC cover: v1's fields plus the invite it answers
+     * and a hash of the display name, so neither can be swapped after signing.
+     */
+    fun signingBytesV2(): ByteArray {
+        val id = requireNotNull(inviteId) { "not a v2 request" }
+        val text = "JOIN:v2:$requestId:$requesterId:$groupId:$timestampMs:" +
+            "${ed25519PublicKey.toHex()}:${x25519PublicKey.toHex()}:$id:${JoinV2.sha256Hex(displayName)}"
+        return text.toByteArray(Charsets.UTF_8)
+    }
+
+    /** Whichever of [signingBytes] or [signingBytesV2] this request's signature covers. */
+    fun signedBytes(): ByteArray = if (inviteId != null) signingBytesV2() else signingBytes()
 
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
@@ -121,6 +147,7 @@ data class JoinRequest(
         if (groupId != other.groupId) return false
         if (timestampMs != other.timestampMs) return false
         if (signature != other.signature) return false
+        if (inviteId != other.inviteId) return false
 
         return true
     }
@@ -134,6 +161,7 @@ data class JoinRequest(
         result = 31 * result + groupId.hashCode()
         result = 31 * result + timestampMs.hashCode()
         result = 31 * result + (signature?.hashCode() ?: 0)
+        result = 31 * result + (inviteId?.hashCode() ?: 0)
         return result
     }
 }

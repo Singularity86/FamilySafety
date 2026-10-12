@@ -108,7 +108,7 @@ class InviteManager @Inject constructor(
 
             Timber.d("Received join request payload")
 
-            val joinRequest = json.decodeFromString<JoinRequest>(payload)
+            val joinRequest = parseJoinRequest(payload) ?: return
 
             if (isJoinRequestClosed(joinRequest.requestId)) {
                 Timber.d("Join request ${joinRequest.requestId} already closed, ignoring redelivery")
@@ -160,6 +160,57 @@ class InviteManager @Inject constructor(
         } catch (e: Exception) {
             Timber.e(e, "Failed to handle join request")
         }
+    }
+
+    /**
+     * A v2 request, verified against the invite it answers, or a v1 request, which can't be
+     * verified and is shown to the inviter as unverified. Null when it should be dropped.
+     *
+     * v1 is still accepted for one release so phones that haven't updated can join; the
+     * release after refuses it (F13).
+     */
+    private fun parseJoinRequest(payload: String): JoinRequest? {
+        val v2 = runCatching { json.decodeFromString<JoinRequestV2Message>(payload) }.getOrNull()
+        if (v2 == null) {
+            return runCatching { json.decodeFromString<JoinRequest>(payload) }
+                .onFailure { Timber.w("Undecodable join request — ignoring") }
+                .getOrNull()
+                ?.also { Timber.w("Join request ${it.requestId} is v1: unverified, shown with a warning") }
+        }
+        val now = System.currentTimeMillis()
+        val result = JoinV2Verifier.verify(
+            message = v2,
+            now = now,
+            findInvite = { inviteSecrets.find(it, now) },
+            envelopeSender = { E2EEManager.peekSenderMemberId(it) },
+            openEnvelope = { envelope, x25519, ed25519 ->
+                e2eeManager.decryptMessage(
+                    encryptedMessageJson = envelope,
+                    senderX25519PublicKey = x25519,
+                    senderEd25519PublicKey = ed25519
+                )
+            },
+            verifySignature = { message, signature, keyHex ->
+                cryptoProvider.verifySignature(message, signature, keyHex)
+            },
+            decodePayload = { json.decodeFromString<JoinRequestV2Payload>(it) }
+        )
+        return when (result) {
+            is JoinV2Verifier.Result.Verified -> result.request
+            is JoinV2Verifier.Result.Rejected -> {
+                Timber.w("Refusing a v2 join request: ${result.reason}")
+                null
+            }
+        }
+    }
+
+    private val inviteSecrets by lazy {
+        InviteSecretStore(context.getSharedPreferences(InviteSecretStore.PREFS_NAME, Context.MODE_PRIVATE))
+    }
+
+    /** Answering a request, either way, uses up the invite it came through. */
+    private fun useUpInvite(request: JoinRequest) {
+        request.inviteId?.let { runCatching { inviteSecrets.markUsed(it, System.currentTimeMillis()) } }
     }
 
     private fun sendJoinRequestNotification(request: JoinRequest) {
@@ -233,9 +284,26 @@ class InviteManager @Inject constructor(
             "inviterMemberId" to inviterMemberId,
             "inviterName" to inviterName,
             "timestamp" to System.currentTimeMillis().toString()
-        )
+        ) + v2Fields()
         val inviteJson = json.encodeToString(inviteData)
         return Base64.getEncoder().encodeToString(inviteJson.toByteArray())
+    }
+
+    /**
+     * Join v2 fields: a fresh one-time secret, which never touches the broker, and the
+     * inviter's keys, so the joiner can encrypt its request to us and check the keys against
+     * inviterMemberId. The v1 fields above stay, so a joiner on an older build still works.
+     */
+    private fun v2Fields(): Map<String, String> {
+        val (invite, secret) = inviteSecrets.create(System.currentTimeMillis())
+        return mapOf(
+            JoinV2.FIELD_VERSION to JoinV2.VERSION,
+            JoinV2.FIELD_INVITE_ID to invite.inviteId,
+            JoinV2.FIELD_SECRET to Base64.getEncoder().encodeToString(secret),
+            JoinV2.FIELD_INVITER_ED25519 to cryptoProvider.getLocalEd25519PublicKey(),
+            JoinV2.FIELD_INVITER_X25519 to cryptoProvider.getLocalX25519PublicKey(),
+            JoinV2.FIELD_EXPIRES_AT to invite.expiresAt.toString()
+        )
     }
 
     /**
@@ -282,9 +350,13 @@ class InviteManager @Inject constructor(
                 return Result.failure(IllegalArgumentException("Join request keys conflict: $reason"))
             }
 
-            val approvalMessage = "ADD:${currentGroup.groupId}:${currentGroup.version}:${newMember.ed25519PublicKey}"
-                .toByteArray(Charsets.UTF_8)
+            // Signs both keys and the name, not just the signing key: what is being approved
+            // is the whole identity the inviter saw. Checked only by this phone's addMember.
+            val approvalMessage = GroupStateManager.memberAdditionApprovalMessage(
+                currentGroup.groupId, currentGroup.version, newMember
+            )
             val signature = cryptoProvider.signMessage(approvalMessage)
+            useUpInvite(request)
 
             // Clear the retained join_request from the broker so it doesn't re-fire on reconnect
             val requestTopic = MqttConfig.getJoinRequestTopic(inviterMemberId)
@@ -383,6 +455,7 @@ class InviteManager @Inject constructor(
     suspend fun rejectJoinRequest(request: JoinRequest): Result<Unit> {
         return try {
             markJoinRequestClosed(request.requestId)
+            useUpInvite(request)
             _pendingJoinRequests.update { current ->
                 current.filter { it.requestId != request.requestId }
             }

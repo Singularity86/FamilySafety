@@ -4,7 +4,10 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.familysafety.group.*
+import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.invite.JoinRequest
+import com.example.familysafety.invite.JoinV2
+import com.example.familysafety.invite.ScannedInviteV2
 import com.example.familysafety.transport.BrokerConfig
 import com.example.familysafety.transport.MqttConfig
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -214,6 +217,11 @@ class OnboardingViewModel @Inject constructor(
             val familyName = inviteData["groupName"] ?: "your family"
             val inviterName = inviteData["inviterName"] ?: ""
 
+            // A v2 invite (an inviter on this build or later) gets a v2 request: encrypted to
+            // the inviter and proven with the invite's secret, so nobody else on the broker can
+            // read it or put their own keys in its place (F13). A v1 invite gets v1.
+            val invite = ScannedInviteV2.from(inviteData, inviterMemberId, System.currentTimeMillis())
+
             // 3. Build and sign the join request. The signature is what lets a phone restored
             //    from a member's recovery phrase back in without a prompt (RejoinPolicy).
             val unsigned = JoinRequest(
@@ -223,13 +231,28 @@ class OnboardingViewModel @Inject constructor(
                 ed25519PublicKey = cryptoProvider.getEd25519PublicKey(),
                 x25519PublicKey = cryptoProvider.getX25519PublicKey(),
                 groupId = groupId,
-                timestampMs = System.currentTimeMillis()
+                timestampMs = System.currentTimeMillis(),
+                inviteId = invite?.inviteId
             )
             val joinRequest = unsigned.copy(
-                signature = cryptoProvider.signMessage(unsigned.signingBytes())
+                signature = cryptoProvider.signMessage(unsigned.signedBytes())
                     .joinToString("") { "%02x".format(it) }
             )
-            val joinRequestJson = json.encodeToString(joinRequest)
+            val joinRequestJson = if (invite == null) {
+                json.encodeToString(joinRequest)
+            } else {
+                // A fresh E2EEManager: this phone's identity was created a moment ago.
+                val e2ee = E2EEManager(cryptoProvider)
+                json.encodeToString(
+                    invite.requestMessage(
+                        signedRequest = joinRequest,
+                        encryptToInviter = { plaintext ->
+                            e2ee.encryptMessage(plaintext, inviterMemberId, invite.inviterX25519Hex.hexToBytes())
+                        },
+                        encode = { json.encodeToString(it) }
+                    )
+                )
+            }
 
             // 4. Connect, subscribe, and publish the join request — then return immediately.
             val clientId = "familysafe_join_${memberId.take(8)}_${System.currentTimeMillis()}"
@@ -273,7 +296,9 @@ class OnboardingViewModel @Inject constructor(
                 memberId = memberId,
                 inviterMemberId = inviterMemberId,
                 groupId = groupId,
-                joinRequestJson = joinRequestJson
+                joinRequestJson = joinRequestJson,
+                requestId = joinRequest.requestId,
+                fingerprint = JoinV2.fingerprint(joinRequest.ed25519PublicKey, joinRequest.x25519PublicKey)
             )
         } catch (e: Exception) {
             Timber.e(e, "sendJoinRequest: unexpected exception")
@@ -312,7 +337,11 @@ class OnboardingViewModel @Inject constructor(
             val memberId: String,
             val inviterMemberId: String,
             val groupId: String,
-            val joinRequestJson: String
+            val joinRequestJson: String,
+            /** Kept apart from the JSON: a v2 request carries it only inside its encryption. */
+            val requestId: String,
+            /** Shown while waiting, to compare with the inviter's screen. */
+            val fingerprint: String
         ) : JoinSubmitResult()
         data class Failed(val reason: String) : JoinSubmitResult()
     }
@@ -322,6 +351,9 @@ class OnboardingViewModel @Inject constructor(
     // stored family never connects to the relay and drops every group update it is sent.
     // A restored phone now rejoins through sendJoinRequest() with the restored phrase; see
     // RejoinPolicy for why a member's own phone is let back in without a prompt.
+
+    private fun String.hexToBytes(): ByteArray =
+        chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     private fun saveOnboardingComplete() {
         val prefs = context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)

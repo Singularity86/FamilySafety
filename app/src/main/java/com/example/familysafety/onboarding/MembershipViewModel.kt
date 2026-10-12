@@ -105,7 +105,8 @@ class MembershipViewModel @Inject constructor(
         return if (familyName != null) {
             MembershipState.PendingApproval(
                 invitedByName = inviterName ?: "",
-                familyName = familyName
+                familyName = familyName,
+                fingerprint = prefs.getString(KEY_PENDING_FINGERPRINT, null)
             )
         } else {
             MembershipState.Unauthenticated
@@ -118,7 +119,9 @@ class MembershipViewModel @Inject constructor(
         memberId: String,
         inviterMemberId: String,
         groupId: String,
-        joinRequestJson: String
+        joinRequestJson: String,
+        requestId: String,
+        fingerprint: String
     ) {
         prefs.edit()
             .putString(KEY_PENDING_FAMILY_NAME, familyName)
@@ -127,8 +130,10 @@ class MembershipViewModel @Inject constructor(
             .putString(KEY_PENDING_INVITER_MEMBER_ID, inviterMemberId)
             .putString(KEY_PENDING_GROUP_ID, groupId)
             .putString(KEY_PENDING_JOIN_REQUEST_JSON, joinRequestJson)
+            .putString(KEY_PENDING_REQUEST_ID, requestId)
+            .putString(KEY_PENDING_FINGERPRINT, fingerprint)
             .apply()
-        _membershipState.value = MembershipState.PendingApproval(inviterName, familyName)
+        _membershipState.value = MembershipState.PendingApproval(inviterName, familyName, fingerprint)
         resumeApprovalListener()
     }
 
@@ -228,6 +233,8 @@ class MembershipViewModel @Inject constructor(
             .remove(KEY_PENDING_INVITER_MEMBER_ID)
             .remove(KEY_PENDING_GROUP_ID)
             .remove(KEY_PENDING_JOIN_REQUEST_JSON)
+            .remove(KEY_PENDING_REQUEST_ID)
+            .remove(KEY_PENDING_FINGERPRINT)
             .commit()
     }
 
@@ -371,7 +378,9 @@ class MembershipViewModel @Inject constructor(
             val mqttClient = MqttAsyncClient(MqttConfig.BROKER_URL, clientId, MemoryPersistence())
             // Completes with the group definition on approval, or null on rejection.
             val approvalDeferred = CompletableDeferred<GroupDefinition?>()
-            val pendingRequestId = try {
+            // Stored on its own: a v2 request carries its id only inside its encryption. The
+            // parse is for a request left pending by a build before this one.
+            val pendingRequestId = prefs.getString(KEY_PENDING_REQUEST_ID, null) ?: try {
                 json.decodeFromString<JoinRequest>(joinRequestJson).requestId
             } catch (e: Exception) {
                 Timber.w(e, "Could not parse pending join request — rejection matching disabled")
@@ -523,5 +532,7 @@ class MembershipViewModel @Inject constructor(
         private const val KEY_PENDING_INVITER_MEMBER_ID = "pending_inviter_member_id"
         private const val KEY_PENDING_GROUP_ID = "pending_group_id"
         private const val KEY_PENDING_JOIN_REQUEST_JSON = "pending_join_request_json"
+        private const val KEY_PENDING_REQUEST_ID = "pending_join_request_id"
+        private const val KEY_PENDING_FINGERPRINT = "pending_join_fingerprint"
     }
 }
