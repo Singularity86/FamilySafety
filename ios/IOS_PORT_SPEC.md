@@ -560,6 +560,24 @@ published plaintext + retained on **own** presence topic.
 Receipt handling must reject receipts for message IDs that were never addressed to the
 receipt's sender (anti-forgery, see ChatRepository).
 
+**Receipt a duplicate (since Android 1.5, F27).** When a chat message arrives whose `messageId`
+you already hold, don't drop it silently. Send a `DELIVERED` receipt for it to the sender again,
+on the normal receipt path. A sender that is retrying cannot otherwise tell "lost receipt" from
+"never arrived". Older Android peers drop duplicates silently, and against them the sender
+retries until its cap.
+
+**Emergency (crash) alerts** are ordinary group chat messages: the same payload, topic and QoS,
+with no priority flag on the wire. What differs is the sender's obligation:
+- Store one copy per member durably *before* the first send, and keep sending after the alert
+  screen closes, after the process dies and after the device restarts.
+- Every resend reuses the original `messageId` and `timestamp`, so receivers keep one copy.
+- A member's copy is done when a `DELIVERED` or `READ` receipt for that `messageId` arrives in
+  an envelope signed by that member, with `recipientId` equal to them. One member's receipt
+  never settles another's copy.
+- Resend schedule per member: immediately, +15 s, +30 s, then every 60 s, and also at once on
+  every reconnect. Give up 24 h after the alert was raised. Drop members who have left.
+- Show per-member status: sending, waiting for their phone, received.
+
 ### 6.4 Group sync
 ```json
 // GroupSyncMessage (plaintext inside per-recipient envelope)
