@@ -188,6 +188,20 @@ class E2EEManagerTest {
     }
 
     @Test
+    fun `shared secrets are cached per member and key, not per claimed member alone`() {
+        // The sender ID on an envelope is unauthenticated until after decryption. Keyed by ID
+        // alone, an envelope naming Alice but made with Mallory's key cached a secret under
+        // Alice's ID, and Alice's real messages then failed to decrypt.
+        val alicesKey = ByteArray(32) { 1 }
+        val mallorysKey = ByteArray(32) { 2 }
+        assertNotEquals(
+            E2EEManager.cacheKey("alice", alicesKey),
+            E2EEManager.cacheKey("alice", mallorysKey)
+        )
+        assertTrue(E2EEManager.cacheKey("alice", alicesKey).startsWith("alice:"))
+    }
+
+    @Test
     fun `EncryptionException can be thrown and caught`() {
         var caught = false
         try {
