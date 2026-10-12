@@ -36,6 +36,10 @@ class E2EEManager @Inject constructor(
          * The value is unauthenticated until decryptMessage verifies the signature against
          * that sender's keys — treat it as routing metadata only.
          */
+        /** Shared-secret cache key: the member and the X25519 key the secret was made with. */
+        internal fun cacheKey(memberId: String, x25519PublicKey: ByteArray): String =
+            "$memberId:" + x25519PublicKey.joinToString("") { "%02x".format(it) }
+
         fun peekSenderMemberId(encryptedMessageJson: String): String? = try {
             envelopeJson.decodeFromString<EncryptedMessage>(encryptedMessageJson).senderMemberId
         } catch (e: Exception) {
@@ -132,7 +136,12 @@ class E2EEManager @Inject constructor(
         otherMemberId: String,
         otherX25519PublicKey: ByteArray
     ): ByteArray {
-        sharedSecretCache[otherMemberId]?.let { return it }
+        // Keyed by the key as well as the member. On decrypt, otherMemberId is the envelope's
+        // plaintext senderMemberId, which nothing has authenticated yet. Keyed by ID alone, an
+        // envelope naming a member but made with another key cached a wrong secret under that
+        // member's ID, and their real messages stopped decrypting until the cache was cleared.
+        val cacheKey = cacheKey(otherMemberId, otherX25519PublicKey)
+        sharedSecretCache[cacheKey]?.let { return it }
         
         val myX25519PrivateKey = cryptoProvider.getX25519PrivateKey()
         val sharedSecret = ByteArray(Box.BEFORENMBYTES)
@@ -147,8 +156,8 @@ class E2EEManager @Inject constructor(
             throw EncryptionException("Failed to compute shared secret")
         }
         
-        sharedSecretCache[otherMemberId] = sharedSecret
-        
+        sharedSecretCache[cacheKey] = sharedSecret
+
         return sharedSecret
     }
 
@@ -156,8 +165,9 @@ class E2EEManager @Inject constructor(
         sharedSecretCache.clear()
     }
 
+    /** Every cached secret for [memberId], whichever key it was computed with. */
     fun removeSharedSecret(memberId: String) {
-        sharedSecretCache.remove(memberId)
+        sharedSecretCache.keys.removeIf { it.startsWith("$memberId:") }
     }
 
     private fun ByteArray.toHexString(): String =
