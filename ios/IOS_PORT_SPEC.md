@@ -425,6 +425,12 @@ padding is a bandwidth trade rather than a free win).
   "signature": "<hex128chars>", "protocolVersion": 2 }       // PresenceUpdate
 ```
 
+**Receivers drop a `LocationUpdate` whose `memberId` ≠ the authenticated sender** (the
+member whose signature verified when the envelope was decrypted). Otherwise any member could
+move anyone else's pin. Senders already put their own id there, so this breaks no conforming
+peer. Android enforces it since `android/1.2-location-sender` (F23). This covers live
+location only; replicated location history is covered by author signatures (Android 3.2, F24).
+
 #### Protocol version advertisement (since 1.12.6)
 
 ```
