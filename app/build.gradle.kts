@@ -269,6 +269,9 @@ dependencies {
     // Timber Logging
     implementation("com.jakewharton.timber:timber:5.0.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // Fingerprint/face or screen-lock check before the recovery phrase or a backup leaves
+    // the keystore. Needs MainActivity to be a FragmentActivity.
+    implementation("androidx.biometric:biometric:1.1.0")
     implementation("org.bouncycastle:bcprov-jdk15to18:1.76")
 
     // Coil — Compose-native image loading (for file thumbnails)

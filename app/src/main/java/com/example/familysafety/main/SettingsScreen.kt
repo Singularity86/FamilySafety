@@ -48,6 +48,11 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.SecureFlagPolicy
+import android.widget.Toast
+import com.example.familysafety.security.BackupPasswordPolicy
+import com.example.familysafety.security.DeviceCredentialGate
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberPermissionState
 import com.example.familysafety.ui.components.PermissionRationaleCard
@@ -1124,8 +1129,25 @@ fun SettingsScreen(
                 TextButton(onClick = {
                     showWarningDialog = false
                     scope.launch {
-                        recoveryWords = viewModel.getMnemonic()
-                        showPhraseDialog = true
+                        // The phrase is read only after the phone confirms its owner (F15).
+                        val activity = DeviceCredentialGate.activityOf(context)
+                        val gate = if (activity == null) {
+                            DeviceCredentialGate.Result.Failed("This screen can't confirm it's you.")
+                        } else {
+                            DeviceCredentialGate.confirmOwner(
+                                activity,
+                                title = "Show recovery phrase",
+                                subtitle = "Confirm it's you"
+                            )
+                        }
+                        if (gate == DeviceCredentialGate.Result.Passed) {
+                            recoveryWords = viewModel.getMnemonic()
+                            showPhraseDialog = true
+                        } else {
+                            DeviceCredentialGate.explain(gate)?.let {
+                                Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+                            }
+                        }
                     }
                 }) {
                     Text("Reveal Phrase")
@@ -1180,16 +1202,29 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        if (backupPassword.length < 8) {
-                            backupError = "Password must be at least 8 characters"
-                            return@TextButton
-                        }
-                        if (backupPassword != backupPasswordConfirm) {
-                            backupError = "Passwords do not match"
+                        BackupPasswordPolicy.problem(backupPassword, backupPasswordConfirm)?.let {
+                            backupError = it
                             return@TextButton
                         }
                         isBackupLoading = true
                         scope.launch {
+                            // The backup carries the recovery phrase, so it needs the same
+                            // owner check as showing the phrase.
+                            val activity = DeviceCredentialGate.activityOf(context)
+                            val gate = if (activity == null) {
+                                DeviceCredentialGate.Result.Failed("This screen can't confirm it's you.")
+                            } else {
+                                DeviceCredentialGate.confirmOwner(
+                                    activity,
+                                    title = "Export backup",
+                                    subtitle = "Confirm it's you"
+                                )
+                            }
+                            if (gate != DeviceCredentialGate.Result.Passed) {
+                                isBackupLoading = false
+                                backupError = DeviceCredentialGate.explain(gate)
+                                return@launch
+                            }
                             val uri = viewModel.exportBackup(backupPassword)
                             isBackupLoading = false
                             if (uri != null) {
@@ -1377,6 +1412,9 @@ fun SettingsScreen(
                 showPhraseDialog = false
                 recoveryWords = emptyList()
             },
+            // A dialog has its own window, so the screen's flags don't reach it. Kept out of
+            // screenshots, screen recording and the recents thumbnail.
+            properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
             title = { Text("Recovery Phrase") },
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
