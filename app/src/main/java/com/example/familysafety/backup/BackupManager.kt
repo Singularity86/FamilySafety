@@ -43,6 +43,25 @@ object BackupManager {
     private const val NONCE_BYTES = 12
     private const val SALT_BYTES = 32
 
+    /** How long an exported backup file is left for the app it was shared to. */
+    const val EXPORT_FILE_LIFETIME_MS = 5 * 60_000L
+
+    /** Where an export is written for sharing. One file, replaced by each export. */
+    fun exportFile(context: android.content.Context): java.io.File =
+        java.io.File(java.io.File(context.getExternalFilesDir(null), "familysafety_files"), "familysafety_backup.familysafe")
+
+    /**
+     * Delete an exported backup left over from an earlier run (F33): the in-process timer that
+     * normally removes it dies with the process.
+     */
+    fun sweepExportFile(context: android.content.Context, now: Long = System.currentTimeMillis()) {
+        val file = runCatching { exportFile(context) }.getOrNull() ?: return
+        if (isStale(file.exists(), file.lastModified(), now)) file.delete()
+    }
+
+    internal fun isStale(exists: Boolean, lastModified: Long, now: Long): Boolean =
+        exists && now - lastModified >= EXPORT_FILE_LIFETIME_MS
+
     fun export(mnemonic: List<String>, groupDefinitionJson: String, password: String): ByteArray {
         val salt = ByteArray(SALT_BYTES).also { SecureRandom().nextBytes(it) }
         val key = deriveKey(password, salt)

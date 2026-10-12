@@ -237,7 +237,10 @@ class OnboardingViewModel @Inject constructor(
 
             withContext(Dispatchers.IO) {
                 val options = MqttConnectOptions().apply {
-                    isCleanSession = false
+                    // Clean (F33): the client ID is unique to this one publish, so a kept
+                    // session would never be resumed and only sat on the broker afterwards.
+                    // The request is retained, which is what carries it to the inviter.
+                    isCleanSession = true
                     connectionTimeout = 30
                     keepAliveInterval = 30
                     isAutomaticReconnect = false

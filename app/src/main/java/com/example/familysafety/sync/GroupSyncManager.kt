@@ -442,6 +442,11 @@ class GroupSyncManager @Inject constructor(
                 _syncState.value = SyncState.Synced(syncMessage.version)
                 Timber.i("Applied group update: ${syncMessage.changeType}")
 
+                // Any vote retained on our topic was about a removal that's now done.
+                if (syncMessage.changeType == ChangeType.MEMBER_REMOVED && syncMessage.quorumSignatures.isNotEmpty()) {
+                    scope.launch { clearRetainedVotes() }
+                }
+
                 if (syncMessage.changeType == ChangeType.MEMBER_ADDED) {
                     scope.launch {
                         requestGroupStateRefresh(
@@ -637,6 +642,27 @@ class GroupSyncManager @Inject constructor(
         }
     }
 
+    /**
+     * Clear the retained vote on our own removal_vote topic once a removal has been applied
+     * (F33). Votes are retained so an offline member still gets them, but nothing removed
+     * them afterwards, so the broker replayed the last vote to this phone on every reconnect,
+     * long after it meant anything. Each phone clears its own topic; any client may clear a
+     * retained message by publishing an empty one.
+     */
+    private suspend fun clearRetainedVotes() {
+        val me = currentMemberId ?: return
+        try {
+            transportProvider.broadcastMessage(
+                topic = MqttConfig.getRemovalVoteTopic(me),
+                payload = ByteArray(0),
+                qos = MqttConfig.DEFAULT_QOS,
+                retained = true
+            )
+        } catch (e: Exception) {
+            Timber.w(e, "Could not clear the retained removal vote")
+        }
+    }
+
     private suspend fun broadcastVote(
         currentGroup: GroupDefinition,
         myMemberId: String,
@@ -726,6 +752,7 @@ class GroupSyncManager @Inject constructor(
         val result = manager.removeMemberByQuorum(targetMemberId, signatures)
         if (result is GroupOperationResult.Success) {
             pendingVotes.remove(key)
+            clearRetainedVotes()
             broadcastGroupUpdate(
                 result.value,
                 ChangeType.MEMBER_REMOVED,

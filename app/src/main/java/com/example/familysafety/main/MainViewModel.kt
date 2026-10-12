@@ -445,10 +445,16 @@ class MainViewModel @Inject constructor(
                 .encodeToString(ready.family)
             val bytes = BackupManager.export(ready.mnemonic, groupDefJson, password)
 
-            val dir = File(context.getExternalFilesDir(null), "familysafety_files")
-            dir.mkdirs()
-            val file = File(dir, "familysafety_backup.familysafe")
+            val file = BackupManager.exportFile(context)
+            file.parentFile?.mkdirs()
             file.writeBytes(bytes)
+            // It holds the recovery phrase (under the backup password) and used to stay on
+            // the phone after sharing (F33). Not deleted the instant the share sheet closes:
+            // the receiving app may still be reading it. Start-up sweeps any copy left behind.
+            viewModelScope.launch(Dispatchers.IO) {
+                delay(BackupManager.EXPORT_FILE_LIFETIME_MS)
+                file.delete()
+            }
 
             ExportResult.Ready(
                 FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
