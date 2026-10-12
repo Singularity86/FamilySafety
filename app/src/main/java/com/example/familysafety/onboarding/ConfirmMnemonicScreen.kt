@@ -1,5 +1,6 @@
 package com.example.familysafety.onboarding
 
+import com.example.familysafety.ui.components.KeepOutOfScreenshots
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -22,6 +23,8 @@ fun ConfirmMnemonicScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Shows or takes the recovery phrase: keep it out of screenshots and recents (F15).
+    KeepOutOfScreenshots()
     var confirmed by remember { mutableStateOf(false) }
 
     Scaffold(

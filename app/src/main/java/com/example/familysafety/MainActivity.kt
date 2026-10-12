@@ -2,7 +2,7 @@ package com.example.familysafety
 
 import android.content.Intent
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
@@ -40,8 +40,9 @@ import javax.inject.Inject
  * Main entry point for the application
  * Checks if keys are initialized and shows onboarding or main screen accordingly
  */
+// FragmentActivity (a ComponentActivity) because BiometricPrompt needs one; see DeviceCredentialGate.
 @AndroidEntryPoint
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     @Inject
     lateinit var appInitializer: AppInitializer

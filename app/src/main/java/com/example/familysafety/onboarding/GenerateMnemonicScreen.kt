@@ -1,5 +1,6 @@
 package com.example.familysafety.onboarding
 
+import com.example.familysafety.ui.components.KeepOutOfScreenshots
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -21,6 +22,8 @@ fun GenerateMnemonicScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Shows or takes the recovery phrase: keep it out of screenshots and recents (F15).
+    KeepOutOfScreenshots()
     val mnemonic by viewModel.mnemonic.collectAsState()
 
     // Generate silently in the background — user never sees the words here.

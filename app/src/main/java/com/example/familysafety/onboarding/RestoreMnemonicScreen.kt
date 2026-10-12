@@ -1,5 +1,6 @@
 package com.example.familysafety.onboarding
 
+import com.example.familysafety.ui.components.KeepOutOfScreenshots
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -24,6 +25,8 @@ fun RestoreMnemonicScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Shows or takes the recovery phrase: keep it out of screenshots and recents (F15).
+    KeepOutOfScreenshots()
     var words by remember { mutableStateOf(List(12) { "" }) }
     val allWordsFilled = words.all { it.isNotBlank() }
     // Cleared as soon as anything is edited, so the message belongs to what is on screen
