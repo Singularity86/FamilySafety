@@ -104,6 +104,8 @@ object GroupStateMerge {
         val subscriberMemberId = if (subscriptionIsOurs) ours.subscriberMemberId else winner.subscriberMemberId
         val subscriptionConfirmedAtEpochMs =
             if (subscriptionIsOurs) ours.subscriptionConfirmedAtEpochMs else winner.subscriptionConfirmedAtEpochMs
+        // The signature travels with the confirmation it covers.
+        val subscriptionSignature = if (subscriptionIsOurs) ours.subscriptionSignature else winner.subscriptionSignature
 
         // A grant code is signed once for this exact family and never changes; prefer
         // whichever side has one at all, the same rule as fileEncryptionKey below.
@@ -114,6 +116,7 @@ object GroupStateMerge {
             creatorMemberId == winner.creatorMemberId &&
             subscriberMemberId == winner.subscriberMemberId &&
             subscriptionConfirmedAtEpochMs == winner.subscriptionConfirmedAtEpochMs &&
+            subscriptionSignature == winner.subscriptionSignature &&
             grantCode == winner.grantCode &&
             proofs == winner.removalProofs
         if (nothingToAdd) return null
@@ -130,6 +133,7 @@ object GroupStateMerge {
             fileEncryptionKey = winner.fileEncryptionKey ?: ours.fileEncryptionKey,
             subscriberMemberId = subscriberMemberId,
             subscriptionConfirmedAtEpochMs = subscriptionConfirmedAtEpochMs,
+            subscriptionSignature = subscriptionSignature,
             grantCode = grantCode,
             removalProofs = proofs
         )
