@@ -77,7 +77,11 @@ class AppInitializer @Inject constructor(
     private val locationPublishOutboxRepository: LocationPublishOutboxRepository
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var isInitialized = false
+    // Claimed when start-up begins, not when it ends. MainActivity and LocationService both
+    // call initialize(), and a flag set only at the end let both through, so the whole
+    // start-up (MQTT, LAN, avatar server) ran twice in parallel. Released again if start-up
+    // stops before completing, so a later call can retry.
+    private val started = AtomicBoolean(false)
     private var groupEventsJob: Job? = null
     private var replicationBackfillJob: Job? = null
     private var replicationAnnounceJob: Job? = null
@@ -99,17 +103,18 @@ class AppInitializer @Inject constructor(
      * Should be called once after the user has completed onboarding and is in a group.
      */
     fun initialize() {
-        if (isInitialized) {
-            Timber.d("$TAG: Already initialized")
+        if (!started.compareAndSet(false, true)) {
+            Timber.d("$TAG: Already initialized or starting")
             return
         }
 
         scope.launch {
+            var completed = false
             try {
                 Timber.d("$TAG: Starting initialization...")
 
                 // Everything below reads the encrypted stores. With one unreadable, start
-                // nothing: the app shows the storage screen, and isInitialized stays false
+                // nothing: the app shows the storage screen, and `started` is released
                 // so a later call (after the store recovers) still runs.
                 val unreadable = StorageHealth.unreadableStores(context)
                 if (unreadable.isNotEmpty()) {
@@ -246,7 +251,7 @@ class AppInitializer @Inject constructor(
                     }
                 }
 
-                isInitialized = true
+                completed = true
                 Timber.i("$TAG: Initialization complete")
 
                 // Enqueue WorkManager watchdog — uses query-first logic to avoid
@@ -313,6 +318,8 @@ class AppInitializer @Inject constructor(
 
             } catch (e: Exception) {
                 Timber.e(e, "$TAG: Initialization failed")
+            } finally {
+                if (!completed) started.set(false)
             }
         }
     }
@@ -445,7 +452,7 @@ class AppInitializer @Inject constructor(
         localTransport.stop()
         avatarRepository.cleanup()
         ServiceWatchdogWorker.cancel(context)
-        isInitialized = false
+        started.set(false)
         Timber.d("$TAG: Cleanup complete")
     }
 }
