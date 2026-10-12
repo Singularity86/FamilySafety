@@ -207,6 +207,13 @@ class AppInitializer @Inject constructor(
                             val isConnected =
                                 state is MqttTransport.ConnectionState.Connected
                             if (isConnected && !wasConnected) {
+                                // Crash alerts first: a reconnect is the moment an alert
+                                // raised without signal can finally go out.
+                                try {
+                                    chatRepository.flushEmergencyAlerts()
+                                } catch (e: Exception) {
+                                    Timber.e(e, "$TAG: crash alert flush on reconnect failed")
+                                }
                                 try {
                                     replicationManager.requestFullSync()
                                     replicationManager.announceDataAvailability()
@@ -239,6 +246,10 @@ class AppInitializer @Inject constructor(
                         }
                     }
                 }
+
+                // 8c. Keep retrying any crash alert still owed to someone, including one
+                // raised before the app was last killed.
+                chatRepository.startEmergencyRetryLoop()
 
                 // 9. Apply retention policies
                 scope.launch {

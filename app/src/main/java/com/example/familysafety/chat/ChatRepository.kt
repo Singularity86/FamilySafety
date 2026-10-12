@@ -7,6 +7,9 @@ import com.example.familysafety.replication.ReplicationManager
 import com.example.familysafety.storage.ChatMessageDao
 import com.example.familysafety.storage.ChatMessageEntity
 import com.example.familysafety.storage.ConversationSummary
+import com.example.familysafety.storage.EmergencyOutboxDao
+import com.example.familysafety.storage.EmergencyOutboxEntity
+import com.example.familysafety.storage.EmergencyRetrySchedule
 import com.example.familysafety.storage.MessageStatus
 import com.example.familysafety.storage.MessageType
 import com.example.familysafety.transport.MqttConfig
@@ -23,7 +26,12 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -42,7 +50,8 @@ class ChatRepository @Inject constructor(
     private val e2eeManager: E2EEManager,
     private val replicationManager: ReplicationManager,
     private val transportProvider: TransportProvider,
-    private val notificationHelper: ChatNotificationHelper
+    private val notificationHelper: ChatNotificationHelper,
+    private val emergencyOutboxDao: EmergencyOutboxDao
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true }
@@ -259,6 +268,148 @@ class ChatRepository @Inject constructor(
         }
     }
 
+    // =========================================================================
+    // CRASH ALERTS
+    // =========================================================================
+
+    private val emergencyFlushLock = Mutex()
+    private val emergencyWake = Channel<Unit>(Channel.CONFLATED)
+    private val emergencyLoopStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Raise a crash alert to every other family member and return its id, or null when
+     * this phone isn't in a family.
+     *
+     * Not suspending, and not run in the caller's scope: the alert screen closing must not
+     * be able to cancel it, which is how an expired countdown used to send nothing. The
+     * alert is a normal group chat message on the wire, so every version can read it; what
+     * changes is that it is stored per member and retried until each member's phone
+     * confirms delivery.
+     */
+    fun raiseEmergencyAlert(content: String): String? {
+        val localMember = groupStateManager.localMember.value ?: return null
+        val group = groupStateManager.groupDefinition.value ?: return null
+        val now = System.currentTimeMillis()
+        val message = ChatMessageEntity(
+            conversationId = group.groupId,
+            senderId = localMember.memberId,
+            recipientId = null,
+            content = content,
+            messageType = MessageType.TEXT,
+            status = MessageStatus.PENDING,
+            timestamp = now,
+            isOutgoing = true,
+            isReadLocally = true
+        )
+        val rows = group.members
+            .filter { it.memberId != localMember.memberId }
+            .map {
+                EmergencyOutboxEntity(
+                    alertId = message.messageId,
+                    recipientId = it.memberId,
+                    groupId = group.groupId,
+                    content = content,
+                    timestamp = now,
+                    createdAt = now
+                )
+            }
+        scope.launch {
+            chatMessageDao.insert(message)
+            emergencyOutboxDao.insertAll(rows)
+            flushEmergencyAlerts()
+            emergencyWake.trySend(Unit)
+        }
+        return message.messageId
+    }
+
+    /** Per-member delivery of one alert, for the alert screen. */
+    fun observeEmergencyAlert(alertId: String): Flow<List<EmergencyOutboxEntity>> =
+        emergencyOutboxDao.observeAlert(alertId)
+
+    /** True while any alert is still owed to someone, so a background retry knows to stay. */
+    suspend fun hasPendingEmergencyAlerts(): Boolean {
+        val next = emergencyOutboxDao.nextAttemptAt(
+            System.currentTimeMillis() - EmergencyRetrySchedule.GIVE_UP_AFTER_MS
+        )
+        // Long.MAX_VALUE marks copies for members who left the family: nothing to retry.
+        return next != null && next != Long.MAX_VALUE
+    }
+
+    /**
+     * Send every alert copy that is due. Delivery is judged only by the member's receipt,
+     * so a successful publish still schedules the next attempt; the receipt cancels it.
+     */
+    suspend fun flushEmergencyAlerts(now: Long = System.currentTimeMillis()) {
+        emergencyFlushLock.withLock {
+            val due = emergencyOutboxDao.due(now, now - EmergencyRetrySchedule.GIVE_UP_AFTER_MS)
+            if (due.isEmpty()) return
+            val group = groupStateManager.groupDefinition.value ?: return
+            val localMemberId = groupStateManager.localMember.value?.memberId ?: return
+            for (row in due) {
+                val recipient = group.findMemberById(row.recipientId)
+                val error = when {
+                    recipient == null -> "no longer in the family"
+                    sendViaNetwork(row.toChatMessage(localMemberId), recipient, row.groupId) -> null
+                    else -> "send failed"
+                }
+                val attempts = row.attemptCount + 1
+                // Someone who left the family can't be reached; stop trying them.
+                val nextAt = if (recipient == null) Long.MAX_VALUE
+                else now + EmergencyRetrySchedule.delayAfter(attempts)
+                emergencyOutboxDao.recordAttempt(row.alertId, row.recipientId, now, nextAt, error)
+            }
+            // PENDING → SENT only; a receipt may already have moved it further.
+            due.map { it.alertId }.distinct().forEach { alertId ->
+                if (chatMessageDao.getMessageById(alertId)?.status == MessageStatus.PENDING) {
+                    chatMessageDao.updateStatus(alertId, MessageStatus.SENT)
+                }
+            }
+        }
+    }
+
+    /**
+     * Keeps retrying while the app is running: sleeps until the next copy is due, or until
+     * a new alert is raised. Started once by AppInitializer. After the process is killed,
+     * [EmergencyAlertWorker] brings the app back to do the same.
+     */
+    fun startEmergencyRetryLoop() {
+        if (!emergencyLoopStarted.compareAndSet(false, true)) return
+        scope.launch {
+            while (true) {
+                try {
+                    val now = System.currentTimeMillis()
+                    val next = emergencyOutboxDao.nextAttemptAt(now - EmergencyRetrySchedule.GIVE_UP_AFTER_MS)
+                    if (next == null || next == Long.MAX_VALUE) {
+                        emergencyWake.receive()
+                        continue
+                    }
+                    if (next > now) {
+                        withTimeoutOrNull(next - now) { emergencyWake.receive() }
+                    }
+                    flushEmergencyAlerts()
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Timber.e(e, "$TAG: emergency retry loop error")
+                    delay(EmergencyRetrySchedule.delayAfter(1))
+                }
+            }
+        }
+    }
+
+    private fun EmergencyOutboxEntity.toChatMessage(senderId: String) = ChatMessageEntity(
+        messageId = alertId,
+        conversationId = groupId,
+        senderId = senderId,
+        recipientId = null,
+        content = content,
+        messageType = MessageType.TEXT,
+        status = MessageStatus.PENDING,
+        timestamp = timestamp,
+        isOutgoing = true,
+        isReadLocally = true
+    )
+
     /**
      * Core message sending logic.
      */
@@ -355,9 +506,26 @@ class ChatRepository @Inject constructor(
         val failedMessages = chatMessageDao.getFailedMessages()
         val group = groupStateManager.groupDefinition.value ?: return
 
+        val localMemberId = groupStateManager.localMember.value?.memberId ?: return
+
         failedMessages.forEach { message ->
-            val recipient = group.findMemberById(message.recipientId ?: return@forEach)
-                ?: return@forEach
+            if (message.recipientId == null) {
+                // A group message. These used to be skipped here, so one that failed was
+                // never sent again. Receivers keep one copy per messageId, so re-sending to
+                // everyone is safe.
+                chatMessageDao.updateStatus(message.messageId, MessageStatus.PENDING)
+                var anySent = false
+                group.members.filter { it.memberId != localMemberId }.forEach { member ->
+                    if (sendViaNetwork(message, member, message.conversationId)) anySent = true
+                }
+                chatMessageDao.updateStatus(
+                    message.messageId,
+                    if (anySent) MessageStatus.SENT else MessageStatus.FAILED
+                )
+                return@forEach
+            }
+
+            val recipient = group.findMemberById(message.recipientId) ?: return@forEach
 
             chatMessageDao.updateStatus(message.messageId, MessageStatus.PENDING)
 
@@ -405,7 +573,11 @@ class ChatRepository @Inject constructor(
 
             // Check for duplicate
             if (chatMessageDao.messageExists(payload.messageId)) {
-                Timber.d("$TAG: Duplicate message ${payload.messageId}, ignoring")
+                // Confirm it again. The sender re-sends until it hears back, so when the
+                // first receipt was lost, a silent duplicate would mean a crash alert being
+                // retried for a day. Only DELIVERED: a re-send says nothing about reading.
+                Timber.d("$TAG: Duplicate message ${payload.messageId}, re-confirming")
+                sendReceipt(recipient = sender, messageId = payload.messageId, status = MessageStatus.DELIVERED)
                 return
             }
 
@@ -543,6 +715,12 @@ class ChatRepository @Inject constructor(
                 return
             }
 
+            // A crash alert owed to this member: their signed receipt is what stops the
+            // retries. Rows exist only for members the alert was addressed to.
+            if (emergencyOutboxDao.markDelivered(receipt.messageId, senderMemberId, System.currentTimeMillis()) > 0) {
+                Timber.i("$TAG: Crash alert ${receipt.messageId.take(8)} delivered to ${senderMemberId.take(8)}")
+            }
+
             val message = chatMessageDao.getMessageById(receipt.messageId) ?: return
             if (!message.isOutgoing) return
             // 1-to-1 messages: only the actual recipient may confirm.
@@ -593,6 +771,8 @@ class ChatRepository @Inject constructor(
         val cutoff = System.currentTimeMillis() - (retentionDays * 24 * 60 * 60 * 1000L)
         val deleted = chatMessageDao.deleteOlderThan(cutoff)
         Timber.d("$TAG: Deleted $deleted messages older than $retentionDays days")
+        // Alert bookkeeping is only needed while an alert is live; a week is plenty.
+        emergencyOutboxDao.deleteOlderThan(System.currentTimeMillis() - 7 * 24 * 60 * 60 * 1000L)
     }
 
     // =========================================================================
