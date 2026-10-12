@@ -393,4 +393,55 @@ class ChatRepositoryTest {
         assertTrue(msg.isOutgoing)
         assertEquals(MessageStatus.PENDING, msg.status)
     }
+
+    // ── E1: no push replication of chat ─────────────────────────────────────────
+
+    private fun joinFamilyOfFour(): GroupDefinition {
+        val members = listOf("alice", "bob", "carol", "dave").map { makeMember(it) }.toSet()
+        val group = GroupDefinition(
+            groupId = "group_123",
+            groupName = "Test Family",
+            createdAtEpochMs = 1000L,
+            creatorMemberId = "alice",
+            members = members,
+            version = 1L
+        )
+        every { mockGroupStateManager.localMember } returns MutableStateFlow(makeMember("alice"))
+        every { mockGroupStateManager.groupDefinition } returns MutableStateFlow(group)
+        every { mockE2EEManager.encryptMessage(any(), any(), any()) } returns "{}"
+        return group
+    }
+
+    @Test
+    fun `one group message to a family of four is exactly three publishes`() = runTest {
+        val group = joinFamilyOfFour()
+
+        chatRepository.sendGroupTextMessage(group.groupId, "Dinner at 7")
+
+        // N−1 direct chat sends and nothing else: no backup copy per member.
+        coVerify(exactly = 3) { mockTransportProvider.sendMessage(any(), any(), any(), any(), any()) }
+        io.mockk.verify { mockReplicationManager wasNot io.mockk.Called }
+    }
+
+    @Test
+    fun `receiving a group message sends only the receipt back`() = runTest {
+        joinFamilyOfFour()
+        every { mockE2EEManager.decryptMessage(any(), any(), any()) } returns json.encodeToString(
+            ChatMessagePayload(
+                messageId = "msg_1",
+                content = "Dinner at 7",
+                messageType = MessageType.TEXT,
+                timestamp = 1_000L,
+                conversationId = "group_123"
+            )
+        )
+        coEvery { mockChatMessageDao.messageExists("msg_1") } returns false
+
+        chatRepository.handleIncomingMessage("ciphertext", senderMemberId = "bob")
+
+        // Before E1 every recipient also pushed the message to all other members.
+        coVerify(exactly = 1) { mockTransportProvider.sendMessage("bob", any(), any(), any(), any()) }
+        coVerify(exactly = 1) { mockTransportProvider.sendMessage(any(), any(), any(), any(), any()) }
+        io.mockk.verify { mockReplicationManager wasNot io.mockk.Called }
+    }
 }

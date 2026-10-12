@@ -738,42 +738,10 @@ class ReplicationManager @Inject constructor(
             }
     }
 
-    /**
-     * Replicate a new chat message to all peers.
-     */
-    suspend fun replicateChatMessage(message: com.example.familysafety.storage.ChatMessageEntity) {
-        // Private messages are never backed up to third parties; see mayHoldConversation.
-        if (directParticipants(message.conversationId) != null) return
-        val group = groupStateManager.groupDefinition.value ?: return
-        val localMemberId = groupStateManager.localMember.value?.memberId ?: return
-
-        val response = ReplicationResponse(
-            requestId = "realtime-${UUID.randomUUID()}",
-            senderId = localMemberId,
-            dataType = ReplicationDataType.CHAT_MESSAGES,
-            messages = listOf(ReplicatedMessage.fromChatMessageEntity(message)),
-            hasMore = false
-        )
-
-        // Send to all other members (for backup, not direct chat)
-        val plaintext = json.encodeToString(response)
-        group.members
-            .filter { it.memberId != localMemberId }
-            .forEach { peer ->
-                try {
-                    val topic = MqttConfig.getReplicationDataTopic(peer.memberId)
-                    val payload = encryptForPeer(plaintext, peer) ?: return@forEach
-                    transportProvider.sendMessage(
-                        recipientId = peer.memberId,
-                        topic = topic,
-                        payload = payload,
-                        qos = MqttConfig.QOS_AT_MOST_ONCE
-                    )
-                } catch (e: Exception) {
-                    Timber.e(e, "$TAG: Failed to replicate message to ${peer.memberId}")
-                }
-            }
-    }
+    // There is deliberately no push replication of individual chat messages. Every member
+    // receives a group message directly from its sender, and pushing it on again from each
+    // recipient cost N² publishes per message (E1). Missed messages come back through
+    // announceDataAvailability → ReplicationRequest.
 }
 
 /**

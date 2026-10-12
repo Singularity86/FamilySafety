@@ -105,21 +105,6 @@ class ReplicationManagerTest {
         replicationManager.replicateLocation(location)
     }
 
-    // ── replicateChatMessage ──────────────────────────────────────────────────
-
-    @Test
-    fun `replicateChatMessage without mqttPublisher does not throw`() = runTest {
-        val message = ChatMessageEntity(
-            conversationId = "conv_001",
-            senderId = "member_001",
-            recipientId = "member_002",
-            content = "Hello",
-            messageType = MessageType.TEXT,
-            isOutgoing = true
-        )
-        replicationManager.replicateChatMessage(message)
-    }
-
     // ── SyncState sealed class ────────────────────────────────────────────────
 
     @Test
