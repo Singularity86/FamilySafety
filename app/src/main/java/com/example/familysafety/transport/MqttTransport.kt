@@ -91,6 +91,33 @@ class MqttTransport @Inject constructor(
     // Throttle group-sync requests triggered by decrypt failures to once per sender per minute.
     private val decryptFailureSyncCooldowns = ConcurrentHashMap<String, Long>()
     companion object {
+        /**
+         * The location in a decrypted `location_update` from [senderId], or null to drop it.
+         *
+         * [senderId] is the member whose signature verified on decrypt. The update names a
+         * member of its own, and that used to be trusted as given: any family member could
+         * sign an update naming someone else and move that person's pin (F23). A member may
+         * only report their own location.
+         */
+        internal fun acceptedLocation(senderId: String, payloadJson: String): MemberLocation? {
+            val update = try {
+                MessageProtocol.decodeLocationUpdate(payloadJson)
+            } catch (e: Exception) {
+                Timber.w("$TAG: Undecodable location from $senderId")
+                return null
+            }
+            if (update.memberId != senderId) {
+                Timber.w("$TAG: Dropped location from $senderId claiming to be ${update.memberId}")
+                return null
+            }
+            val location = MessageProtocol.locationUpdateToMemberLocation(update)
+            if (DataValidator.validateLocation(location) !is ValidationResult.Valid) {
+                Timber.w("$TAG: Rejected invalid location from $senderId")
+                return null
+            }
+            return location
+        }
+
         private const val TAG = "MqttTransport"
         private const val DECRYPT_SYNC_COOLDOWN_MS = 60_000L
         private const val SUBSCRIBE_TIMEOUT_MS = 15_000L
@@ -1081,12 +1108,7 @@ class MqttTransport @Inject constructor(
             return
         }
         if (envelope.type == "location_update") {
-            val locationUpdate = MessageProtocol.decodeLocationUpdate(envelope.payload)
-            val memberLocation = MessageProtocol.locationUpdateToMemberLocation(locationUpdate)
-            if (DataValidator.validateLocation(memberLocation) !is ValidationResult.Valid) {
-                Timber.w("$TAG: Rejected invalid location from $senderId")
-                return
-            }
+            val memberLocation = acceptedLocation(senderId, envelope.payload) ?: return
             locationRepository.updateMemberLocation(memberLocation)
         }
     }
