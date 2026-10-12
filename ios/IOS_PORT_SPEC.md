@@ -680,6 +680,13 @@ two non-empty parts, else null (group chat).
   if `mayShare(conv, us)` and `mayShare(conv, sender)`. Refuse a request for a conversation the
   requester may not hold. Filter received `messages` the same way (both us and sender).
 - Never send a backup copy of a private message to third parties.
+- **No push replication.** A `ReplicationResponse` is only ever an answer to a
+  `ReplicationRequest`. Never push one unsolicited, whether to back up a message you sent or to
+  re-broadcast one you received: in a family of N, that multiplied each message into N² publishes.
+  Gaps are filled only by announce → request → response. Android stopped pushing in
+  `android/1.3-no-chat-push-replication` (E1). Older Android peers still push single messages
+  with `requestId` `"realtime-…"`. Accept those under the filtering rules above and dedupe by
+  `messageId`.
 - Request sources: location history -> only `targetMemberId` if it is a peer, else all peers;
   chat -> the other participant for a private conversation, else all peers. Do not issue a request
   while an unexpired one for the same (dataType, target, conversation) is outstanding.
