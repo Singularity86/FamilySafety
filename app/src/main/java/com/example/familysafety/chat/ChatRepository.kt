@@ -247,9 +247,11 @@ class ChatRepository @Inject constructor(
             if (sendViaNetwork(message, member, groupId)) anySucceeded = true
         }
 
+        // Each member already received the message directly above; there is no separate
+        // backup copy to push. A member who missed it fills the gap through the replication
+        // back-fill (announceDataAvailability → ReplicationRequest) when they reconnect.
         return if (anySucceeded) {
             chatMessageDao.updateStatus(message.messageId, MessageStatus.SENT)
-            scope.launch { replicationManager.replicateChatMessage(message) }
             Result.success(message.copy(status = MessageStatus.SENT))
         } else {
             chatMessageDao.updateStatus(message.messageId, MessageStatus.FAILED)
@@ -293,12 +295,7 @@ class ChatRepository @Inject constructor(
             if (sent) {
                 chatMessageDao.updateStatus(message.messageId, MessageStatus.SENT)
                 Timber.d("$TAG: Message ${message.messageId} sent successfully")
-
-                // Replicate to other family members for backup
-                scope.launch {
-                    replicationManager.replicateChatMessage(message)
-                }
-
+                // Private messages are never copied to third parties, so nothing to replicate.
                 Result.success(message.copy(status = MessageStatus.SENT))
             } else {
                 chatMessageDao.updateStatus(message.messageId, MessageStatus.FAILED)
@@ -463,10 +460,9 @@ class ChatRepository @Inject constructor(
                 status = if (message.isReadLocally) MessageStatus.READ else MessageStatus.DELIVERED
             )
 
-            // Replicate to other family members
-            scope.launch {
-                replicationManager.replicateChatMessage(message)
-            }
+            // Not re-broadcast. Every recipient of a group message used to push it on to
+            // every other member, so one message cost N² publishes for copies everyone
+            // already had (E1). Gaps are filled on request by the replication back-fill.
         } catch (e: Exception) {
             Timber.e(e, "$TAG: Failed to process incoming message")
         }
