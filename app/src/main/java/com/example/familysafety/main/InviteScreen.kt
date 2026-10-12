@@ -115,7 +115,10 @@ fun InviteScreen(
             }
 
             Text(
-                text = "Share this with someone to invite them to your family.",
+                // The code carries the invite's one-time secret (join v2): whoever holds it can
+                // ask to join, and it admits one person.
+                text = "Share this privately with one person. Anyone with this code can ask " +
+                    "to join for the next 24 hours. To invite someone else, open this screen again.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center

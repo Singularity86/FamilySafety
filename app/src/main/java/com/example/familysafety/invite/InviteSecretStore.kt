@@ -57,7 +57,7 @@ class InviteSecretStore(
     companion object {
         const val PREFS_NAME = "familysafety_invites"
         private const val KEY = "pending_invites"
-        /** Plenty for a day of invite-screen visits; the oldest drop first. */
-        private const val MAX_INVITES = 50
+        /** Plenty for a day of invite-screen visits; the oldest drop first, and expired ones go on every write. */
+        private const val MAX_INVITES = 20
     }
 }

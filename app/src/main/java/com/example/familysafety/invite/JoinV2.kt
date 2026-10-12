@@ -57,6 +57,13 @@ object JoinV2 {
         return (n % 1_000_000).toString().padStart(6, '0')
     }
 
+    /**
+     * Whether an approval's or rejection's inviter X25519 key is the one the invite carried.
+     * [fromInvite] is null for a v1 invite, which carried no keys: nothing to hold it to.
+     */
+    fun inviterX25519Matches(fromInvite: String?, inMessage: String): Boolean =
+        fromInvite == null || fromInvite.equals(inMessage, ignoreCase = true)
+
     fun sha256Hex(text: String): String =
         MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8)).toHex()
 

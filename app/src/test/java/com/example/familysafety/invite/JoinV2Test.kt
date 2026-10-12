@@ -169,6 +169,14 @@ class JoinV2Test {
         }
     }
 
+    @Test
+    fun `an approval must carry the inviter's encryption key from a v2 invite`() {
+        assertTrue(JoinV2.inviterX25519Matches(joiner.xHex, joiner.xHex.uppercase()))
+        assertFalse(JoinV2.inviterX25519Matches(joiner.xHex, attacker.xHex))
+        // A v1 invite carried no keys, so there is nothing to hold the approval to.
+        assertTrue(JoinV2.inviterX25519Matches(null, attacker.xHex))
+    }
+
     // ── Cross-platform vectors (iOS must produce the same) ──────────────────────
 
     @Test

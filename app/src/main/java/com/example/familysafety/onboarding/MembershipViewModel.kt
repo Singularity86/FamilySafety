@@ -19,6 +19,7 @@ import com.example.familysafety.invite.JoinApprovalValidator
 import com.example.familysafety.invite.JoinRejectionMessage
 import com.example.familysafety.invite.JoinRejectionPayload
 import com.example.familysafety.invite.JoinRequest
+import com.example.familysafety.invite.JoinV2
 import com.example.familysafety.transport.MqttConfig
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -121,7 +122,8 @@ class MembershipViewModel @Inject constructor(
         groupId: String,
         joinRequestJson: String,
         requestId: String,
-        fingerprint: String
+        fingerprint: String,
+        inviterX25519: String?
     ) {
         prefs.edit()
             .putString(KEY_PENDING_FAMILY_NAME, familyName)
@@ -132,6 +134,7 @@ class MembershipViewModel @Inject constructor(
             .putString(KEY_PENDING_JOIN_REQUEST_JSON, joinRequestJson)
             .putString(KEY_PENDING_REQUEST_ID, requestId)
             .putString(KEY_PENDING_FINGERPRINT, fingerprint)
+            .putString(KEY_PENDING_INVITER_X25519, inviterX25519)
             .apply()
         _membershipState.value = MembershipState.PendingApproval(inviterName, familyName, fingerprint)
         resumeApprovalListener()
@@ -235,6 +238,7 @@ class MembershipViewModel @Inject constructor(
             .remove(KEY_PENDING_JOIN_REQUEST_JSON)
             .remove(KEY_PENDING_REQUEST_ID)
             .remove(KEY_PENDING_FINGERPRINT)
+            .remove(KEY_PENDING_INVITER_X25519)
             .commit()
     }
 
@@ -280,6 +284,12 @@ class MembershipViewModel @Inject constructor(
             Timber.w("Ignoring approval whose signing key does not match the scanned invite")
             return null
         }
+        // The member ID pins only the inviter's signing key. A v2 invite also carried their
+        // X25519 key, so hold the approval to that too.
+        if (!JoinV2.inviterX25519Matches(pendingInviterX25519(), approval.inviterX25519PublicKey)) {
+            Timber.w("Ignoring approval whose encryption key does not match the scanned invite")
+            return null
+        }
 
         val groupDefJson = try {
             e2eeManager.decryptMessage(
@@ -319,6 +329,9 @@ class MembershipViewModel @Inject constructor(
      * inner payload must name OUR pending request — a replayed rejection cannot
      * cancel a different (future) join attempt.
      */
+    /** The inviter's X25519 key from a v2 invite, or null for a v1 invite. */
+    private fun pendingInviterX25519(): String? = prefs.getString(KEY_PENDING_INVITER_X25519, null)
+
     private fun verifyRejection(
         payload: String,
         myMemberId: String,
@@ -336,6 +349,10 @@ class MembershipViewModel @Inject constructor(
             != expectedInviterMemberId
         ) {
             Timber.w("Ignoring rejection whose signing key does not match the scanned invite")
+            return false
+        }
+        if (!JoinV2.inviterX25519Matches(pendingInviterX25519(), rejection.inviterX25519PublicKey)) {
+            Timber.w("Ignoring rejection whose encryption key does not match the scanned invite")
             return false
         }
 
@@ -534,5 +551,6 @@ class MembershipViewModel @Inject constructor(
         private const val KEY_PENDING_JOIN_REQUEST_JSON = "pending_join_request_json"
         private const val KEY_PENDING_REQUEST_ID = "pending_join_request_id"
         private const val KEY_PENDING_FINGERPRINT = "pending_join_fingerprint"
+        private const val KEY_PENDING_INVITER_X25519 = "pending_join_inviter_x25519"
     }
 }

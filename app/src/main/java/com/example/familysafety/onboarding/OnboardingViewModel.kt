@@ -298,7 +298,8 @@ class OnboardingViewModel @Inject constructor(
                 groupId = groupId,
                 joinRequestJson = joinRequestJson,
                 requestId = joinRequest.requestId,
-                fingerprint = JoinV2.fingerprint(joinRequest.ed25519PublicKey, joinRequest.x25519PublicKey)
+                fingerprint = JoinV2.fingerprint(joinRequest.ed25519PublicKey, joinRequest.x25519PublicKey),
+                inviterX25519 = invite?.inviterX25519Hex
             )
         } catch (e: Exception) {
             Timber.e(e, "sendJoinRequest: unexpected exception")
@@ -341,7 +342,12 @@ class OnboardingViewModel @Inject constructor(
             /** Kept apart from the JSON: a v2 request carries it only inside its encryption. */
             val requestId: String,
             /** Shown while waiting, to compare with the inviter's screen. */
-            val fingerprint: String
+            val fingerprint: String,
+            /**
+             * The inviter's X25519 key from a v2 invite, which the approval must match. Null for
+             * a v1 invite, which carries no keys.
+             */
+            val inviterX25519: String?
         ) : JoinSubmitResult()
         data class Failed(val reason: String) : JoinSubmitResult()
     }

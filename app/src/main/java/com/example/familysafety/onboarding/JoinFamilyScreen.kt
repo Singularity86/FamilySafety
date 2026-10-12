@@ -68,7 +68,8 @@ fun JoinFamilyScreen(
                             groupId = result.groupId,
                             joinRequestJson = result.joinRequestJson,
                             requestId = result.requestId,
-                            fingerprint = result.fingerprint
+                            fingerprint = result.fingerprint,
+                            inviterX25519 = result.inviterX25519
                         )
                         // State change drives navigation — no explicit call needed.
                     }

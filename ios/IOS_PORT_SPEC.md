@@ -1388,8 +1388,14 @@ the codebase but is *not* what the current invite path emits — match the map f
 new; the first five are unchanged so a joiner on an older build still works. The inviter makes a
 fresh `inviteId` + `inviteSecret` every time the invite screen opens and stores
 `{inviteId, secret, expiresAt}` locally: valid for 24 h, **single use** (used up when a request
-through it is approved or rejected). The secret only ever leaves the phone inside the QR. That is
-what makes it proof that a request came from someone who saw the invite.
+through it is approved or rejected). Keep the store bounded: drop expired entries on every
+write and keep at most 20, oldest dropped first.
+
+The secret travels inside the code itself, so **the code is the secret**: the QR, or the text
+shown for pasting. Anyone holding it within 24 h can ask to join, which is why the invite screen
+should say to share it privately (in person, or a private message). What the secret proves is
+that a request came from someone the code was given to, never from someone who only watched
+the broker.
 
 Why: in v1 the join request was plaintext, retained on the inviter's topic, so anyone on the
 broker could read it, or replace it with one carrying their own keys under the same name, and an
@@ -1492,7 +1498,9 @@ Track closed requestIds (persisted, cap ~200) to ignore broker redeliveries.
 
 ### 8.5 Joiner completes
 Verify `SHA-256(inviterEd25519PublicKey)[0..15] == inviterMemberId` **from the scanned QR**
-(this is the root of trust); decrypt/verify the envelope with the inviter's keys; adopt the
+(this is the root of trust). With a v2 invite, also require `inviterX25519PublicKey` to equal
+the QR's `inviterX25519`, for approvals and rejections alike: the member ID pins only the signing
+key. Then decrypt/verify the envelope with the inviter's keys; adopt the
 GroupDefinition; reconnect as a normal member. Rejection payloads must match the joiner's
 own pending `requestId` + memberId (anti-replay).
 
