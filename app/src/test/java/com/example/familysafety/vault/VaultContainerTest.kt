@@ -126,6 +126,29 @@ class VaultContainerTest {
         // any other part, so a short one is replaced outright.
         assertEquals(VaultSlots.CONTAINER_BYTES, bytes.size)
         assertEquals(VaultSlots.CONTAINER_BYTES.toLong(), file.length())
+        // ...but set aside, not deleted: it is the only local copy until the family's
+        // container arrives (F31).
+        assertEquals(128L, File(dir, "container.bin.corrupt").length())
+    }
+
+    @Test
+    fun aWriteReplacesTheContainerWithoutDeletingItFirst() = runTest {
+        // F31: deleting before the rename left a moment with no container at all.
+        val first = VaultSlots.randomContainer(SecureRandom())
+        val second = VaultSlots.randomContainer(SecureRandom())
+        assertTrue(container.write(first))
+        assertTrue(container.write(second))
+
+        assertArrayEquals(second, container.read())
+        assertFalse(File(dir, "container.bin.part").exists())
+    }
+
+    @Test
+    fun aContainerVersionFarInTheFutureIsRefused() {
+        // F29: it would become the high-water mark and lock out every real update until then.
+        val now = 1_700_000_000_000L
+        assertTrue(VaultContainerRules.versionIsPlausible(now + 60_000, now))
+        assertFalse(VaultContainerRules.versionIsPlausible(now + VaultContainerRules.MAX_FUTURE_SKEW_MS + 1, now))
     }
 
     @Test
