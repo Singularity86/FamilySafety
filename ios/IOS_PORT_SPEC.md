@@ -428,7 +428,7 @@ padding is a bandwidth trade rather than a free win).
 **Receivers drop a `LocationUpdate` whose `memberId` ≠ the authenticated sender** (the
 member whose signature verified when the envelope was decrypted). Otherwise any member could
 move anyone else's pin. Senders already put their own id there, so this breaks no conforming
-peer. Android enforces it since `android/1.2-location-sender` (F23). This covers live
+peer. Android enforces it since PR #19 (F23). This covers live
 location only; replicated location history is covered by author signatures (Android 3.2, F24).
 
 #### Protocol version advertisement (since 1.12.6)
@@ -683,8 +683,8 @@ two non-empty parts, else null (group chat).
 - **No push replication.** A `ReplicationResponse` is only ever an answer to a
   `ReplicationRequest`. Never push one unsolicited, whether to back up a message you sent or to
   re-broadcast one you received: in a family of N, that multiplied each message into N² publishes.
-  Gaps are filled only by announce → request → response. Android stopped pushing in
-  `android/1.3-no-chat-push-replication` (E1). Older Android peers still push single messages
+  Gaps are filled only by announce → request → response. Android stopped pushing in PR #20 (E1).
+  Older Android peers still push single messages
   with `requestId` `"realtime-…"`. Accept those under the filtering rules above and dedupe by
   `messageId`.
 - Request sources: location history -> only `targetMemberId` if it is a peer, else all peers;
