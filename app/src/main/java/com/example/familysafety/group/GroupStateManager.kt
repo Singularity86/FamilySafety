@@ -106,6 +106,18 @@ class GroupStateManager(
                 return@withLock GroupOperationResult.Failure(GroupError.MemberAlreadyExists)
             }
 
+            // Ask storage too. Onboarding builds a fresh manager that never called
+            // initialize(), so memory alone says "no family" even when one is saved, and the
+            // save below would replace it. If storage can't say, don't guess.
+            val stored = try {
+                persistence.loadGroupDefinition()
+            } catch (e: Exception) {
+                return@withLock GroupOperationResult.Failure(GroupError.StorageError)
+            }
+            if (stored != null) {
+                return@withLock GroupOperationResult.Failure(GroupError.MemberAlreadyExists)
+            }
+
             val now = System.currentTimeMillis()
             val groupId = generateGroupId()
 

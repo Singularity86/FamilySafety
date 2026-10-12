@@ -1,17 +1,18 @@
 package com.example.familysafety.storage
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
+import androidx.sqlite.db.SupportSQLiteOpenHelper
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import timber.log.Timber
 import java.security.SecureRandom
+import java.util.Base64
 
 /**
  * Room database with SQLCipher encryption for storing location history and chat messages.
@@ -49,9 +50,12 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
 
     companion object {
         private const val DATABASE_NAME = "familysafety_encrypted.db"
-        private const val PREFS_NAME = "familysafety_db_prefs"
-        private const val KEY_DB_PASSPHRASE = "db_passphrase"
+        private const val PREFS_NAME = "familysafety_db_prefs_v2"
+        private const val LEGACY_PREFS_NAME = "familysafety_db_prefs"
+        private const val KEY_ALIAS = "familysafety_db_master"
+        internal const val KEY_DB_PASSPHRASE = "db_passphrase"
         private const val PASSPHRASE_LENGTH = 32
+        private const val STORE = "Database"
 
         @Volatile
         private var INSTANCE: FamilySafetyDatabase? = null
@@ -62,10 +66,8 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
             }
         }
 
-        private fun buildDatabase(context: Context): FamilySafetyDatabase {
-            val passphrase = getOrCreatePassphrase(context)
-            return buildRoomDatabase(context, passphrase)
-        }
+        private fun buildDatabase(context: Context): FamilySafetyDatabase =
+            buildRoomDatabase(context)
 
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -241,7 +243,7 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
             }
         }
 
-        private fun buildRoomDatabase(context: Context, passphrase: ByteArray): FamilySafetyDatabase {
+        private fun buildRoomDatabase(context: Context): FamilySafetyDatabase {
             // The retired android-database-sqlcipher artifact loaded its native library
             // implicitly; net.zetetic:sqlcipher-android requires the caller to do it. Without
             // this the first query fails with UnsatisfiedLinkError rather than anything that
@@ -253,7 +255,12 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
                 FamilySafetyDatabase::class.java,
                 DATABASE_NAME
             )
-                .openHelperFactory(SupportOpenHelperFactory(passphrase))
+                // The passphrase is read when the database is first opened, not here. This
+                // runs during Hilt injection of MainActivity, so a throw here would crash
+                // every launch instead of reaching the storage-unavailable screen.
+                .openHelperFactory(
+                    DeferredOpenHelperFactory { SupportOpenHelperFactory(getPassphrase(context)) }
+                )
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8
@@ -277,75 +284,118 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
         }
 
         /**
-         * Get existing passphrase or create a new one.
+         * Read the database passphrase, creating one only for a database that doesn't exist yet.
          *
-         * Recovery path: if the Keystore / Tink layer is corrupt (e.g. after a reinstall
-         * that left a stale Keystore entry), we clear the encrypted prefs, the Keystore
-         * alias, AND the SQLCipher database file (which would be unreadable with a new
-         * passphrase anyway), then start completely fresh.
+         * Throws [StorageUnavailableException] rather than recovering. This used to catch any
+         * exception, delete the shared Keystore alias and the database and start over, which
+         * silently destroyed chat and location history, and through the shared alias the
+         * identity keys and recovery phrase too.
          */
-        private fun getOrCreatePassphrase(context: Context): ByteArray {
-            return try {
-                getOrCreatePassphraseInternal(context)
+        fun getPassphrase(context: Context): ByteArray {
+            val prefs = DedicatedEncryptedPrefs.open(
+                backend = AndroidEncryptedPrefsBackend(context),
+                store = STORE,
+                name = PREFS_NAME,
+                keyAlias = KEY_ALIAS,
+                legacyName = LEGACY_PREFS_NAME
+            )
+            return resolvePassphrase(prefs, context.getDatabasePath(DATABASE_NAME).exists())
+        }
+
+        internal fun resolvePassphrase(prefs: SharedPreferences, databaseExists: Boolean): ByteArray {
+            val stored = try {
+                prefs.getString(KEY_DB_PASSPHRASE, null)
             } catch (e: Exception) {
-                // Wipe everything tied to the old key and retry.
-                clearAll(context)
-                getOrCreatePassphraseInternal(context)
+                throw StorageUnavailableException(STORE, e)
             }
+            if (stored != null) return Base64.getDecoder().decode(stored)
+
+            // A database with no passphrase can't be opened, and a fresh passphrase would
+            // not open it either. Report it; don't paper over it with a new empty database.
+            if (databaseExists) {
+                throw StorageUnavailableException(
+                    STORE,
+                    IllegalStateException("database exists but its passphrase is missing")
+                )
+            }
+
+            val newPassphrase = ByteArray(PASSPHRASE_LENGTH).also { SecureRandom().nextBytes(it) }
+            // commit() — synchronous write so the passphrase is on disk before the
+            // database file is created, preventing a mismatch on the next launch.
+            val saved = prefs.edit()
+                .putString(KEY_DB_PASSPHRASE, Base64.getEncoder().encodeToString(newPassphrase))
+                .commit()
+            if (!saved) {
+                throw StorageUnavailableException(STORE, IllegalStateException("passphrase write failed"))
+            }
+            return newPassphrase
         }
 
         /**
-         * Delete the encrypted prefs file, the Keystore master key alias, and the
-         * SQLCipher database file so the app can start with a completely clean slate.
+         * Delete the database, its passphrase and its Keystore key. Only for the reset the
+         * user confirms with their recovery phrase on the storage-unavailable screen.
          */
-        private fun clearAll(context: Context) {
-            try { context.deleteSharedPreferences(PREFS_NAME) } catch (_: Exception) {}
-            try {
+        fun resetUnreadableStorage(context: Context) {
+            closeDatabase()
+            runCatching { context.deleteSharedPreferences(PREFS_NAME) }
+            runCatching { context.deleteSharedPreferences(LEGACY_PREFS_NAME) }
+            runCatching { context.deleteDatabase(DATABASE_NAME) }
+            runCatching {
                 val ks = java.security.KeyStore.getInstance("AndroidKeyStore")
                 ks.load(null)
-                if (ks.containsAlias(MasterKey.DEFAULT_MASTER_KEY_ALIAS)) {
-                    ks.deleteEntry(MasterKey.DEFAULT_MASTER_KEY_ALIAS)
-                }
-            } catch (_: Exception) {}
-            // Without the passphrase the database is unreadable — delete it too.
-            try { context.deleteDatabase(DATABASE_NAME) } catch (_: Exception) {}
-        }
-
-        private fun getOrCreatePassphraseInternal(context: Context): ByteArray {
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-
-            val prefs = EncryptedSharedPreferences.create(
-                context,
-                PREFS_NAME,
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-
-            val existingPassphrase = prefs.getString(KEY_DB_PASSPHRASE, null)
-
-            return if (existingPassphrase != null) {
-                android.util.Base64.decode(existingPassphrase, android.util.Base64.NO_WRAP)
-            } else {
-                val newPassphrase = ByteArray(PASSPHRASE_LENGTH)
-                SecureRandom().nextBytes(newPassphrase)
-                // commit() — synchronous write so the passphrase is on disk before the
-                // database file is created, preventing a mismatch on the next launch.
-                prefs.edit()
-                    .putString(
-                        KEY_DB_PASSPHRASE,
-                        android.util.Base64.encodeToString(newPassphrase, android.util.Base64.NO_WRAP)
-                    )
-                    .commit()
-                newPassphrase
+                if (ks.containsAlias(KEY_ALIAS)) ks.deleteEntry(KEY_ALIAS)
             }
         }
 
         fun closeDatabase() {
             INSTANCE?.close()
             INSTANCE = null
+        }
+    }
+}
+
+/**
+ * Builds the real open helper the first time the database is opened, rather than when Room
+ * is constructed. Room asks for the helper (and sets WAL on it) at build time, which is
+ * long before the first query and happens inside dependency injection.
+ */
+internal class DeferredOpenHelperFactory(
+    private val createFactory: () -> SupportSQLiteOpenHelper.Factory
+) : SupportSQLiteOpenHelper.Factory {
+
+    override fun create(
+        configuration: SupportSQLiteOpenHelper.Configuration
+    ): SupportSQLiteOpenHelper = DeferredOpenHelper(configuration)
+
+    private inner class DeferredOpenHelper(
+        private val configuration: SupportSQLiteOpenHelper.Configuration
+    ) : SupportSQLiteOpenHelper {
+        private val lock = Any()
+        private var delegate: SupportSQLiteOpenHelper? = null
+        private var writeAheadLogging: Boolean? = null
+
+        private fun helper(): SupportSQLiteOpenHelper = synchronized(lock) {
+            delegate ?: createFactory().create(configuration).also { created ->
+                writeAheadLogging?.let { created.setWriteAheadLoggingEnabled(it) }
+                delegate = created
+            }
+        }
+
+        override val databaseName: String? get() = configuration.name
+
+        override fun setWriteAheadLoggingEnabled(enabled: Boolean) = synchronized(lock) {
+            writeAheadLogging = enabled
+            delegate?.setWriteAheadLoggingEnabled(enabled)
+            Unit
+        }
+
+        override val writableDatabase: SupportSQLiteDatabase get() = helper().writableDatabase
+
+        override val readableDatabase: SupportSQLiteDatabase get() = helper().readableDatabase
+
+        override fun close() = synchronized(lock) {
+            delegate?.close()
+            Unit
         }
     }
 }

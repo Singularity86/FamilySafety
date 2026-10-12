@@ -11,11 +11,15 @@
     familysafety_db_prefs — the SQLCipher passphrase (FamilySafetyDatabase.PREFS_NAME);
                             backing this up would hand over the database key
     familysafety_encrypted.db — the SQLCipher database itself
+    The two prefs stores above moved to *_v2 files, each under its own Keystore key; the old
+    names stay listed until every install has opened and migrated them.
     familysafety_prefs    — onboarding state and pending-join details
 -->
 <full-backup-content>
     <exclude domain="sharedpref" path="familysafe_keys.xml"/>
+    <exclude domain="sharedpref" path="familysafe_keys_v2.xml"/>
     <exclude domain="sharedpref" path="familysafety_db_prefs.xml"/>
+    <exclude domain="sharedpref" path="familysafety_db_prefs_v2.xml"/>
     <exclude domain="sharedpref" path="familysafety_prefs.xml"/>
     <exclude domain="sharedpref" path="crash_detection_prefs.xml"/>
     <exclude domain="sharedpref" path="geofence_prefs.xml"/>

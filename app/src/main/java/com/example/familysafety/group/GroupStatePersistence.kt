@@ -3,11 +3,13 @@ package com.example.familysafety.group
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import androidx.datastore.core.CorruptionException
 import androidx.datastore.core.DataStore
 import androidx.datastore.core.DataStoreFactory
 import androidx.datastore.core.Serializer
 import androidx.datastore.dataStoreFile
 import androidx.security.crypto.MasterKey
+import com.example.familysafety.storage.StorageUnavailableException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import timber.log.Timber
@@ -66,6 +68,17 @@ class EncryptedGroupStatePersistence private constructor(
 
     companion object {
         private const val DATASTORE_FILE_NAME = "group_state.pb"
+        private const val STORE = "Family"
+
+        /**
+         * Delete the stored family. Only for the reset the user confirms with their recovery
+         * phrase on the storage-unavailable screen, and only when the family itself is the
+         * store that can't be read. The app restarts straight afterwards, so the open
+         * DataStore never reads the missing file.
+         */
+        fun resetUnreadableStorage(context: Context) {
+            runCatching { context.applicationContext.dataStoreFile(DATASTORE_FILE_NAME).delete() }
+        }
 
         @Volatile
         private var INSTANCE: EncryptedGroupStatePersistence? = null
@@ -127,6 +140,11 @@ class EncryptedGroupStatePersistence private constructor(
         encodeDefaults = true
     }
 
+    /**
+     * Null only when no family is stored. A family that is stored but can't be read throws
+     * [StorageUnavailableException]: it used to return null here too, and "no family" is
+     * what lets onboarding create a new one over the top of the real one.
+     */
     override suspend fun loadGroupDefinition(): GroupDefinition? {
         return withContext(Dispatchers.IO) {
             try {
@@ -143,10 +161,8 @@ class EncryptedGroupStatePersistence private constructor(
 
                 json.decodeFromString<GroupDefinition>(decryptedJson)
             } catch (e: Exception) {
-                // Treated as "no persisted group", which silently disables all publishing,
-                // so it must at least be visible in the log.
                 Timber.e(e, "GroupStatePersistence: failed to load persisted group definition")
-                null
+                throw StorageUnavailableException(STORE, e)
             }
         }
     }
@@ -281,11 +297,15 @@ class EncryptedGroupStateSerializer(
             // Format: [4 bytes iv length][iv][4 bytes data length][data][8 bytes version]
             val buffer = ByteBuffer.wrap(bytes)
 
+            // Lengths are checked before allocating: a damaged length field would otherwise
+            // ask for gigabytes and fail with OutOfMemoryError, which nothing here catches.
             val ivLength = buffer.int
+            require(ivLength in 0..buffer.remaining()) { "bad iv length $ivLength" }
             val iv = ByteArray(ivLength)
             buffer.get(iv)
 
             val dataLength = buffer.int
+            require(dataLength in 0..buffer.remaining()) { "bad data length $dataLength" }
             val encryptedJson = ByteArray(dataLength)
             buffer.get(encryptedJson)
 
@@ -293,7 +313,9 @@ class EncryptedGroupStateSerializer(
 
             EncryptedGroupState(encryptedJson, iv, version)
         } catch (e: Exception) {
-            defaultValue
+            // Not defaultValue: that reads as "no family stored", and the next write would
+            // replace the damaged file instead of leaving it for the user to decide about.
+            throw CorruptionException("Stored family state is unreadable", e)
         }
     }
 

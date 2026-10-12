@@ -28,7 +28,9 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="familysafe_keys.xml"/>
+        <exclude domain="sharedpref" path="familysafe_keys_v2.xml"/>
         <exclude domain="sharedpref" path="familysafety_db_prefs.xml"/>
+        <exclude domain="sharedpref" path="familysafety_db_prefs_v2.xml"/>
         <exclude domain="sharedpref" path="familysafety_prefs.xml"/>
         <exclude domain="sharedpref" path="crash_detection_prefs.xml"/>
         <exclude domain="sharedpref" path="geofence_prefs.xml"/>
@@ -41,7 +43,9 @@
 
     <device-transfer>
         <exclude domain="sharedpref" path="familysafe_keys.xml"/>
+        <exclude domain="sharedpref" path="familysafe_keys_v2.xml"/>
         <exclude domain="sharedpref" path="familysafety_db_prefs.xml"/>
+        <exclude domain="sharedpref" path="familysafety_db_prefs_v2.xml"/>
         <exclude domain="sharedpref" path="familysafety_prefs.xml"/>
         <exclude domain="sharedpref" path="crash_detection_prefs.xml"/>
         <exclude domain="sharedpref" path="geofence_prefs.xml"/>

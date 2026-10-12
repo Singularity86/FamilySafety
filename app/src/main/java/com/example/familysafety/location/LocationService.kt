@@ -19,6 +19,7 @@ import com.example.familysafety.crash.CrashDetectionMonitor
 import com.example.familysafety.crash.CrashTraceRecorder
 import com.example.familysafety.crash.ImpactDecider
 import com.example.familysafety.storage.LocationPublishOutboxRepository
+import com.example.familysafety.storage.StorageHealth
 import com.example.familysafety.transport.MqttConfig
 import com.example.familysafety.transport.TransportProvider
 import com.example.familysafety.transport.MqttTransport
@@ -188,6 +189,20 @@ class LocationService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action != ACTION_STOP_TRACKING) {
+            val unreadable = StorageHealth.unreadableKeyStores(this)
+            if (unreadable.isNotEmpty()) {
+                // Every fix would hit the unreadable store. Stand down; the app shows the
+                // storage screen when next opened, and the heartbeat or watchdog starts
+                // tracking again once the store reads. startForeground first, because a
+                // service started with startForegroundService must call it even to stop.
+                Timber.e("LocationService: not tracking, unreadable storage: $unreadable")
+                startForeground(NOTIFICATION_ID, createNotification())
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+        }
         when (intent?.action) {
             ACTION_START_TRACKING -> {
                 val id = intent.getStringExtra(EXTRA_MEMBER_ID)

@@ -44,6 +44,7 @@ class GroupStateManagerTest {
     @Before
     fun setup() {
         mockPersistence = mockk(relaxed = true)
+        coEvery { mockPersistence.loadGroupDefinition() } returns null
         mockCryptoProvider = mockk(relaxed = true)
         gsm = GroupStateManager("local_001", mockPersistence, mockCryptoProvider)
     }
@@ -162,6 +163,31 @@ class GroupStateManagerTest {
             GroupError.MemberAlreadyExists,
             (result as GroupOperationResult.Failure).error
         )
+    }
+
+    @Test
+    fun `createGroup refuses when a family is stored but not loaded`() = runTest {
+        // Onboarding's manager never calls initialize(), so memory alone says "no family".
+        coEvery { mockPersistence.loadGroupDefinition() } returns makeGroup()
+
+        val result = gsm.createGroup("Another Family", makeLocalMember())
+
+        assertEquals(
+            GroupError.MemberAlreadyExists,
+            (result as GroupOperationResult.Failure).error
+        )
+        coVerify(exactly = 0) { mockPersistence.saveGroupDefinition(any()) }
+    }
+
+    @Test
+    fun `createGroup refuses when the stored family can't be read`() = runTest {
+        coEvery { mockPersistence.loadGroupDefinition() } throws
+            com.example.familysafety.storage.StorageUnavailableException("Family")
+
+        val result = gsm.createGroup("Another Family", makeLocalMember())
+
+        assertEquals(GroupError.StorageError, (result as GroupOperationResult.Failure).error)
+        coVerify(exactly = 0) { mockPersistence.saveGroupDefinition(any()) }
     }
 
     @Test

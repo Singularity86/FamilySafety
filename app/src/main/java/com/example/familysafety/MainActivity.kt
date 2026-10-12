@@ -27,6 +27,7 @@ import com.example.familysafety.main.shouldShowTip
 import com.example.familysafety.ui.screens.ApprovedScreen
 import com.example.familysafety.ui.screens.PendingMemberScreen
 import com.example.familysafety.ui.screens.RejectedScreen
+import com.example.familysafety.ui.screens.StorageUnavailableScreen
 import com.example.familysafety.ui.theme.AppTheme
 import com.example.familysafety.ui.theme.ThemeMode
 import com.example.familysafety.ui.theme.ThemePreference
@@ -162,6 +163,15 @@ class MainActivity : ComponentActivity() {
                             RejectedScreen(
                                 familyName = (membershipState as MembershipState.Rejected).familyName,
                                 onContinue = { membershipViewModel.acknowledgeRejection() }
+                            )
+                        }
+                        is MembershipState.StorageUnavailable -> {
+                            // Retry restarts the process: singletons that met the failure
+                            // are rebuilt, and the first screen is decided again.
+                            StorageUnavailableScreen(
+                                areas = (membershipState as MembershipState.StorageUnavailable).areas,
+                                onRetry = { restartProcess() },
+                                onReset = { phrase -> membershipViewModel.resetUnreadableStorage(phrase) }
                             )
                         }
                         is MembershipState.Unauthenticated -> {

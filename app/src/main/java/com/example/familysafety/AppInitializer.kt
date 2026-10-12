@@ -26,6 +26,7 @@ import com.example.familysafety.location.ServiceWatchdogReceiver
 import com.example.familysafety.location.ServiceWatchdogWorker
 import com.example.familysafety.replication.ReplicationManager
 import com.example.familysafety.storage.LocationPublishOutboxRepository
+import com.example.familysafety.storage.StorageHealth
 import com.example.familysafety.sync.GroupSyncManager
 import com.example.familysafety.transport.LocalTransport
 import com.example.familysafety.transport.MqttTransport
@@ -106,6 +107,15 @@ class AppInitializer @Inject constructor(
         scope.launch {
             try {
                 Timber.d("$TAG: Starting initialization...")
+
+                // Everything below reads the encrypted stores. With one unreadable, start
+                // nothing: the app shows the storage screen, and isInitialized stays false
+                // so a later call (after the store recovers) still runs.
+                val unreadable = StorageHealth.unreadableStores(context)
+                if (unreadable.isNotEmpty()) {
+                    Timber.e("$TAG: not starting, unreadable storage: $unreadable")
+                    return@launch
+                }
 
                 // 1. Initialize GroupStateManager
                 groupStateManager.initialize()
