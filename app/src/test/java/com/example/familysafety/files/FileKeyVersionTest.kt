@@ -4,6 +4,7 @@ import com.example.familysafety.crypto.GroupCipher
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -55,6 +56,53 @@ class FileKeyVersionTest {
         val presence = GroupCipher.deriveSubkey(groupKeyHex, GroupCipher.PURPOSE_PRESENCE)
 
         assertFalse(files.contentEquals(presence))
+    }
+
+    // ── F22: the public legacy key is refused once a family has a group key ─────────────
+
+    @Test
+    fun `a version 1 chunk is refused in a keyed family`() {
+        // Anyone on the broker can derive this key from the groupId in the topic name.
+        assertNull(FileKeys.forVersion("group_123", groupKeyHex, FILE_KEY_VERSION_LEGACY))
+    }
+
+    @Test
+    fun `a keyed family still opens versions 2 and 3`() {
+        val raw = groupKeyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        assertArrayEquals(raw, FileKeys.forVersion("group_123", groupKeyHex, FILE_KEY_VERSION_GROUP_SECRET))
+        assertArrayEquals(
+            GroupCipher.deriveSubkey(groupKeyHex, GroupCipher.PURPOSE_FILES),
+            FileKeys.forVersion("group_123", groupKeyHex, FILE_KEY_VERSION_GROUP_SUBKEY)
+        )
+    }
+
+    @Test
+    fun `an unversioned local row in a keyed family reads as version 2, never the legacy key`() {
+        assertArrayEquals(
+            FileKeys.forVersion("group_123", groupKeyHex, FILE_KEY_VERSION_GROUP_SECRET),
+            FileKeys.forVersion("group_123", groupKeyHex, 0)
+        )
+    }
+
+    @Test
+    fun `a family with no group key keeps the legacy key and nothing else`() {
+        assertArrayEquals(FileKeys.legacy("group_123"), FileKeys.forVersion("group_123", null, FILE_KEY_VERSION_LEGACY))
+        assertArrayEquals(FileKeys.legacy("group_123"), FileKeys.forVersion("group_123", null, 0))
+        assertNull(FileKeys.forVersion("group_123", null, FILE_KEY_VERSION_GROUP_SUBKEY))
+    }
+
+    @Test
+    fun `the legacy key derivation is unchanged`() {
+        // SHA-256("group_123" + "familysafety-files-v1"). Files in pre-1.12.0 families
+        // depend on these exact bytes.
+        val expected = java.security.MessageDigest.getInstance("SHA-256")
+            .digest("group_123familysafety-files-v1".toByteArray())
+        assertArrayEquals(expected, FileKeys.legacy("group_123"))
+    }
+
+    @Test
+    fun `an unknown version is refused`() {
+        assertNull(FileKeys.forVersion("group_123", groupKeyHex, 9))
     }
 
     @Test
