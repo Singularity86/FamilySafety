@@ -93,6 +93,10 @@ class MqttTransport @Inject constructor(
     // forging failures under each member's ID in turn multiplied it (F16). A real key change
     // is healed by the first refresh anyway.
     private val lastDecryptFailureSyncAt = java.util.concurrent.atomic.AtomicLong(0L)
+
+    // F15: one identity in use on two installs.
+    private val cloneDetector = CloneDetector()
+    private val lastSelfCloneAlertAt = java.util.concurrent.atomic.AtomicLong(0L)
     companion object {
         /**
          * The location in a decrypted `location_update` from [senderId], or null to drop it.
@@ -338,7 +342,8 @@ class MqttTransport @Inject constructor(
                     val willJson = MessageProtocol.encodePresenceUpdate(
                         memberIdParam,
                         false,
-                        sign = { cryptoProvider.signMessage(it) }
+                        sign = { cryptoProvider.signMessage(it) },
+                        deviceId = DeviceIdentity.get(context)
                     )
                     setWill(
                         MqttConfig.getPresenceTopic(memberIdParam),
@@ -703,7 +708,8 @@ class MqttTransport @Inject constructor(
         val presenceJson = MessageProtocol.encodePresenceUpdate(
             id,
             isOnline,
-            sign = { cryptoProvider.signMessage(it) }
+            sign = { cryptoProvider.signMessage(it) },
+            deviceId = DeviceIdentity.get(context)
         )
         // At-most-once, because retained does the work here. The broker keeps the last
         // presence message whatever its QoS and hands it to every new subscriber, and the
@@ -994,9 +1000,54 @@ class MqttTransport @Inject constructor(
         return true
     }
 
+    /** The device ID in [update] if its device signature verifies under [ed25519Hex], else null. */
+    private fun verifiedDeviceId(update: MessageProtocol.PresenceUpdate, ed25519Hex: String): String? {
+        val deviceId = update.deviceId ?: return null
+        val signature = update.deviceSignature ?: return null
+        val valid = try {
+            cryptoProvider.verifySignature(
+                message = MessageProtocol.deviceSigningPayload(update.memberId, update.timestamp, deviceId),
+                signature = signature.chunked(2).map { it.toInt(16).toByte() }.toByteArray(),
+                publicKeyHex = ed25519Hex
+            )
+        } catch (e: Exception) {
+            false
+        }
+        return deviceId.takeIf { valid }
+    }
+
+    /**
+     * Presence on our own topic. Ours comes back to us as the retained copy; one signed with
+     * our identity key from a *different* install means this identity is in use on another
+     * phone, which this phone used to ignore entirely (F15).
+     */
+    private fun checkOwnPresence(payload: String) {
+        val myId = memberId ?: return
+        val update = try {
+            val envelope = MessageProtocol.decodeEnvelope(openPresence(payload) ?: return)
+            if (envelope.type != "presence_update") return
+            MessageProtocol.decodePresenceUpdate(envelope.payload)
+        } catch (e: Exception) {
+            return
+        }
+        if (update.memberId != myId) return
+        val deviceId = verifiedDeviceId(update, cryptoProvider.getLocalEd25519PublicKey()) ?: return
+        if (!CloneDetector.ownPresenceIsAnotherDevice(update.isOnline, deviceId, DeviceIdentity.get(context))) return
+
+        val now = System.currentTimeMillis()
+        val last = lastSelfCloneAlertAt.get()
+        if (now - last > CloneDetector.COOLDOWN_MS && lastSelfCloneAlertAt.compareAndSet(last, now)) {
+            Timber.w("$TAG: this identity is publishing presence from another device")
+            IdentityAlerts.selfOnAnotherDevice(context, myId)
+        }
+    }
+
     private suspend fun handlePresence(topic: String, payload: String) {
         val senderId = topic.split("/").getOrNull(1) ?: return
-        if (senderId == memberId) return
+        if (senderId == memberId) {
+            checkOwnPresence(payload)
+            return
+        }
         if (!familyMemberKeys.containsKey(senderId)) return
 
         val opened = openPresence(payload) ?: return
@@ -1016,6 +1067,17 @@ class MqttTransport @Inject constructor(
         }
 
         if (!isPresenceAuthentic(senderId, presenceUpdate)) return
+
+        familyMemberKeys[senderId]?.ed25519PublicKey?.let { key ->
+            verifiedDeviceId(presenceUpdate, key)?.let { deviceId ->
+                if (cloneDetector.observe(senderId, deviceId, presenceUpdate.isOnline, System.currentTimeMillis())) {
+                    val name = groupStateManager.groupDefinition.value
+                        ?.findMemberById(senderId)?.displayName ?: senderId.take(8)
+                    Timber.w("$TAG: ${senderId.take(8)} is publishing from two devices")
+                    IdentityAlerts.memberOnAnotherDevice(context, senderId, name)
+                }
+            }
+        }
 
         // Recorded after authentication so a rejected message cannot mark a peer stale.
         if (_peerProtocolVersions.value[senderId] != presenceUpdate.protocolVersion) {

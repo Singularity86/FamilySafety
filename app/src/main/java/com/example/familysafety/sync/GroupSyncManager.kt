@@ -338,6 +338,18 @@ class GroupSyncManager @Inject constructor(
             return
         }
 
+        // The envelope's sender is authenticated (decryption verified their signature over the
+        // whole ciphertext). The updater named inside is only a claim. Each phone sends its
+        // own updates, so the two must match. Otherwise a member could pass on another's
+        // signed update with fields the sync signature doesn't cover rewritten (F25).
+        if (syncMessage.updaterMemberId != senderMemberId) {
+            Timber.w(
+                "Sync update from ${senderMemberId.take(8)} names ${syncMessage.updaterMemberId.take(8)} " +
+                    "as its updater — ignoring"
+            )
+            return
+        }
+
         val isValidSignature = verifyGroupSyncSignature(syncMessage)
         if (!isValidSignature) {
             Timber.e("Invalid signature on group sync message")
