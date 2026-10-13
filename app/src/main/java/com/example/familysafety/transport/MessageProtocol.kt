@@ -98,9 +98,14 @@ object MessageProtocol {
         val accuracy: Float,
         val timestamp: Long,
         val speed: Float? = null,
-        val bearing: Float? = null
+        val bearing: Float? = null,
+        /**
+         * The author's Ed25519 over AuthorSignatures.location (F24). Stored with the fix so
+         * history passed on later still proves who reported it. Optional: older senders omit it.
+         */
+        val authorSig: String? = null
     )
-    
+
     @Serializable
     data class PresenceUpdate(
         val memberId: String,
@@ -169,9 +174,10 @@ object MessageProtocol {
             accuracy = location.accuracy,
             timestamp = location.timestamp,
             speed = location.speed,
-            bearing = location.bearing
+            bearing = location.bearing,
+            authorSig = location.authorSig
         )
-        
+
         val envelope = MessageEnvelope(
             type = "location_update",
             payload = json.encodeToString(locationUpdate)
@@ -241,7 +247,8 @@ object MessageProtocol {
             accuracy = locationUpdate.accuracy,
             timestamp = locationUpdate.timestamp,
             speed = locationUpdate.speed,
-            bearing = locationUpdate.bearing
+            bearing = locationUpdate.bearing,
+            authorSig = locationUpdate.authorSig
         )
     }
 }

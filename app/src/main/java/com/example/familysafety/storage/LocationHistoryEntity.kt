@@ -52,7 +52,10 @@ data class LocationHistoryEntity(
     val replicatedFrom: String? = null,
 
     /** When this record was inserted into local database */
-    val insertedAt: Long = System.currentTimeMillis()
+    val insertedAt: Long = System.currentTimeMillis(),
+
+    /** The author's signature over the fix, kept so it can be passed on with it (F24). */
+    val authorSig: String? = null
 ) {
     fun toMemberLocation(): MemberLocation = MemberLocation(
         memberId = memberId,
@@ -61,7 +64,8 @@ data class LocationHistoryEntity(
         accuracy = accuracy,
         timestamp = timestamp,
         speed = speed,
-        bearing = bearing
+        bearing = bearing,
+        authorSig = authorSig
     )
 
     companion object {
@@ -78,7 +82,8 @@ data class LocationHistoryEntity(
             speed = location.speed,
             bearing = location.bearing,
             isReplicated = isReplicated,
-            replicatedFrom = replicatedFrom
+            replicatedFrom = replicatedFrom,
+            authorSig = location.authorSig
         )
     }
 }

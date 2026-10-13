@@ -161,6 +161,17 @@ class E2EEManager @Inject constructor(
         return sharedSecret
     }
 
+    /** This phone's Ed25519 signature over [message], hex. For author signatures (F24). */
+    fun signAsSelf(message: ByteArray): String = cryptoProvider.signMessage(message).toHexString()
+
+    /** Whether [signatureHex] is [ed25519Hex]'s signature over [message]. */
+    fun verifyAuthor(message: ByteArray, signatureHex: String, ed25519Hex: String): Boolean =
+        cryptoProvider.verifySignature(
+            message = message,
+            signature = signatureHex.hexToByteArray(),
+            publicKey = ed25519Hex.hexToByteArray()
+        )
+
     fun clearSharedSecretCache() {
         sharedSecretCache.clear()
     }

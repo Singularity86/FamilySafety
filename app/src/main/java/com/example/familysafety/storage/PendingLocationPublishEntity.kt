@@ -29,7 +29,9 @@ data class PendingLocationPublishEntity(
     val createdAt: Long = System.currentTimeMillis(),
     val attemptCount: Int = 0,
     val lastAttemptAt: Long? = null,
-    val lastError: String? = null
+    val lastError: String? = null,
+    /** The author's signature over the fix (F24); published with it. */
+    val authorSig: String? = null
 ) {
     fun toMemberLocation(): MemberLocation = MemberLocation(
         memberId = memberId,
@@ -38,7 +40,8 @@ data class PendingLocationPublishEntity(
         accuracy = accuracy,
         timestamp = timestamp,
         speed = speed,
-        bearing = bearing
+        bearing = bearing,
+        authorSig = authorSig
     )
 
     companion object {
@@ -50,7 +53,8 @@ data class PendingLocationPublishEntity(
                 accuracy = location.accuracy,
                 timestamp = location.timestamp,
                 speed = location.speed,
-                bearing = location.bearing
+                bearing = location.bearing,
+                authorSig = location.authorSig
             )
     }
 }

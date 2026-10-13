@@ -128,7 +128,9 @@ data class ReplicatedLocation(
     val accuracy: Float,
     val timestamp: Long,
     val speed: Float? = null,
-    val bearing: Float? = null
+    val bearing: Float? = null,
+    /** The author's signature, passed on unchanged (F24). */
+    val authorSig: String? = null
 ) {
     fun toMemberLocation(): MemberLocation = MemberLocation(
         memberId = memberId,
@@ -137,7 +139,8 @@ data class ReplicatedLocation(
         accuracy = accuracy,
         timestamp = timestamp,
         speed = speed,
-        bearing = bearing
+        bearing = bearing,
+        authorSig = authorSig
     )
 
     companion object {
@@ -149,7 +152,8 @@ data class ReplicatedLocation(
                 accuracy = location.accuracy,
                 timestamp = location.timestamp,
                 speed = location.speed,
-                bearing = location.bearing
+                bearing = location.bearing,
+                authorSig = location.authorSig
             )
     }
 }
@@ -168,7 +172,9 @@ data class ReplicatedMessage(
     val status: MessageStatus,
     val timestamp: Long,
     val isOutgoing: Boolean,
-    val replyToMessageId: String? = null
+    val replyToMessageId: String? = null,
+    /** The sender's signature, passed on unchanged (F24). */
+    val authorSig: String? = null
 ) {
     fun toChatMessageEntity(
         replicatedFrom: String,
@@ -186,7 +192,8 @@ data class ReplicatedMessage(
         isReadLocally = false,
         isReplicated = true,
         replicatedFrom = replicatedFrom,
-        replyToMessageId = replyToMessageId
+        replyToMessageId = replyToMessageId,
+        authorSig = authorSig
     )
 
     companion object {
@@ -201,7 +208,8 @@ data class ReplicatedMessage(
                 status = entity.status,
                 timestamp = entity.timestamp,
                 isOutgoing = entity.isOutgoing,
-                replyToMessageId = entity.replyToMessageId
+                replyToMessageId = entity.replyToMessageId,
+                authorSig = entity.authorSig
             )
     }
 }
