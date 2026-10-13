@@ -111,6 +111,10 @@ object GroupStateMerge {
         // whichever side has one at all, the same rule as fileEncryptionKey below.
         val grantCode = winner.grantCode ?: ours.grantCode
 
+        // Keyrings are unioned (3.3): concurrent rotations both stay readable, and the current
+        // key is chosen deterministically from the union (GroupKeys.current).
+        val groupKeys = GroupKeys.union(winner.groupKeys, ours.groupKeys)
+
         val nothingToAdd = roster == winner.members &&
             tombstones == winner.removedMemberIds &&
             creatorMemberId == winner.creatorMemberId &&
@@ -118,7 +122,8 @@ object GroupStateMerge {
             subscriptionConfirmedAtEpochMs == winner.subscriptionConfirmedAtEpochMs &&
             subscriptionSignature == winner.subscriptionSignature &&
             grantCode == winner.grantCode &&
-            proofs == winner.removalProofs
+            proofs == winner.removalProofs &&
+            groupKeys.toSet() == winner.groupKeys.toSet()
         if (nothingToAdd) return null
 
         return winner.copy(
@@ -127,10 +132,11 @@ object GroupStateMerge {
             creatorMemberId = creatorMemberId,
             version = winner.version + 1,
             previousStateHash = winner.computeStateHash(),
-            // A group key is generated once at creation and never rotates, so both sides
-            // hold the same value. Preferring the non-null one only helps the case where
-            // the winner predates the key and we already learned it.
+            // The epoch-0 key is generated once at creation and never replaced (rotation adds to
+            // groupKeys instead), so both sides hold the same value. Preferring the non-null one
+            // only helps the case where the winner predates the key and we already learned it.
             fileEncryptionKey = winner.fileEncryptionKey ?: ours.fileEncryptionKey,
+            groupKeys = groupKeys,
             subscriberMemberId = subscriberMemberId,
             subscriptionConfirmedAtEpochMs = subscriptionConfirmedAtEpochMs,
             subscriptionSignature = subscriptionSignature,

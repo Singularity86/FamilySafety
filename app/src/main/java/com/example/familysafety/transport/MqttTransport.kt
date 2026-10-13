@@ -8,6 +8,7 @@ import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.crypto.GroupCipher
 import com.example.familysafety.crypto.RecipientKeys
 import com.example.familysafety.group.FamilyMember
+import com.example.familysafety.group.GroupKeys
 import com.example.familysafety.group.GroupStateManager
 // Aliased: this class has its own nested ConnectionState for the MQTT client itself,
 // which would otherwise shadow the per-member one.
@@ -98,6 +99,23 @@ class MqttTransport @Inject constructor(
 
     // F15: one identity in use on two installs.
     private val cloneDetector = CloneDetector()
+    private val peerSightings by lazy { PeerSightings(context) }
+
+    /** Which group key sealed the last-will at connect; a rotation needs a reconnect to re-seal it. */
+    @Volatile private var willKid: String? = null
+    private var keyWatchStarted = false
+
+    /** "Unknown key, ask for a refresh" is triggerable by anyone publishing junk kids (F16). */
+    private val unknownKeyLimiter = com.example.familysafety.core.RateLimiter(maxRequests = 2, windowMs = 10 * 60_000L)
+
+    /** Called by [openPresence] when presence is sealed under a key we don't hold yet. */
+    private val onUnknownGroupKey: (() -> Unit) = {
+        scope.launch {
+            if (unknownKeyLimiter.allowRequest(UNKNOWN_KEY_LIMIT_KEY)) {
+                groupSyncManager?.requestGroupStateRefresh(reason = "unknown group key")
+            }
+        }
+    }
     private val lastSelfCloneAlertAt = java.util.concurrent.atomic.AtomicLong(0L)
     companion object {
         /**
@@ -232,6 +250,8 @@ class MqttTransport @Inject constructor(
          * a live attempt, because every attempt is bounded by [CONNECT_ATTEMPT_TIMEOUT_MS].
          * Pure so the wedge check is testable without a client.
          */
+        private const val UNKNOWN_KEY_LIMIT_KEY = "unknown_group_key"
+
         /** A connection this brief, with the network up, is how a session takeover looks (2.2b). */
         const val SHORT_LIVED_CONNECTION_MS = 30_000L
 
@@ -356,6 +376,7 @@ class MqttTransport @Inject constructor(
                         sign = { cryptoProvider.signMessage(it) },
                         deviceId = DeviceIdentity.get(context)
                     )
+                    willKid = groupStateManager.groupDefinition.value?.let { GroupKeys.stampFor(it) }
                     setWill(
                         MqttConfig.getPresenceTopic(memberIdParam),
                         sealPresence(willJson),
@@ -419,6 +440,7 @@ class MqttTransport @Inject constructor(
                     }
                     _connectionState.value = ConnectionState.Connected
                     connectedAt = System.currentTimeMillis()
+                    startKeyWatch()
                     reconnectAttempts = 0
 
                     val memberIdsForSubscriptions = if (familyMembers.isNotEmpty()) {
@@ -739,10 +761,63 @@ class MqttTransport @Inject constructor(
         publishRaw(topic, sealPresence(presenceJson), MqttConfig.QOS_AT_MOST_ONCE, true)
     }
 
-    /** The group's presence subkey, or null for a group predating the shared key. */
-    private fun presenceKey(): ByteArray? =
-        groupStateManager.groupDefinition.value?.fileEncryptionKey
-            ?.takeIf { it.isNotBlank() }
+    /**
+     * Whether every member who counts advertises the protocol a rotated key needs (3.3). Members
+     * silent for 30 days don't count; see [GroupKeys.everyoneAtLeast].
+     */
+    private fun keyRotationGateOpen(def: com.example.familysafety.group.GroupDefinition): Boolean {
+        val me = memberId ?: return false
+        return GroupKeys.everyoneAtLeast(
+            memberIds = def.members.map { it.memberId },
+            selfId = me,
+            sightings = peerSightings.snapshot(),
+            observingSinceMs = peerSightings.observingSinceMs,
+            nowMs = System.currentTimeMillis(),
+            required = GroupKeys.ROTATION_PROTOCOL_VERSION
+        )
+    }
+
+    private suspend fun rotateGroupKeyIfDue() {
+        val me = memberId ?: return
+        if (groupStateManager.rotateGroupKeyIfDue(::keyRotationGateOpen)) {
+            groupStateManager.groupDefinition.value?.let {
+                groupSyncManager?.broadcastGroupUpdate(it, com.example.familysafety.sync.ChangeType.VERSION_SYNC, me)
+            }
+        }
+    }
+
+    /**
+     * Watch the family's state for removals that call for a new key, and for a current key that
+     * differs from the one our last-will was sealed under. The will is fixed at connect, so after
+     * a rotation it would still open under the old key, and whoever was removed could read our
+     * next abrupt "offline". Reconnecting re-seals it.
+     */
+    private fun startKeyWatch() {
+        if (keyWatchStarted) return
+        keyWatchStarted = true
+        scope.launch {
+            groupStateManager.groupDefinition.collect { def ->
+                def ?: return@collect
+                if (GroupKeys.rotationDue(def)) rotateGroupKeyIfDue()
+                val stamp = GroupKeys.stampFor(def)
+                if (stamp != willKid && _connectionState.value == ConnectionState.Connected) {
+                    Timber.i("$TAG: group key changed — reconnecting to re-seal the last-will")
+                    willKid = stamp
+                    try { mqttClient?.disconnect()?.waitForCompletion(5_000) } catch (_: Exception) { }
+                    _connectionState.value = ConnectionState.Disconnected
+                    scheduleReconnect()
+                }
+            }
+        }
+    }
+
+    /**
+     * The presence subkey for the key [kid] names (absent = epoch 0), or null when this device
+     * doesn't hold it or the group predates the shared key.
+     */
+    private fun presenceKey(kid: String?): ByteArray? =
+        groupStateManager.groupDefinition.value
+            ?.let { GroupKeys.keyHexFor(it, kid) }
             ?.let { GroupCipher.deriveSubkey(it, GroupCipher.PURPOSE_PRESENCE) }
 
     /**
@@ -754,12 +829,14 @@ class MqttTransport @Inject constructor(
      * protection while providing none, and would break older peers for nothing.
      */
     private fun sealPresence(presenceJson: String): ByteArray {
-        val key = presenceKey() ?: return presenceJson.toByteArray()
+        val kid = groupStateManager.groupDefinition.value?.let { GroupKeys.stampFor(it) }
+        val key = presenceKey(kid) ?: return presenceJson.toByteArray()
         return try {
             val sealed = MessageProtocol.SealedPresence(
                 v = 2,
                 data = java.util.Base64.getEncoder()
-                    .encodeToString(GroupCipher.seal(presenceJson.toByteArray(), key))
+                    .encodeToString(GroupCipher.seal(presenceJson.toByteArray(), key)),
+                kid = kid
             )
             MessageProtocol.encodeSealedPresence(sealed).toByteArray()
         } catch (e: Exception) {
@@ -775,8 +852,16 @@ class MqttTransport @Inject constructor(
      */
     private fun openPresence(payload: String): String? {
         val sealed = MessageProtocol.decodeSealedPresenceOrNull(payload) ?: return payload
-        val key = presenceKey() ?: run {
-            Timber.w("$TAG: sealed presence received but this group has no shared key")
+        val key = presenceKey(sealed.kid) ?: run {
+            if (sealed.kid != null) {
+                // Probably behind on keys after a rotation. Ask for the current state, through
+                // the same limiter as every other reply an outsider can trigger (F16): anyone
+                // can publish junk kids.
+                Timber.w("$TAG: sealed presence under unknown key ${sealed.kid.take(8)}")
+                onUnknownGroupKey()
+            } else {
+                Timber.w("$TAG: sealed presence received but this group has no shared key")
+            }
             return null
         }
         return try {
@@ -1098,6 +1183,11 @@ class MqttTransport @Inject constructor(
                     IdentityAlerts.memberOnAnotherDevice(context, senderId, name)
                 }
             }
+        }
+
+        // Kept across restarts for the protocol-4 gate (3.3); a changed version may open it.
+        if (peerSightings.record(senderId, presenceUpdate.protocolVersion, System.currentTimeMillis())) {
+            scope.launch { rotateGroupKeyIfDue() }
         }
 
         // Recorded after authentication so a rejected message cannot mark a peer stale.
