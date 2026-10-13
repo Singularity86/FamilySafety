@@ -68,11 +68,6 @@ public actor FamilyNode {
         self.credentials = credentials
         self.store = GroupStateStore(localMemberId: identity.memberId, persistence: groupPersistence)
         self.pendingJoinSlot = pendingJoinSlot
-        self.transport = MqttTransport(memberId: identity.memberId, credentials: credentials)
-        self.outbox = TransportOutbox(transport: transport)
-        self.engine = GroupSyncEngine(identity: identity, store: store, outbox: outbox)
-        self.desk = try InviterDesk(identity: identity, store: store, engine: engine, outbox: outbox, bookSlot: inviteSlot)
-        self.onEvent = onEvent
         // One per install, never backed up or transferred (Keychain …ThisDeviceOnly).
         if let saved = try deviceSlot.read().flatMap({ String(data: $0, encoding: .utf8) }), saved.count == 32 {
             deviceId = saved
@@ -82,6 +77,11 @@ public actor FamilyNode {
             try deviceSlot.write(Data(fresh.utf8))
             deviceId = fresh
         }
+        self.transport = MqttTransport(memberId: identity.memberId, credentials: credentials, deviceId: deviceId)
+        self.outbox = TransportOutbox(transport: transport)
+        self.engine = GroupSyncEngine(identity: identity, store: store, outbox: outbox)
+        self.desk = try InviterDesk(identity: identity, store: store, engine: engine, outbox: outbox, bookSlot: inviteSlot)
+        self.onEvent = onEvent
     }
 
     public var memberId: String { identity.memberId }
