@@ -51,6 +51,8 @@ class MqttTransport @Inject constructor(
     private var reconnectJob: Job? = null
     private var reconnectAttempts = 0
     @Volatile private var connectingSince = 0L
+    @Volatile private var connectedAt = 0L
+    private var shortLivedConnections = 0
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
@@ -230,6 +232,12 @@ class MqttTransport @Inject constructor(
          * a live attempt, because every attempt is bounded by [CONNECT_ATTEMPT_TIMEOUT_MS].
          * Pure so the wedge check is testable without a client.
          */
+        /** A connection this brief, with the network up, is how a session takeover looks (2.2b). */
+        const val SHORT_LIVED_CONNECTION_MS = 30_000L
+
+        fun isShortLivedConnection(connectedAtMs: Long, nowMs: Long): Boolean =
+            connectedAtMs > 0L && nowMs - connectedAtMs < SHORT_LIVED_CONNECTION_MS
+
         fun isConnectingStale(connectingSinceMs: Long, nowMs: Long): Boolean =
             connectingSinceMs > 0L &&
                 nowMs - connectingSinceMs > 3 * CONNECT_ATTEMPT_TIMEOUT_MS + 10_000L
@@ -310,7 +318,10 @@ class MqttTransport @Inject constructor(
                 if (!BrokerConfig.isSecureBroker()) {
                     Timber.w("$TAG: connecting to INSECURE broker (no TLS) — development only: $brokerUrl")
                 }
-                val clientId = MqttConfig.generateClientId(memberIdParam)
+                // A new client ID has no session on the broker, so restoreSubscriptions sees
+                // sessionPresent = false and subscribes in full; the old familysafe_{memberId}
+                // session is left to the broker's session expiry.
+                val clientId = MqttConfig.generateClientId(memberIdParam, DeviceIdentity.get(context))
                 mqttClient = MqttAsyncClient(brokerUrl, clientId, MemoryPersistence())
 
                 setupCallbacks()
@@ -407,6 +418,7 @@ class MqttTransport @Inject constructor(
                         sessionPrefs.edit().remove(PREF_RESET_SESSION).apply()
                     }
                     _connectionState.value = ConnectionState.Connected
+                    connectedAt = System.currentTimeMillis()
                     reconnectAttempts = 0
 
                     val memberIdsForSubscriptions = if (familyMembers.isNotEmpty()) {
@@ -443,6 +455,15 @@ class MqttTransport @Inject constructor(
         mqttClient?.setCallback(object : MqttCallback {
             override fun connectionLost(cause: Throwable?) {
                 Timber.w(cause, "$TAG: Connection lost")
+                if (isShortLivedConnection(connectedAt, System.currentTimeMillis()) &&
+                    networkMonitor.isCurrentlyConnected()
+                ) {
+                    // MQTT 3.1.1 gives no reason for a disconnect, so a session takeover (another
+                    // install with this client ID) looks exactly like a network drop. Counted for
+                    // the debug log only; a user-facing alert would fire on flaky networks.
+                    shortLivedConnections++
+                    Timber.w("$TAG: connection lasted under ${SHORT_LIVED_CONNECTION_MS / 1000}s with the network up ($shortLivedConnections so far) — possible session takeover")
+                }
                 _connectionState.value = ConnectionState.Disconnected
                 scheduleReconnect()
             }
