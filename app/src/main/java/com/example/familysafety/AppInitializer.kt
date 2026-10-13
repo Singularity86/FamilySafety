@@ -254,6 +254,19 @@ class AppInitializer @Inject constructor(
                 // raised before the app was last killed.
                 chatRepository.startEmergencyRetryLoop()
 
+                // 8d. A member who joined was written into the roster unsigned by their
+                // inviter. Sign our own profile once, so members passing on later changes
+                // carry our signature with them (F25).
+                scope.launch {
+                    try {
+                        groupStateManager.ensureMyProfileSigned()?.let {
+                            groupSyncManager.broadcastGroupUpdate(it, com.example.familysafety.sync.ChangeType.NAME_CHANGED, localMemberId.value)
+                        }
+                    } catch (e: Exception) {
+                        Timber.e(e, "$TAG: could not sign our profile")
+                    }
+                }
+
                 // 9. Apply retention policies
                 scope.launch {
                     try {

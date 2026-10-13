@@ -510,7 +510,7 @@ class GroupStateManager(
 
             val updatedGroup = currentGroup.copy(
                 members = (currentGroup.members - localMemberObj) +
-                        localMemberObj.copy(avatarHash = hash),
+                        signedProfile(currentGroup.groupId, localMemberObj.copy(avatarHash = hash)),
                 version = currentGroup.version + 1,
                 previousStateHash = currentGroup.computeStateHash()
             )
@@ -529,6 +529,42 @@ class GroupStateManager(
         }
     }
 
+    /**
+     * [member] (this phone's own) stamped now and signed, so the change can be passed on by
+     * anyone and is taken over older copies (F25; see [ProfileGuard]).
+     */
+    private fun signedProfile(groupId: String, member: FamilyMember): FamilyMember {
+        val stamped = member.copy(profileUpdatedAtMs = System.currentTimeMillis(), profileSignature = null)
+        val signature = runCatching {
+            cryptoProvider.sign(ProfileGuard.profileMessage(groupId, stamped)).toHexString()
+        }.getOrNull()
+        return stamped.copy(profileSignature = signature)
+    }
+
+    /**
+     * Sign this phone's own profile if it isn't signed yet: a member who joined was written
+     * into the roster by their inviter, unsigned, and relays need their signature to pass on
+     * later changes. Returns the updated family to broadcast, or null when there's nothing to do.
+     */
+    suspend fun ensureMyProfileSigned(): GroupDefinition? = stateMutex.withLock {
+        val currentGroup = _groupDefinition.value ?: return@withLock null
+        val me = currentGroup.findMemberById(localMemberId) ?: return@withLock null
+        if (me.profileSignature != null) return@withLock null
+        val updatedGroup = currentGroup.copy(
+            members = (currentGroup.members - me) + signedProfile(currentGroup.groupId, me),
+            version = currentGroup.version + 1,
+            previousStateHash = currentGroup.computeStateHash()
+        )
+        try {
+            persistence.saveGroupDefinition(updatedGroup)
+        } catch (e: Exception) {
+            return@withLock null
+        }
+        _groupDefinition.value = updatedGroup
+        _events.emit(GroupStateEvent.GroupUpdated(currentGroup, updatedGroup))
+        updatedGroup
+    }
+
     suspend fun updateMyDisplayName(name: String): GroupOperationResult<GroupDefinition> {
         return stateMutex.withLock {
             val currentGroup = _groupDefinition.value
@@ -539,7 +575,7 @@ class GroupStateManager(
 
             val updatedGroup = currentGroup.copy(
                 members = (currentGroup.members - localMemberObj) +
-                        localMemberObj.copy(displayName = name),
+                        signedProfile(currentGroup.groupId, localMemberObj.copy(displayName = name)),
                 version = currentGroup.version + 1,
                 previousStateHash = currentGroup.computeStateHash()
             )
@@ -568,7 +604,7 @@ class GroupStateManager(
 
             val updatedGroup = currentGroup.copy(
                 members = (currentGroup.members - localMemberObj) +
-                        localMemberObj.copy(colorHue = hue),
+                        signedProfile(currentGroup.groupId, localMemberObj.copy(colorHue = hue)),
                 version = currentGroup.version + 1,
                 previousStateHash = currentGroup.computeStateHash()
             )
@@ -605,6 +641,13 @@ class GroupStateManager(
             val updatedGroup = currentGroup.copy(
                 subscriberMemberId = memberId,
                 subscriptionConfirmedAtEpochMs = atEpochMs,
+                // Signed by the subscriber, so it can be passed on by anyone (F25).
+                subscriptionSignature = if (memberId == localMemberId) {
+                    runCatching {
+                        cryptoProvider.sign(ProfileGuard.subscriptionMessage(currentGroup.groupId, memberId, atEpochMs))
+                            .toHexString()
+                    }.getOrNull()
+                } else null,
                 version = currentGroup.version + 1,
                 previousStateHash = currentGroup.computeStateHash()
             )
@@ -870,7 +913,7 @@ class GroupStateManager(
         // set, and taking that verbatim would silently readmit everyone we have removed —
         // which is exactly why this used to be enforced by rejecting the whole update. Union
         // instead: we accept their roster changes and lose none of our removals.
-        return commitStateLocked(withPreservedTombstones(currentGroup, remoteDefinition))
+        return commitStateLocked(withPreservedTombstones(currentGroup, remoteDefinition), updaterMemberId)
     }
 
     /**
@@ -950,7 +993,7 @@ class GroupStateManager(
         }
 
         val merged = GroupStateMerge.merge(winner = remoteDefinition, ours = currentGroup)
-        return commitStateLocked(merged ?: remoteDefinition)
+        return commitStateLocked(merged ?: remoteDefinition, if (merged == null) updaterMemberId else null)
     }
 
     /**
@@ -998,13 +1041,31 @@ class GroupStateManager(
             "GroupStateManager: reconciled diverged branches — ${resolved.members.size} members " +
                 "at v${resolved.version} (was ${currentGroup.members.size} at v${currentGroup.version})"
         )
-        return commitStateLocked(withPreservedTombstones(currentGroup, resolved))
+        return commitStateLocked(withPreservedTombstones(currentGroup, resolved), if (merged == null) updaterMemberId else null)
     }
 
-    /** Persist [newState], publish it, and emit the resulting events. */
+    /**
+     * Persist [incoming], publish it, and emit the resulting events.
+     *
+     * @param updaterMemberId the authenticated sender of [incoming], or null when it's a merge
+     *   of two branches that no single member authored
+     */
     private suspend fun commitStateLocked(
-        newState: GroupDefinition
+        incoming: GroupDefinition,
+        updaterMemberId: String? = null
     ): GroupOperationResult<GroupDefinition> {
+        val current = _groupDefinition.value
+        // A state without a file key is from a sender that doesn't carry it, not a request
+        // to forget ours: taking it verbatim would cut this phone off from every file.
+        val ourKey = current?.fileEncryptionKey
+        val withKey = if (incoming.fileEncryptionKey.isNullOrBlank() && !ourKey.isNullOrBlank()) {
+            incoming.copy(fileEncryptionKey = ourKey)
+        } else incoming
+        // Profile and subscription changes only from their author, and only if newer (F25).
+        val newState = if (current == null) withKey else ProfileGuard.reconcile(current, withKey, updaterMemberId) { message, signatureHex, keyHex ->
+            cryptoProvider.verifySignature(message, signatureHex.hexToByteArray(), keyHex)
+        }
+
         // A roster without us is only a removal if it carries a tombstone for our membership
         // (F26). Otherwise it's stale: a member who never heard we joined, or a reconcile that
         // fell back to their branch. Taking it used to emit RemovedFromGroup, and this phone

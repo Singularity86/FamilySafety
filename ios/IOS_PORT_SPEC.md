@@ -36,6 +36,7 @@ Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the bi
 | 1.15.3 (44) | **wire** | **Removals end a membership, not a person.** `FamilyMember.joinEpoch` (optional, default 0) and tombstones of the form `"<memberId>#<n>"` for membership n ≥ 1; the bare ID still means membership 0. A member who left or was removed can be let back in as membership n+1. `joinEpoch` is hashed when non-zero, so existing groups hash as before. Peers before 1.15.3 reject a readmission ("removed member present"), so update every phone before letting anyone back in. | §6.5, §7.1, §7.3 |
 | 1.15.3 (44) | **wire** | **Removal proofs.** `GroupDefinition.removalProofs` (optional): per tombstone, a signature by the creator or by the member who left, over `REMOVAL_PROOF:v1:{groupId}:{tombstone}`. Any member may now relay a removal carrying one; before, a removal heard second-hand was refused. Not hashed. Older peers ignore the field. | §6.5, §7.3 |
 | 1.15.3 (44) | product | Leaving while unable to reach the family (no relay, no member on the same Wi-Fi) warns first: the departure can't be sent once the keys are erased. | — |
+| next (remediation 3.1) | **wire** | **Authorship of non-hashed fields.** The sync envelope's sender must equal `updaterMemberId`. Members self-sign their profile (`profileUpdatedAtMs`, `profileSignature`) and the subscriber signs confirmations (`subscriptionSignature`); a changed profile or subscription is taken only from its author or with a valid, newer signature, otherwise receivers keep theirs. `addedAt`/`addedBy` are immutable, and a set file key can't be replaced. All new fields are optional and unhashed; `PROTOCOL_VERSION` stays 3. | §6.5, §7.3 |
 | next (remediation 2.2) | **wire** | **Signed device ID in presence.** Optional `deviceId` and `deviceSignature` (over `presence-device:v1:…`). Receivers notify when one member shows two devices within 10 min, or your own identity shows another device. Presence padding goes from 512 to **640**. The existing presence signature is unchanged and older peers ignore the new fields, so `PROTOCOL_VERSION` stays 3. | §6.1, §6.2, §12 |
 
 Not in this table because they do not touch interop: private-chat UI, Family/Chat lists, the
@@ -666,14 +667,48 @@ never limited.
   "members": [ { "memberId": "...", "displayName": "...",
                  "ed25519PublicKey": "<hex64chars>", "x25519PublicKey": "<hex64chars>",
                  "addedAtEpochMs": 0, "addedByMemberId": null,
-                 "avatarHash": null, "colorHue": null, "joinEpoch": 0 } ],
+                 "avatarHash": null, "colorHue": null, "joinEpoch": 0,
+                 "profileUpdatedAtMs": null, "profileSignature": null } ],
   "version": 1, "previousStateHash": null,
   "fileEncryptionKey": "<hex64chars>",
   "removedMemberIds": ["<memberId>", "<memberId>#1", "..."],
   "removalProofs": [ { "tombstone": "<memberId>", "authorizerMemberId": "<memberId>",
                        "signature": "<hex Ed25519>" } ],
-  "subscriberMemberId": null, "subscriptionConfirmedAtEpochMs": null, "grantCode": null }
+  "subscriberMemberId": null, "subscriptionConfirmedAtEpochMs": null, "grantCode": null,
+  "subscriptionSignature": null }
 ```
+
+**Who may change a profile or the subscription (remediation 3.1, F25).** Updates are often
+passed on by someone other than the member who made the change (refresh replies, reconciles),
+so the updater can't be held to "only your own profile". The *author* signs instead, and the
+signature travels with the fields:
+
+- `profileUpdatedAtMs` + `profileSignature`: the member's own Ed25519 (hex) over UTF-8
+  `PROFILE:v1:{groupId}:{memberId}:{joinEpoch}:{profileUpdatedAtMs}:{displayName}:{avatarHash or ""}:{hue}`,
+  where `{hue}` is `round(colorHue × 100)` as a plain decimal integer, or `""` when null (not
+  float bits: parsing JSON to double then narrowing, as Swift does, can land on a different
+  float). Sign whenever you change your own name, avatar or colour, with the time of the change.
+  A member joining is written into the roster unsigned by the inviter, so on the first sync
+  after joining, sign your own profile and broadcast it.
+- `subscriptionSignature`: `subscriberMemberId`'s Ed25519 (hex) over
+  `SUBSCRIPTION:v1:{groupId}:{subscriberMemberId}:{subscriptionConfirmedAtEpochMs}`, written with
+  every confirmation.
+
+Receivers, for each member present in both your roster and the incoming one with the same
+`joinEpoch`: if any of `displayName`, `avatarHash`, `colorHue`, `profileUpdatedAtMs`,
+`profileSignature` differs, take the incoming profile only if (updater == that member **and**
+incoming `profileUpdatedAtMs` ≥ yours) **or** (`profileSignature` verifies under that member's
+key from your roster **and** incoming `profileUpdatedAtMs` > yours), treating absent as 0. Otherwise
+**keep yours**, those five fields only, and apply the rest of the update. Newer matters as much as
+signed: an old, validly signed profile replayed by a stale phone would otherwise undo a rename.
+Same for the subscription: take a changed record only with a subscriber, and only if (updater ==
+the subscriber and confirmed-at ≥ yours) or (`subscriptionSignature` verifies under the
+subscriber's key and confirmed-at > yours). Nothing clears a subscription: a cancelled one stops
+being re-confirmed and ages out (§6.9), so a record without a subscriber never replaces yours.
+
+All four fields are **not hashed** (§7.1), like `removalProofs`, so keeping your own values never
+splits the chain and older peers' hashes stay identical. Older peers drop the fields when they
+re-serialise; a relay through one then simply loses the signature, and receivers keep their own.
 
 The three billing fields (added in the 2026-09-22 revision, shipped in 1.14.0 — see §6.9) are
 optional and default to `null`/absent, so a peer that predates them simply never sends
@@ -1319,7 +1354,18 @@ Reject the update if any of:
   by a verified removal proof (§6.5) whose authorizer is the creator or the member the
   tombstone removes. Verify each proof against the authorizer's key in **your current local
   roster**; an authorizer you don't know proves nothing.
-- `groupName` changed and updater is not the creator.
+- `groupName` changed and updater is not the creator;
+- a surviving member's `addedAtEpochMs` or `addedByMemberId` changed at the same `joinEpoch`
+  (fixed at the add; remediation 3.1);
+- `fileEncryptionKey` is set on both sides and differs (key rotation, remediation 3.3, will be the
+  only legal change). An incoming state *without* a key is not a removal: keep yours. A phone
+  without one may take it from any updater.
+
+Before applying, also check the **envelope's authenticated sender equals
+`GroupSyncMessage.updaterMemberId`**, and drop the message otherwise (remediation 3.1). Each
+phone sends its own updates, so nothing legitimate is lost, and a member can't pass on someone
+else's signed update with fields the sync signature doesn't cover rewritten. Profile and
+subscription fields follow §6.5's author rule rather than a rejection.
 
 **Concurrent siblings are validated differently.** When `remote.version == local.version`
 the two states are siblings, not successors, and two of the rules above must be relaxed or

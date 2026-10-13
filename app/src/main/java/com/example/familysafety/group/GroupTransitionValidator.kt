@@ -175,6 +175,14 @@ object GroupTransitionValidator {
                 ) {
                     return "keys changed for member ${id.take(8)} — key rotation is not supported"
                 }
+                // When and by whom someone was added are facts, fixed at the add (F25). A new
+                // membership is a new add, so it's exempt.
+                if (existing.joinEpoch == member.joinEpoch &&
+                    (existing.addedAtEpochMs != member.addedAtEpochMs ||
+                        existing.addedByMemberId != member.addedByMemberId)
+                ) {
+                    return "join details changed for member ${id.take(8)}"
+                }
             } else {
                 val derivedId = try {
                     deriveMemberIdFromKey(member.ed25519PublicKey)
@@ -274,6 +282,18 @@ object GroupTransitionValidator {
 
         if (remote.groupName != current.groupName && updaterMemberId != current.creatorMemberId) {
             return "only the group creator may rename the group"
+        }
+
+        // The family's file key (F25). Once set, nothing replaces it: key rotation (plan 3.3)
+        // will be the only legal change. A state without one isn't a removal, just a sender
+        // that doesn't carry it; the caller keeps ours. A phone that doesn't have it yet may
+        // take it from any member: whoever can send a sync already holds everything the key
+        // protects, and insisting on the creator would leave a phone that missed the
+        // creator's broadcast unable to learn it from anyone else.
+        val currentKey = current.fileEncryptionKey?.takeIf { it.isNotBlank() }
+        val remoteKey = remote.fileEncryptionKey?.takeIf { it.isNotBlank() }
+        if (currentKey != null && remoteKey != null && !currentKey.equals(remoteKey, ignoreCase = true)) {
+            return "file key changed"
         }
 
         return null
