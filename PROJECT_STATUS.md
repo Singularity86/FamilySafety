@@ -11,6 +11,56 @@ Supersedes the 2026-08-18, 2026-08-17, and 2026-08-13 snapshots. The file redesi
 finished — all six phases plus the vault are in `main` — and that work is now shipped
 rather than pending.
 
+## 2026-10-13 snapshot — security remediation and the iOS port
+
+**Read this first.** Everything below this section is the 2026-09-08 snapshot and is kept for
+history; where the two disagree, this section is current. `main` is at `51c3aab`, version
+**1.15.4 (45)**.
+
+### Releases
+- **1.15.4 (45)** — signed bundle built 2026-10-12 from `main` + the version bump (#36); release
+  notes in `RELEASE_NOTES.md` (#37). Contains remediation Phase 1, 2.2, 2.3 and 3.1. Database
+  8 → 9. **Upload unconfirmed here.** Plan: internal testing only until checkpoints T2 and T3
+  pass.
+- Merged after the bundle, so in the next release: **#27** join v2 (2.1) and **#40** per-install
+  client ID (2.2b). 1.15.4 ships the two-phone warning, but it can't fire until #40: two
+  installs of one identity shared a client ID and evicted each other on the broker.
+
+### Remediation progress (Android)
+| Item | State |
+|---|---|
+| Phase 1 (1.1–1.8) | Merged (#17–#26). The 1.5 crash-alert two-phone check is still to do. |
+| 2.1 Join v2 | Merged (#27). T1 passed both ways with iOS. |
+| 2.2 / 2.2b Two-phone warning | Merged (#31, #40). T2 passed: an iPhone clone pair, with Android observing. Android's own-identity warning hasn't been tested live yet. |
+| 2.3 Removal only by tombstone | Merged (#28). |
+| 3.1 Signed profiles | Merged (#35). T3 is pending, after iOS milestone B1. |
+| 3.2 Signed chat and location history | **PR #38**, approved by iOS, waiting for merge. Database 9 → 10. |
+| 3.3 Group-key rotation | Design sent to iOS 2026-10-13. |
+| 4.2 Constant subscriptions | Design sent to iOS 2026-10-13. Also fixes a capacity limit: EMQX allows 10 subscriptions per connection, so a family of more than 9 loses presence from the 9th peer onward. |
+| 3.4 Replay window, protocol 4 | Not started. 3.3 and 4.2 switch on only once every member advertises protocol 4, so all three ship together (checkpoint T7). |
+| 4.1, 4.3, Phase 5 | Not started. Android-only. |
+
+Also open: **#39**, a spec fix (§6.2 now says `PROTOCOL_VERSION = 3`).
+
+### Cross-platform checkpoints (Android emulator ↔ iPhone Simulator, live broker)
+| Checkpoint | Result |
+|---|---|
+| T1 Join | **Pass** 2026-10-13. Matching 6-digit codes, verified approvals both ways, presence both ways. Found: iOS advertised protocol 2 (fixed on iOS). |
+| T2 Presence and clones | **Pass (partial)** 2026-10-13. Android flagged an iPhone clone pair with verified device signatures, and the iPhones showed their own-identity warnings. Found: on Android the warning is lost if notifications are denied, so an in-app banner is to do. |
+| T3–T7 | Pending. See the roadmap in the shared workflow doc. |
+
+### Known gaps
+- Android shows the two-phone warning only as a notification.
+- **Two upgrades between 1.15.3 and the release after next:** 1.15.4 takes the database from
+  8 to 9, then 3.2 takes it to 10. Test the jump from 44 straight to the next release on a
+  device before rollout.
+- The broker session expiry is assumed to be EMQX's default of 2 hours (spec §4); the console
+  hasn't been checked.
+- This Windows machine has 11.7 GB of RAM. Gradle runs with one worker, and only one emulator
+  fits at a time.
+
+---
+
 ## Scope of this document
 
 Built from `git log`, the repo's docs, the working tree, and this machine's Claude Code
