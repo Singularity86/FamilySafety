@@ -512,7 +512,23 @@ class ReplicationManager @Inject constructor(
             when (response.dataType) {
                 ReplicationDataType.LOCATION_HISTORY -> {
                     response.locations?.let { locations ->
-                        val memberLocations = locations.map { it.toMemberLocation() }
+                        // Each fix must carry its author's signature, checked against the
+                        // author's key, not the relayer's (F24). Unsigned fixes are still taken
+                        // for one release, while older builds re-serve history without them.
+                        val roster = groupStateManager.groupDefinition.value
+                        val memberLocations = locations.map { it.toMemberLocation() }.filter { loc ->
+                            val verdict = AuthorSignatures.judge(
+                                loc.authorSig,
+                                roster?.findMemberById(loc.memberId)?.ed25519PublicKey,
+                                AuthorSignatures.location(loc),
+                                acceptUnsigned = AuthorSignatures.ACCEPT_UNSIGNED_HISTORY,
+                                verify = e2eeManager::verifyAuthor
+                            )
+                            if (verdict == AuthorSignatures.Verdict.DROP) {
+                                Timber.w("$TAG: Dropping replicated location for ${loc.memberId.take(8)} from $senderMemberId: author signature")
+                            }
+                            verdict == AuthorSignatures.Verdict.ACCEPT
+                        }
                         val validLocations = memberLocations.filter { loc ->
                             val result = DataValidator.validateLocation(loc)
                             if (result !is ValidationResult.Valid) {
@@ -541,9 +557,24 @@ class ReplicationManager @Inject constructor(
                         val localId = groupStateManager.localMember.value?.memberId ?: return@let
                         // A private message is only accepted from, and only stored by, its
                         // two participants. Peers on older builds still broadcast them.
+                        val roster = groupStateManager.groupDefinition.value
                         val messages = allMessages.filter {
                             mayShareConversation(it.conversationId, localId) &&
                                 mayShareConversation(it.conversationId, senderMemberId)
+                        }.filter { m ->
+                            // Proof the named sender wrote it, whoever passed it on (F24).
+                            val entity = m.toChatMessageEntity(senderMemberId, localId)
+                            val verdict = AuthorSignatures.judge(
+                                m.authorSig,
+                                roster?.findMemberById(m.senderId)?.ed25519PublicKey,
+                                AuthorSignatures.chatMessage(entity),
+                                acceptUnsigned = AuthorSignatures.ACCEPT_UNSIGNED_HISTORY,
+                                verify = e2eeManager::verifyAuthor
+                            )
+                            if (verdict == AuthorSignatures.Verdict.DROP) {
+                                Timber.w("$TAG: Dropping replicated message ${m.messageId.take(8)} from $senderMemberId: author signature")
+                            }
+                            verdict == AuthorSignatures.Verdict.ACCEPT
                         }
                         if (messages.isEmpty()) return@let
                         val entities = messages.map { it.toChatMessageEntity(senderMemberId, localId) }

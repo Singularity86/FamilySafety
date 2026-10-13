@@ -3,6 +3,7 @@ package com.example.familysafety.chat
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.group.FamilyMember
 import com.example.familysafety.group.GroupStateManager
+import com.example.familysafety.replication.AuthorSignatures
 import com.example.familysafety.replication.ReplicationManager
 import com.example.familysafety.storage.ChatMessageDao
 import com.example.familysafety.storage.ChatMessageEntity
@@ -237,7 +238,7 @@ class ChatRepository @Inject constructor(
         val group = groupStateManager.groupDefinition.value
             ?: return Result.failure(IllegalStateException("No group"))
 
-        val message = ChatMessageEntity(
+        val message = signed(ChatMessageEntity(
             conversationId = groupId,
             senderId = localMember.memberId,
             recipientId = null,
@@ -246,7 +247,7 @@ class ChatRepository @Inject constructor(
             status = MessageStatus.PENDING,
             isOutgoing = true,
             isReadLocally = true
-        )
+        ))
 
         chatMessageDao.insert(message)
 
@@ -290,7 +291,7 @@ class ChatRepository @Inject constructor(
         val localMember = groupStateManager.localMember.value ?: return null
         val group = groupStateManager.groupDefinition.value ?: return null
         val now = System.currentTimeMillis()
-        val message = ChatMessageEntity(
+        val message = signed(ChatMessageEntity(
             conversationId = group.groupId,
             senderId = localMember.memberId,
             recipientId = null,
@@ -300,7 +301,7 @@ class ChatRepository @Inject constructor(
             timestamp = now,
             isOutgoing = true,
             isReadLocally = true
-        )
+        ))
         val rows = group.members
             .filter { it.memberId != localMember.memberId }
             .map {
@@ -397,7 +398,8 @@ class ChatRepository @Inject constructor(
         }
     }
 
-    private fun EmergencyOutboxEntity.toChatMessage(senderId: String) = ChatMessageEntity(
+    // Signed again on each retry: Ed25519 is deterministic, so it's the same signature.
+    private fun EmergencyOutboxEntity.toChatMessage(senderId: String) = signed(ChatMessageEntity(
         messageId = alertId,
         conversationId = groupId,
         senderId = senderId,
@@ -408,7 +410,16 @@ class ChatRepository @Inject constructor(
         timestamp = timestamp,
         isOutgoing = true,
         isReadLocally = true
-    )
+    ))
+
+    /**
+     * [message] with this phone's author signature (F24), so a copy passed on later by anyone
+     * still proves who wrote it. Stored with the message and sent with it.
+     */
+    private fun signed(message: ChatMessageEntity): ChatMessageEntity =
+        runCatching { message.copy(authorSig = e2eeManager.signAsSelf(AuthorSignatures.chatMessage(message))) }
+            .onFailure { Timber.w(it, "$TAG: could not sign message ${message.messageId}") }
+            .getOrDefault(message)
 
     /**
      * Core message sending logic.
@@ -425,7 +436,7 @@ class ChatRepository @Inject constructor(
             ?: return Result.failure(IllegalStateException("Recipient not found in group"))
 
         // Create message entity
-        val message = ChatMessageEntity(
+        val message = signed(ChatMessageEntity(
             conversationId = ChatMessageEntity.generateConversationId(localMember.memberId, recipientId),
             senderId = localMember.memberId,
             recipientId = recipientId,
@@ -434,7 +445,7 @@ class ChatRepository @Inject constructor(
             status = MessageStatus.PENDING,
             isOutgoing = true,
             isReadLocally = true
-        )
+        ))
 
         // Save to local database first
         chatMessageDao.insert(message)
@@ -479,7 +490,8 @@ class ChatRepository @Inject constructor(
                         messageType = message.messageType,
                         timestamp = message.timestamp,
                         conversationId = conversationId,
-                        replyToMessageId = message.replyToMessageId
+                        replyToMessageId = message.replyToMessageId,
+                        authorSig = message.authorSig
                     )
                 ),
                 recipientMemberId = recipient.memberId,
@@ -599,8 +611,22 @@ class ChatRepository @Inject constructor(
                 timestamp = payload.timestamp,
                 isOutgoing = false,
                 isReadLocally = _activeConversationId.value == conversationId,
-                replyToMessageId = payload.replyToMessageId
+                replyToMessageId = payload.replyToMessageId,
+                authorSig = payload.authorSig
             )
+
+            // Kept so this message can be passed on later with proof of who wrote it (F24). A
+            // live message is already bound to its sender by the envelope, so an unsigned one
+            // from an older build is fine; a signature that doesn't verify is not.
+            if (payload.authorSig != null &&
+                AuthorSignatures.judge(
+                    payload.authorSig, sender.ed25519PublicKey, AuthorSignatures.chatMessage(message),
+                    acceptUnsigned = true, verify = e2eeManager::verifyAuthor
+                ) == AuthorSignatures.Verdict.DROP
+            ) {
+                Timber.w("$TAG: message ${payload.messageId} carries a bad author signature — dropped")
+                return
+            }
 
             // Save to database
             chatMessageDao.insert(message)
@@ -794,7 +820,9 @@ data class ChatMessagePayload(
     val messageType: MessageType,
     val timestamp: Long,
     val conversationId: String? = null, // null = 1-to-1; groupId = group chat
-    val replyToMessageId: String? = null
+    val replyToMessageId: String? = null,
+    /** The sender's Ed25519 over AuthorSignatures.chatMessage (F24). Optional for older senders. */
+    val authorSig: String? = null
 )
 
 /**

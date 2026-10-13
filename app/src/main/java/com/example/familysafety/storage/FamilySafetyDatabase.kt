@@ -31,7 +31,7 @@ import java.util.Base64
         VaultBlobEntity::class,
         EmergencyOutboxEntity::class
     ],
-    version = 9,
+    version = 10,
     // Exported so each version's schema is committed as JSON under app/schemas/. That is what
     // makes a migration testable — MigrationTestHelper builds the old schema from the exported
     // file, applies the migration and asserts the result. Without it a migration can only be
@@ -271,6 +271,19 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Author signatures on chat messages and location fixes (F24), stored so that history
+         * passed on to another phone still proves who wrote it. Additive: nullable columns, and
+         * rows from before this release stay unsigned.
+         */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN authorSig TEXT")
+                db.execSQL("ALTER TABLE location_history ADD COLUMN authorSig TEXT")
+                db.execSQL("ALTER TABLE pending_location_publishes ADD COLUMN authorSig TEXT")
+            }
+        }
+
         private fun buildRoomDatabase(context: Context): FamilySafetyDatabase {
             // The retired android-database-sqlcipher artifact loaded its native library
             // implicitly; net.zetetic:sqlcipher-android requires the caller to do it. Without
@@ -291,7 +304,7 @@ abstract class FamilySafetyDatabase : RoomDatabase() {
                 )
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
-                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
+                    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10
                 )
                 // Deliberately NOT fallbackToDestructiveMigration(). It used to be here, and
                 // it turns any mistake in a migration into a silent wipe of every user's chat

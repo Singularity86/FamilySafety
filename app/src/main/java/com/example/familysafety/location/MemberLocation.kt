@@ -8,5 +8,7 @@ data class MemberLocation(
     val accuracy: Float,
     val timestamp: Long,
     val speed: Float? = null,
-    val bearing: Float? = null
+    val bearing: Float? = null,
+    /** The author's Ed25519 over [com.example.familysafety.replication.AuthorSignatures.location] (F24). */
+    val authorSig: String? = null
 )

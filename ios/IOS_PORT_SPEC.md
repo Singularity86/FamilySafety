@@ -40,6 +40,7 @@ Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the bi
 | next (remediation 2.2b) | behaviour | **Client ID per install:** `familysafe_{memberId}_{deviceId}`. Without it, two installs of one identity evicted each other on the broker and the 2.2 warning never fired. It also stops an outsider with the shipped broker credentials from knocking a member offline by connecting under their member ID. No payload changes; the old session expires on the broker (2 h). | §4, §6.2 |
 | next (remediation 3.1) | **wire** | **Authorship of non-hashed fields.** The sync envelope's sender must equal `updaterMemberId`. Members self-sign their profile (`profileUpdatedAtMs`, `profileSignature`) and the subscriber signs confirmations (`subscriptionSignature`); a changed profile or subscription is taken only from its author or with a valid, newer signature, otherwise receivers keep theirs. `addedAt`/`addedBy` are immutable, and a set file key can't be replaced. All new fields are optional and unhashed; `PROTOCOL_VERSION` stays 3. | §6.5, §7.3 |
 | next (remediation 2.2) | **wire** | **Signed device ID in presence.** Optional `deviceId` and `deviceSignature` (over `presence-device:v1:…`). Receivers notify when one member shows two devices within 10 min, or your own identity shows another device. Presence padding goes from 512 to **640**. The existing presence signature is unchanged and older peers ignore the new fields, so `PROTOCOL_VERSION` stays 3. | §6.1, §6.2, §12 |
+| next (remediation 3.2) | **wire** | **Author-signed history.** `LocationUpdate`, `ChatMessagePayload` and `ReplicatedMessage` gain an optional `authorSig`: the author's Ed25519 over a fixed `LOC:v1:…` / `CHAT:v1:…` string with fixed-point coordinates. Replicated items that fail are dropped, live items that carry a bad signature are dropped, and unsigned history is accepted for one release (until 3.4, `PROTOCOL_VERSION` 4). Older peers ignore the field; `PROTOCOL_VERSION` stays 3. | §6.2, §6.3, §6.6, §12 |
 
 Not in this table because they do not touch interop: private-chat UI, Family/Chat lists, the
 Porch Light theme and typefaces, corner-radius rules, the stays/trips/gaps history view
@@ -452,7 +453,8 @@ padding is a bandwidth trade rather than a free win).
 ### 6.2 LocationUpdate / PresenceUpdate
 ```json
 { "memberId": "...", "latitude": 0.0, "longitude": 0.0, "accuracy": 0.0,
-  "timestamp": 0, "speed": null, "bearing": null }          // LocationUpdate
+  "timestamp": 0, "speed": null, "bearing": null,
+  "authorSig": "<hex128chars>" }                             // LocationUpdate
 { "memberId": "...", "isOnline": true, "timestamp": 0,
   "signature": "<hex128chars>", "protocolVersion": 2,
   "deviceId": "<32 hex>", "deviceSignature": "<hex128chars>" }   // PresenceUpdate
@@ -463,6 +465,42 @@ member whose signature verified when the envelope was decrypted). Otherwise any 
 move anyone else's pin. Senders already put their own id there, so this breaks no conforming
 peer. Android enforces it since PR #19 (F23). This covers live
 location only; replicated location history is covered by author signatures (Android 3.2, F24).
+
+#### Author signatures (remediation 3.2, F24)
+
+A location fix or chat message can be passed on by members other than its author (replication,
+§6.6), and the relay's envelope signature says nothing about who wrote it. So the author signs
+the item itself, and the signature travels with it everywhere: live, in replication, and in local
+storage. `authorSig` is the author's Ed25519 (hex) over the UTF-8 string:
+
+```
+LOC:v1:{memberId}:{timestamp}:{lat}:{lon}:{accuracy}:{speed or ""}:{bearing or ""}
+CHAT:v1:{messageId}:{conversationId}:{senderId}:{timestamp}:{messageType}:{replyToMessageId or ""}:{sha256hex(content)}
+```
+
+- `lat`/`lon` are `floor(x × 10^7 + 0.5)`, and `accuracy`, `speed` and `bearing` are
+  `floor(x × 100 + 0.5)`, each computed in **double precision** and written as a plain decimal
+  integer. This rounds halves *up*, not away from zero: lon −122.45000005 → −1224500000 (Swift's
+  `.rounded()` would give −1224500001). Use `(x * k + 0.5).rounded(.down)`.
+- `accuracy`, `speed` and `bearing` are **float32** on Android. Decode them from JSON as `Float`,
+  then widen to `Double` before scaling, the way the sender did. Parsing the JSON number straight
+  to `Double` can differ in the last digit (e.g. `0.015`: float32-widened gives 1, double gives
+  2).
+- `conversationId` is the *stored* id: the group id for group chat, and the derived `idA:idB`
+  (sorted) for a 1:1 message even though its payload carries `null`. `messageType` is the enum
+  name (`TEXT`, `LOCATION`, `SYSTEM`). `sha256hex` is lowercase hex of the UTF-8 content.
+- Sign when the item is created. A resend (e.g. the durable crash alert) carries the same
+  signature; Ed25519 is deterministic, so re-signing gives the same bytes.
+- The location heartbeat re-stamps the last fix with a new timestamp, so it re-signs it.
+
+Receivers verify under the author's `ed25519PublicKey` from the current roster: the
+`LocationUpdate`'s `memberId`, or the message's `senderId`.
+- Live (§6.2 location inbox, §6.3 chat): if `authorSig` is present and fails, drop the item.
+- Replicated (§6.6): drop an item whose author isn't in the roster (it can't be checked), and drop
+  one whose `authorSig` fails. An item with no `authorSig` is **accepted for one release**, because
+  history written before 3.2 has none. Remediation 3.4 (`PROTOCOL_VERSION` 4) ends that: an author
+  who advertises ≥ 4 must have signed everything, and unsigned items by them are dropped.
+- A signed fix still pads to a fixed size: moving and stationary fixes are the same length.
 
 #### Device identity (remediation 2.2, F15)
 
@@ -625,7 +663,8 @@ published plaintext + retained on **own** presence topic.
 ```json
 // ChatMessagePayload (plaintext inside envelope)
 { "messageId": "<uuid>", "content": "...", "messageType": "TEXT|LOCATION|SYSTEM",
-  "timestamp": 0, "conversationId": null, "replyToMessageId": null }
+  "timestamp": 0, "conversationId": null, "replyToMessageId": null,
+  "authorSig": "<hex128chars>" }   // §6.2 "Author signatures"
 // conversationId: null = 1-to-1 (sent to that one peer only; the receiver derives the local
 //                 conversation ID as "idA:idB", the two member IDs sorted ascending);
 //                 groupId = group chat (send one E2EE copy to every member).
@@ -712,7 +751,8 @@ signature travels with the fields:
 
 - `profileUpdatedAtMs` + `profileSignature`: the member's own Ed25519 (hex) over UTF-8
   `PROFILE:v1:{groupId}:{memberId}:{joinEpoch}:{profileUpdatedAtMs}:{displayName}:{avatarHash or ""}:{hue}`,
-  where `{hue}` is `round(colorHue × 100)` as a plain decimal integer, or `""` when null (not
+  where `{hue}` is `round(colorHue × 100)`, computed in double precision (widen the float32 hue
+  first, then round half up), as a plain decimal integer, or `""` when null (not
   float bits: parsing JSON to double then narrowing, as Swift does, can land on a different
   float). Sign whenever you change your own name, avatar or colour, with the time of the change.
   A member joining is written into the roster unsigned by the inviter, so on the first sync
@@ -803,7 +843,8 @@ alone unless it is your own.
 // ReplicatedMessage
 { "messageId": "...", "conversationId": "...", "senderId": "...", "recipientId": null,
   "content": "...", "messageType": "TEXT", "status": "SENT", "timestamp": 0,
-  "isOutgoing": false, "replyToMessageId": null }
+  "isOutgoing": false, "replyToMessageId": null, "authorSig": null }
+// locations[] and messages[] each carry their author's authorSig (§6.2), passed on unchanged.
 // DataAvailabilityAnnouncement
 { "announcerId": "...", "locationDataSummary": [ {"memberId":"...","oldestTimestamp":0,"newestTimestamp":0,"count":0} ],
   "chatDataSummary":   [ {"conversationId":"...","oldestTimestamp":0,"newestTimestamp":0,"count":0} ], "timestamp": 0 }
@@ -1866,6 +1907,19 @@ deviceSigningPayload("alice", 1700000000000, "00ff") = "presence-device:v1:alice
 ```
 Asserted in Android's `DeviceIdentityTest`. With a 32-hex `memberId`, a 64-byte signature
 and a 32-hex `deviceId`, online and offline presence both pad to exactly 640 bytes.
+
+### Author signing strings (§6.2)
+```
+location(memberId "dana", timestamp 1700000000000, lat 37.7749, lon -122.45000005,
+         accuracy 12.5, speed 3.25, bearing 270)
+  = "LOC:v1:dana:1700000000000:377749000:-1224500000:1250:325:27000"
+same fix, speed and bearing null
+  = "LOC:v1:dana:1700000000000:377749000:-1224500000:1250::"
+chatMessage("m1", "alice:dana", sender "dana", 5, "TEXT", reply null, content "hi")
+  = "CHAT:v1:m1:alice:dana:dana:5:TEXT::8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4"
+```
+Asserted in Android's `AuthorSignaturesTest`. Note the negative longitude: half-up gives
+−1224500000, half-away-from-zero would give −1224500001.
 
 ### Shared-file key
 ```
