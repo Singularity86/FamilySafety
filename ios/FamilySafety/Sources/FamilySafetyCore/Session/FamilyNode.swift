@@ -48,6 +48,9 @@ public actor FamilyNode {
     private var presence: [String: PresenceStatus] = [:]
     private var running = false
     private var backoffSeconds: UInt64 = 2
+    private var connecting = false
+    /// A reconnect asked for while a connect was in flight; done as soon as it finishes.
+    private var reconnectRequested = false
     private var inbound: AsyncStream<(String, Data)>.Continuation?
     private var bridge: TransportBridge?
     public private(set) var state: NodeState = .noFamily
@@ -158,7 +161,17 @@ public actor FamilyNode {
     // MARK: - Connection
 
     private func connect() async {
-        guard running, !transport.isConnected else { return }
+        guard running, !connecting, !transport.isConnected else { return }
+        connecting = true
+        await connectOnce()
+        connecting = false
+        if reconnectRequested {
+            reconnectRequested = false
+            await reconnect()
+        }
+    }
+
+    private func connectOnce() async {
         let group = await store.current
         let will: Data
         do {
@@ -184,6 +197,7 @@ public actor FamilyNode {
 
     /// The last-will is fixed at connect, so a new family (or a new key) needs a new session.
     private func reconnect() async {
+        guard !connecting else { reconnectRequested = true; return }
         transport.disconnect()
         await connect()
     }

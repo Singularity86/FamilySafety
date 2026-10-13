@@ -1,0 +1,3 @@
+// Shared settings for the app target. Broker credentials come from Secrets.xcconfig, which
+// is generated from the Mac Keychain by scripts/make-secrets.sh and never committed.
+#include? "Secrets.xcconfig"

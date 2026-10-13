@@ -28,3 +28,7 @@ ios/FamilySafety/.swiftpm/
 
 # Personal Claude Code permissions; each person keeps their own
 .claude/settings.local.json
+
+# iOS app: broker credentials generated from the Mac Keychain - NEVER commit
+ios/FamilySafetyiOS/Config/Secrets.xcconfig
+ios/FamilySafetyiOS/build/
