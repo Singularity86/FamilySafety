@@ -103,7 +103,7 @@ class PresenceSigningTest {
             sign = { ByteArray(64) { 0x11 } }
         )
 
-        assertEquals(512, signed.toByteArray(Charsets.UTF_8).size)
+        assertEquals(MessageProtocol.PRESENCE_PADDED_BYTES, signed.toByteArray(Charsets.UTF_8).size)
     }
 
     @Test

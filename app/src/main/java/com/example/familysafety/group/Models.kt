@@ -66,7 +66,11 @@ data class FamilyMember(
     val addedByMemberId: String? = null,
     val avatarHash: String? = null,
     val colorHue: Float? = null,   // 0–359; null = derive from memberId hash
-    val joinEpoch: Int = 0
+    val joinEpoch: Int = 0,
+    /** When this member last signed their profile (F25; see [ProfileGuard]). Not hashed. */
+    val profileUpdatedAtMs: Long? = null,
+    /** This member's own signature over [ProfileGuard.profileMessage]. Not hashed. */
+    val profileSignature: String? = null
 )
 
 /**
@@ -221,7 +225,9 @@ data class GroupDefinition(
     val subscriptionConfirmedAtEpochMs: Long? = null,
     /** A developer-issued grant code (`billing/GrantCode.kt`), if this family has one. */
     val grantCode: String? = null,
-    val removalProofs: Set<RemovalProof> = emptySet()
+    val removalProofs: Set<RemovalProof> = emptySet(),
+    /** [subscriberMemberId]'s signature over [ProfileGuard.subscriptionMessage] (F25). Not hashed. */
+    val subscriptionSignature: String? = null
 ) {
     /**
      * Computes deterministic hash of this group state for hash chain integrity.

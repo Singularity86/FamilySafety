@@ -494,4 +494,41 @@ class GroupTransitionValidatorTest {
         val votes = setOf(creatorId, bobId) // would satisfy a single target's threshold
         assertNotNull(GroupTransitionValidator.validate(current, remote, bobId, votes))
     }
+// ── F25: facts fixed at the add, and the file key ─────────────────────────
+
+    @Test
+    fun `a member's join date can't be rewritten`() {
+        val current = group()
+        val remote = successorOf(current, members = setOf(creator, alice.copy(addedAtEpochMs = 1L), bob))
+        assertNotNull(GroupTransitionValidator.validate(current, remote, bobId))
+    }
+
+    @Test
+    fun `who added a member can't be rewritten`() {
+        val current = group(members = setOf(creator, alice.copy(addedByMemberId = creatorId), bob))
+        val remote = successorOf(current, members = setOf(creator, alice.copy(addedByMemberId = bobId), bob))
+        assertNotNull(GroupTransitionValidator.validate(current, remote, creatorId))
+    }
+
+    @Test
+    fun `the file key can't be replaced`() {
+        val current = group().copy(fileEncryptionKey = "11".repeat(32))
+        val remote = successorOf(current).copy(fileEncryptionKey = "22".repeat(32))
+        assertNotNull(GroupTransitionValidator.validate(current, remote, creatorId))
+    }
+
+    @Test
+    fun `a state without the file key isn't refused for it`() {
+        val current = group().copy(fileEncryptionKey = "11".repeat(32))
+        val remote = successorOf(current).copy(fileEncryptionKey = null)
+        assertNull(GroupTransitionValidator.validate(current, remote, aliceId))
+    }
+
+    @Test
+    fun `a phone without the file key may learn it from any member`() {
+        // A relay: the phone missed the creator's broadcast and hears it from someone else.
+        val current = group()
+        val remote = successorOf(current).copy(fileEncryptionKey = "33".repeat(32))
+        assertNull(GroupTransitionValidator.validate(current, remote, aliceId))
+    }
 }

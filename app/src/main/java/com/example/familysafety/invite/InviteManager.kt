@@ -150,6 +150,11 @@ class InviteManager @Inject constructor(
                     // belongs here, so nothing is being decided — send the family back.
                     Timber.i("Join request from existing member ${joinRequest.requesterId.take(8)} — restoring without a prompt")
                     approveJoinRequest(joinRequest)
+                    // Nobody is asked, so say it happened: a phrase someone else learned
+                    // restores exactly like this (F15).
+                    val name = currentGroup.findMemberById(joinRequest.requesterId)?.displayName
+                        ?: joinRequest.displayName
+                    com.example.familysafety.core.IdentityAlerts.memberRestored(context, joinRequest.requesterId, name)
                     return
                 }
                 RejoinPolicy.Verdict.AskInviter -> Unit
