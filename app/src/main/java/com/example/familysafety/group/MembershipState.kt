@@ -4,7 +4,9 @@ sealed class MembershipState {
     data object Unauthenticated : MembershipState()
     data class PendingApproval(
         val invitedByName: String,
-        val familyName: String
+        val familyName: String,
+        /** Six digits to compare with the inviter's screen; null for a request from before join v2. */
+        val fingerprint: String? = null
     ) : MembershipState()
     /** Approval received — show confirmation screen before restarting. */
     data class ApprovalReceived(val familyName: String) : MembershipState()

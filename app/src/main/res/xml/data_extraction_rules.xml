@@ -32,6 +32,7 @@
         <exclude domain="sharedpref" path="familysafety_db_prefs.xml"/>
         <exclude domain="sharedpref" path="familysafety_db_prefs_v2.xml"/>
         <exclude domain="sharedpref" path="familysafety_prefs.xml"/>
+        <exclude domain="sharedpref" path="familysafety_invites.xml"/>
         <exclude domain="sharedpref" path="familysafety_device.xml"/>
         <exclude domain="sharedpref" path="crash_detection_prefs.xml"/>
         <exclude domain="sharedpref" path="geofence_prefs.xml"/>
@@ -48,6 +49,7 @@
         <exclude domain="sharedpref" path="familysafety_db_prefs.xml"/>
         <exclude domain="sharedpref" path="familysafety_db_prefs_v2.xml"/>
         <exclude domain="sharedpref" path="familysafety_prefs.xml"/>
+        <exclude domain="sharedpref" path="familysafety_invites.xml"/>
         <exclude domain="sharedpref" path="familysafety_device.xml"/>
         <exclude domain="sharedpref" path="crash_detection_prefs.xml"/>
         <exclude domain="sharedpref" path="geofence_prefs.xml"/>

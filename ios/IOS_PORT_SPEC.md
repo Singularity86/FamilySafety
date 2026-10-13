@@ -36,6 +36,7 @@ Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the bi
 | 1.15.3 (44) | **wire** | **Removals end a membership, not a person.** `FamilyMember.joinEpoch` (optional, default 0) and tombstones of the form `"<memberId>#<n>"` for membership n ≥ 1; the bare ID still means membership 0. A member who left or was removed can be let back in as membership n+1. `joinEpoch` is hashed when non-zero, so existing groups hash as before. Peers before 1.15.3 reject a readmission ("removed member present"), so update every phone before letting anyone back in. | §6.5, §7.1, §7.3 |
 | 1.15.3 (44) | **wire** | **Removal proofs.** `GroupDefinition.removalProofs` (optional): per tombstone, a signature by the creator or by the member who left, over `REMOVAL_PROOF:v1:{groupId}:{tombstone}`. Any member may now relay a removal carrying one; before, a removal heard second-hand was refused. Not hashed. Older peers ignore the field. | §6.5, §7.3 |
 | 1.15.3 (44) | product | Leaving while unable to reach the family (no relay, no member on the same Wi-Fi) warns first: the departure can't be sent once the keys are erased. | — |
+| next (remediation 2.1) | **wire** | **Authenticated join (join v2).** The invite gains `v`, `inviteId`, a one-time `inviteSecret`, the inviter's keys and `expiresAt`. The joiner sends `JoinRequestV2Message`: the request encrypted to the inviter, signed over `JOIN:v2:…`, with an HMAC under the invite secret. The inviter verifies before showing it, with a 6-digit fingerprint on both screens. Negotiated by the invite's `"v": "2"`, so `PROTOCOL_VERSION` stays 3: a v1 invite still gets a v1 request, and Android still accepts v1 requests (flagged "Unverified") for one release. | §8.2–§8.4, §12 |
 | next (remediation 3.1) | **wire** | **Authorship of non-hashed fields.** The sync envelope's sender must equal `updaterMemberId`. Members self-sign their profile (`profileUpdatedAtMs`, `profileSignature`) and the subscriber signs confirmations (`subscriptionSignature`); a changed profile or subscription is taken only from its author or with a valid, newer signature, otherwise receivers keep theirs. `addedAt`/`addedBy` are immutable, and a set file key can't be replaced. All new fields are optional and unhashed; `PROTOCOL_VERSION` stays 3. | §6.5, §7.3 |
 | next (remediation 2.2) | **wire** | **Signed device ID in presence.** Optional `deviceId` and `deviceSignature` (over `presence-device:v1:…`). Receivers notify when one member shows two devices within 10 min, or your own identity shows another device. Presence padding goes from 512 to **640**. The existing presence signature is unchanged and older peers ignore the new fields, so `PROTOCOL_VERSION` stays 3. | §6.1, §6.2, §12 |
 
@@ -1531,10 +1532,29 @@ creatorMemberId = self, members = {self}, previousStateHash = null}` → persist
 Base64 (standard, padded) of a JSON **object of strings**:
 ```json
 { "groupId": "...", "groupName": "...", "inviterMemberId": "...",
-  "inviterName": "...", "timestamp": "<epoch ms as string>" }
+  "inviterName": "...", "timestamp": "<epoch ms as string>",
+  "v": "2", "inviteId": "<16 lowercase hex>", "inviteSecret": "<Base64 of 32 random bytes>",
+  "inviterEd25519": "<hex>", "inviterX25519": "<hex>", "expiresAt": "<epoch ms as string>" }
 ```
 The QR encodes this Base64 string. (An `InviteData` class with a signature field exists in
 the codebase but is *not* what the current invite path emits — match the map format above.)
+
+**Join v2 (since Android PR "authenticated join", remediation 2.1, F13).** The last six keys are
+new; the first five are unchanged so a joiner on an older build still works. The inviter makes a
+fresh `inviteId` + `inviteSecret` every time the invite screen opens and stores
+`{inviteId, secret, expiresAt}` locally: valid for 24 h, **single use** (used up when a request
+through it is approved or rejected). Keep the store bounded: drop expired entries on every
+write and keep at most 20, oldest dropped first.
+
+The secret travels inside the code itself, so **the code is the secret**: the QR, or the text
+shown for pasting. Anyone holding it within 24 h can ask to join, which is why the invite screen
+should say to share it privately (in person, or a private message). What the secret proves is
+that a request came from someone the code was given to, never from someone who only watched
+the broker.
+
+Why: in v1 the join request was plaintext, retained on the inviter's topic, so anyone on the
+broker could read it, or replace it with one carrying their own keys under the same name, and an
+inviter approving "Dana" would encrypt the family, file key included, to the outsider.
 
 ### 8.3 Joiner
 1. Scan QR (or accept a pasted code) → **strip every whitespace character** → Base64-decode →
@@ -1556,9 +1576,50 @@ the codebase but is *not* what the current invite path emits — match the map f
    `"JOIN:v1:{requestId}:{requesterId}:{groupId}:{timestampMs}:{ed25519Hex}:{x25519Hex}"`
    (keys as lowercase hex here, though the JSON carries them as Base64; `displayName` is not
    covered). Always send it. Treat it as optional on receipt.
+
+   **With a v2 invite (`"v": "2"`), send a v2 request instead.** First check the invite:
+   `SHA-256(hexDecode(inviterEd25519))[0..16]` as hex `== inviterMemberId` (the QR is the root of
+   trust), and `now <= expiresAt`; refuse the invite otherwise. Then build the `JoinRequest` above
+   with one extra field, `"inviteId"`, and sign
+   `signingBytesV2 = "JOIN:v2:{requestId}:{requesterId}:{groupId}:{timestampMs}:{ed25519Hex}:{x25519Hex}:{inviteId}:{sha256Hex(displayName UTF-8)}"`
+   instead of the v1 string (`signature` is **required** in v2). Publish, retained, to the same
+   topic:
+```json
+// JoinRequestV2Message
+{ "v": 2, "inviteId": "...", "requesterEd25519": "<hex>", "requesterX25519": "<hex>",
+  "encryptedRequest": "<§3 envelope, encrypted to inviterX25519, signed by the requester, wrapping JoinRequestV2Payload>" }
+// JoinRequestV2Payload (inside the envelope)
+{ "request": { ...JoinRequest incl. "inviteId" and "signature"... },
+  "mac": "<hex HMAC-SHA256, key = the 32 raw secret bytes, message = signingBytesV2>" }
+```
+   The envelope's `senderMemberId` is the requester's own member ID.
 4. Wait on the pending screen (re-publish request every ~30 s), listening on `join_approval`.
+   With v2, show the **fingerprint** of your own keys on the pending screen: six decimal digits,
+   `(big-endian uint32 of SHA-256(ed25519Raw ‖ x25519Raw)[0..4]) mod 1_000_000`, zero-padded,
+   displayed as `"123 456"`. The inviter's approval card shows the same digits. Keep the
+   `requestId` yourself; a v2 request only carries it inside the encryption, and rejection
+   matching (§8.5) needs it.
 
 ### 8.4 Inviter (approval)
+0. **v2 request** (payload has `encryptedRequest`): verify, in this order, and **drop silently**
+   on any failure:
+   1. `inviteId` names a stored invite that is unexpired and unused;
+   2. the envelope's plaintext `senderMemberId == deriveMemberId(requesterEd25519)`. Check this
+      **before** decrypting. Implementations that cache shared secrets by `senderMemberId` would
+      otherwise cache an existing member's secret against an outsider's key;
+   3. the envelope decrypts and its signature verifies with `requesterX25519`/`requesterEd25519`;
+   4. the inner request's keys equal the outer ones, and the inner `inviteId` equals the outer one;
+   5. `requesterId == deriveMemberId(requesterEd25519)`;
+   6. `signature` verifies over `signingBytesV2`;
+   7. `mac` equals HMAC-SHA256(stored secret, `signingBytesV2`), compared in constant time.
+
+   A request that passes is **verified**: show its fingerprint (§8.3) on the approval prompt. Then
+   continue at step 1. Approving or rejecting it uses up the invite.
+
+   **v1 request** (plaintext `JoinRequest`): can't be verified. Android accepts it for one release
+   with an *"Unverified: sent from an older app version. Only approve if you're with this
+   person."* warning on the prompt, and refuses it in the release after. iOS SHOULD NOT accept v1
+   at all, since it ships after that grace period.
 1. Validate `deriveMemberId(request.ed25519PublicKey) == request.requesterId`; reject otherwise.
    **Since 1.15.1**, before showing any prompt (`RejoinPolicy`):
    - If `requesterId` is already a member and either key differs from the one on file,
@@ -1574,7 +1635,9 @@ the codebase but is *not* what the current invite path emits — match the map f
      prompt the inviter as before.
 2. Clear the retained join_request (empty retained publish).
 3. Add member locally (approval signature payload, checked by GroupStateManager:
-   `"ADD:{groupId}:{preAddVersion}:{newMemberEd25519Hex}"`, Ed25519-signed by inviter).
+   `"ADD:v2:{groupId}:{preAddVersion}:{newMemberEd25519Hex}:{newMemberX25519Hex}:{displayName}"`,
+   Ed25519-signed by inviter). This signature never leaves the inviter's phone, so its format is
+   local; v2 signs both keys and the name, so the approval is for exactly the identity shown.
 4. Publish **retained** to `familysafe/{joiner}/join_approval`:
 ```json
 { "inviterEd25519PublicKey": "<hex>", "inviterX25519PublicKey": "<hex>",
@@ -1591,7 +1654,9 @@ Track closed requestIds (persisted, cap ~200) to ignore broker redeliveries.
 
 ### 8.5 Joiner completes
 Verify `SHA-256(inviterEd25519PublicKey)[0..15] == inviterMemberId` **from the scanned QR**
-(this is the root of trust); decrypt/verify the envelope with the inviter's keys; adopt the
+(this is the root of trust). With a v2 invite, also require `inviterX25519PublicKey` to equal
+the QR's `inviterX25519`, for approvals and rejections alike: the member ID pins only the signing
+key. Then decrypt/verify the envelope with the inviter's keys; adopt the
 GroupDefinition; reconnect as a normal member. Rejection payloads must match the joiner's
 own pending `requestId` + memberId (anti-replay).
 
@@ -1781,6 +1846,13 @@ and a 32-hex `deviceId`, online and offline presence both pad to exactly 640 byt
 groupId:  11111111-2222-3333-4444-555555555555
 file_key: 615d9ec6399937470f89418ab98e10f3107c56d7a09b6bf234263d8ad842becd
 ```
+
+### Join v2 (§8.3)
+```
+fingerprint(ed25519 = 32 × 0x01, x25519 = 32 × 0x02)       = 367443   (shown "367 443")
+HMAC-SHA256(key = 32 × 0x07, msg = UTF-8 "JOIN:v2:test")  = d6855d7c0a3be87c363e0c5d5f3df3ac5ce67f4ad242ee224e932b34ae09efe4
+```
+Asserted in Android's `JoinV2Test`.
 
 ---
 
