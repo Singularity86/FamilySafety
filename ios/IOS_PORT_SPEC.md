@@ -37,6 +37,7 @@ Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the bi
 | 1.15.3 (44) | **wire** | **Removal proofs.** `GroupDefinition.removalProofs` (optional): per tombstone, a signature by the creator or by the member who left, over `REMOVAL_PROOF:v1:{groupId}:{tombstone}`. Any member may now relay a removal carrying one; before, a removal heard second-hand was refused. Not hashed. Older peers ignore the field. | §6.5, §7.3 |
 | 1.15.3 (44) | product | Leaving while unable to reach the family (no relay, no member on the same Wi-Fi) warns first: the departure can't be sent once the keys are erased. | — |
 | next (remediation 2.1) | **wire** | **Authenticated join (join v2).** The invite gains `v`, `inviteId`, a one-time `inviteSecret`, the inviter's keys and `expiresAt`. The joiner sends `JoinRequestV2Message`: the request encrypted to the inviter, signed over `JOIN:v2:…`, with an HMAC under the invite secret. The inviter verifies before showing it, with a 6-digit fingerprint on both screens. Negotiated by the invite's `"v": "2"`, so `PROTOCOL_VERSION` stays 3: a v1 invite still gets a v1 request, and Android still accepts v1 requests (flagged "Unverified") for one release. | §8.2–§8.4, §12 |
+| next (remediation 2.2b) | behaviour | **Client ID per install:** `familysafe_{memberId}_{deviceId}`. Without it, two installs of one identity evicted each other on the broker and the 2.2 warning never fired. It also stops an outsider with the shipped broker credentials from knocking a member offline by connecting under their member ID. No payload changes; the old session expires on the broker (2 h). | §4, §6.2 |
 | next (remediation 3.1) | **wire** | **Authorship of non-hashed fields.** The sync envelope's sender must equal `updaterMemberId`. Members self-sign their profile (`profileUpdatedAtMs`, `profileSignature`) and the subscriber signs confirmations (`subscriptionSignature`); a changed profile or subscription is taken only from its author or with a valid, newer signature, otherwise receivers keep theirs. `addedAt`/`addedBy` are immutable, and a set file key can't be replaced. All new fields are optional and unhashed; `PROTOCOL_VERSION` stays 3. | §6.5, §7.3 |
 | next (remediation 2.2) | **wire** | **Signed device ID in presence.** Optional `deviceId` and `deviceSignature` (over `presence-device:v1:…`). Receivers notify when one member shows two devices within 10 min, or your own identity shows another device. Presence padding goes from 512 to **640**. The existing presence signature is unchanged and older peers ignore the new fields, so `PROTOCOL_VERSION` stays 3. | §6.1, §6.2, §12 |
 
@@ -268,8 +269,29 @@ against the QR invite's `inviterMemberId` (§8.4).
   the build from a gitignored file and which are extractable from a shipped app
   (`ios/CODE_REVIEW_2026-10-11.md` §6 F2, accepted). Ask the project owner for the values; never commit them.
   The earlier public HiveMQ dev broker is no longer used.
-- Client ID: `familysafe_{memberId}`. **Stable** — combined with `cleanSession = false` this
-  gives the broker-side persistent session that provides offline delivery.
+- Client ID: `familysafe_{memberId}_{deviceId}` (since remediation 2.2b), with the full 32-hex
+  `deviceId` of §6.2 "Device identity". **Stable per install**, so combined with
+  `cleanSession = false` it gives the broker-side persistent session that provides offline
+  delivery. Create the `deviceId` before the first connect.
+  - **Why per install.** It was `familysafe_{memberId}`. Two installs of one identity then shared
+    a client ID, and MQTT makes the broker disconnect the older connection when another arrives.
+    The two phones evicted each other in a loop, every overlap looked like a change of phone,
+    and the two-phone warning could never fire.
+  - **Why the full `deviceId`.** Member IDs are in topic names and the broker credentials ship
+    in the app, so with `familysafe_{memberId}` anyone could connect under a member's ID and
+    knock them offline in a loop. The `deviceId` only travels inside sealed presence.
+  - **Two installs of one identity are two subscribers.** Each holds its own persistent session,
+    receives everything on `familysafe/{me}/#` and acts on it: it answers sync requests, sends
+    receipts and can approve joins. A restored phone already behaved like this alongside its old
+    install; it is now the normal case for a clone too.
+  - **Upgrading abandons the old session.** The new ID has no session on the broker, so the
+    first connect sees `sessionPresent = false` and subscribes in full. The old
+    `familysafe_{memberId}` session keeps queuing QoS 1 traffic until the broker's **session
+    expiry**, and anything queued there is lost once (chat and location come back through
+    replication, group state through the `sync_request` on connect). We rely on EMQX's default
+    expiry of **2 hours**. Don't raise it to "never": an abandoned session would then queue for
+    good. Don't purge the old session by connecting to it with `cleanSession = true` either;
+    that would disconnect any install of the same member still on an older build.
 - `cleanSession = false`, keep-alive **120 s** (was 30 s before 1.15.0; the broker drops a silent client after 1.5× this, and an abruptly dead phone's last-will "offline" now fires after ~3 minutes), connect timeout 30 s. QoS **1** for everything
   **except** `location_inbox` and the online/offline presence publishes, which are QoS **0**
   (since 1.13.1). A position supersedes itself and receivers discard anything older than what
@@ -459,6 +481,10 @@ a family member. Presence now names the install it came from:
 
 Both fields are optional. Older senders omit them, and older receivers ignore them. Sign them
 on the live update and on the last-will.
+
+Detection needs both installs connected at once, so the MQTT client ID must be per install
+(§4, since 2.2b). With one shared client ID the broker disconnects one install whenever the
+other connects, and every overlap looks like a change of phone.
 
 Receivers, after the existing presence checks pass:
 

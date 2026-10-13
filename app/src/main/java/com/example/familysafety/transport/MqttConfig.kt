@@ -67,8 +67,22 @@ object MqttConfig {
             (topic.contains("/group/") && topic.endsWith("/ack"))
 
 
-    fun generateClientId(memberId: String): String {
-        return "familysafe_${memberId}"
+    /**
+     * One client ID per install, not per identity (2.2b).
+     *
+     * Was `familysafe_{memberId}`. Two installs of one identity then shared a client ID, and
+     * MQTT requires the broker to disconnect the older connection when a second one arrives:
+     * the two phones evicted each other in a loop, every overlap looked like "A offline, then
+     * B online", and the clone warning could never fire. With the install's [deviceId] in the
+     * ID, each install keeps its own connection and session and both are seen online at once.
+     *
+     * The full device ID, not a prefix: member IDs are not secret (they are in topic names) and
+     * the broker credentials ship in the app, so anyone could connect as `familysafe_{memberId}`
+     * and knock that member offline in a loop. The device ID only travels inside sealed
+     * presence, so an outsider can't build this ID.
+     */
+    fun generateClientId(memberId: String, deviceId: String): String {
+        return "familysafe_${memberId}_${deviceId}"
     }
     
     /**
