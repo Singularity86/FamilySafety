@@ -49,7 +49,10 @@ object MessageProtocol {
     // which pushes the envelope past 256 and would otherwise split presence across two
     // buckets — signed at 512, unsigned at 256 — making signed and unsigned trivially
     // distinguishable and undoing half the point of padding.
-    private const val PRESENCE_PADDED_BYTES = 512
+    //
+    // 640 since presence also carries a device ID and its signature (F15), about 525 bytes in
+    // all: past 512, and rounding up to 1024 would double presence traffic for nothing.
+    internal const val PRESENCE_PADDED_BYTES = 640
     private const val LOCATION_PADDED_BYTES = 512
 
     /** Filler character. Must not need JSON escaping, or padding would not be 1:1. */
@@ -129,8 +132,27 @@ object MessageProtocol {
          * update" prompt. Presence is sealed under the group key, so an outsider cannot
          * write one at all.
          */
-        val protocolVersion: Int = 1
+        val protocolVersion: Int = 1,
+        /**
+         * A random ID for the install that sent this (F15). Two installs of one identity
+         * mean the recovery phrase was used on a second phone, which nothing used to make
+         * visible. Optional: older senders omit it, older receivers ignore it.
+         */
+        val deviceId: String? = null,
+        /**
+         * Ed25519 (hex) by the member's identity key over [deviceSigningPayload]. Separate
+         * from [signature] so the shipped presence signing string stays unchanged, and so one
+         * member can't forge another's device ID to raise a false alarm.
+         */
+        val deviceSignature: String? = null
     )
+
+    /**
+     * Canonical bytes covered by [PresenceUpdate.deviceSignature]. Cross-platform
+     * implementations must produce these exactly.
+     */
+    fun deviceSigningPayload(memberId: String, timestamp: Long, deviceId: String): ByteArray =
+        "presence-device:v1:$memberId:$timestamp:$deviceId".toByteArray(Charsets.UTF_8)
 
     /**
      * Presence sealed under the group key, as published on the presence topic since
@@ -190,16 +212,21 @@ object MessageProtocol {
     fun encodePresenceUpdate(
         memberId: String,
         isOnline: Boolean,
-        sign: ((ByteArray) -> ByteArray)? = null
+        sign: ((ByteArray) -> ByteArray)? = null,
+        deviceId: String? = null
     ): String {
         val timestamp = System.currentTimeMillis()
+        fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
         val presenceUpdate = PresenceUpdate(
             memberId = memberId,
             isOnline = isOnline,
             timestamp = timestamp,
-            signature = sign?.invoke(presenceSigningPayload(memberId, isOnline, timestamp))
-                ?.joinToString("") { "%02x".format(it) },
-            protocolVersion = PROTOCOL_VERSION
+            signature = sign?.invoke(presenceSigningPayload(memberId, isOnline, timestamp))?.hex(),
+            protocolVersion = PROTOCOL_VERSION,
+            deviceId = deviceId,
+            deviceSignature = if (deviceId != null) {
+                sign?.invoke(deviceSigningPayload(memberId, timestamp, deviceId))?.hex()
+            } else null
         )
         
         val envelope = MessageEnvelope(

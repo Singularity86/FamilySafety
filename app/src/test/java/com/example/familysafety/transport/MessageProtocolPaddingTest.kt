@@ -48,7 +48,8 @@ class MessageProtocolPaddingTest {
     @Test
     fun presence_isPaddedToTheFixedSize() {
         val encoded = MessageProtocol.encodePresenceUpdate("c".repeat(32), true)
-        assertEquals(512, bytesOf(encoded))
+        // 640 since presence carries a signed device ID (F15).
+        assertEquals(MessageProtocol.PRESENCE_PADDED_BYTES, bytesOf(encoded))
     }
 
     @Test

@@ -36,6 +36,7 @@ Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the bi
 | 1.15.3 (44) | **wire** | **Removals end a membership, not a person.** `FamilyMember.joinEpoch` (optional, default 0) and tombstones of the form `"<memberId>#<n>"` for membership n ≥ 1; the bare ID still means membership 0. A member who left or was removed can be let back in as membership n+1. `joinEpoch` is hashed when non-zero, so existing groups hash as before. Peers before 1.15.3 reject a readmission ("removed member present"), so update every phone before letting anyone back in. | §6.5, §7.1, §7.3 |
 | 1.15.3 (44) | **wire** | **Removal proofs.** `GroupDefinition.removalProofs` (optional): per tombstone, a signature by the creator or by the member who left, over `REMOVAL_PROOF:v1:{groupId}:{tombstone}`. Any member may now relay a removal carrying one; before, a removal heard second-hand was refused. Not hashed. Older peers ignore the field. | §6.5, §7.3 |
 | 1.15.3 (44) | product | Leaving while unable to reach the family (no relay, no member on the same Wi-Fi) warns first: the departure can't be sent once the keys are erased. | — |
+| next (remediation 2.2) | **wire** | **Signed device ID in presence.** Optional `deviceId` and `deviceSignature` (over `presence-device:v1:…`). Receivers notify when one member shows two devices within 10 min, or your own identity shows another device. Presence padding goes from 512 to **640**. The existing presence signature is unchanged and older peers ignore the new fields, so `PROTOCOL_VERSION` stays 3. | §6.1, §6.2, §12 |
 
 Not in this table because they do not touch interop: private-chat UI, Family/Chat lists, the
 Porch Light theme and typefaces, corner-radius rules, the stays/trips/gaps history view
@@ -405,10 +406,12 @@ a device as moving. Coordinate precision leaked the same way.
 Algorithm, which must match byte-for-byte to be useful:
 
 1. Serialize the envelope with `pad` set to `""`; measure its length in **UTF-8 bytes**.
-2. Round that up to the next multiple of the target for the message type — **512** for
-   both `presence_update` and `location_update`. (Presence was 256 before 1.12.3; the
+2. Round that up to the next multiple of the target for the message type — **640** for
+   `presence_update` and **512** for `location_update`. (Presence was 256 before 1.12.3; the
    Ed25519 signature added in §6.2 does not fit in 256, and leaving it there would split
-   presence across two buckets, making signed and unsigned senders distinguishable.)
+   presence across two buckets, making signed and unsigned senders distinguishable. It went
+   from 512 to 640 with the signed device ID (§6.2, remediation 2.2), which takes a presence
+   update to about 525 bytes; 1024 would have doubled presence traffic.)
 3. Re-serialize with `pad` set to `.` repeated (target − unpadded) times.
 
 `.` needs no JSON escaping, so N characters add exactly N bytes. Rounding up to a
@@ -427,7 +430,8 @@ padding is a bandwidth trade rather than a free win).
 { "memberId": "...", "latitude": 0.0, "longitude": 0.0, "accuracy": 0.0,
   "timestamp": 0, "speed": null, "bearing": null }          // LocationUpdate
 { "memberId": "...", "isOnline": true, "timestamp": 0,
-  "signature": "<hex128chars>", "protocolVersion": 2 }       // PresenceUpdate
+  "signature": "<hex128chars>", "protocolVersion": 2,
+  "deviceId": "<32 hex>", "deviceSignature": "<hex128chars>" }   // PresenceUpdate
 ```
 
 **Receivers drop a `LocationUpdate` whose `memberId` ≠ the authenticated sender** (the
@@ -435,6 +439,47 @@ member whose signature verified when the envelope was decrypted). Otherwise any 
 move anyone else's pin. Senders already put their own id there, so this breaks no conforming
 peer. Android enforces it since PR #19 (F23). This covers live
 location only; replicated location history is covered by author signatures (Android 3.2, F24).
+
+#### Device identity (remediation 2.2, F15)
+
+A recovery phrase restores an identity on any phone, and a restored phone is let back in
+without a prompt (§8.4). So a phrase someone else learned produced a second, invisible copy of
+a family member. Presence now names the install it came from:
+
+- `deviceId`: 16 random bytes as 32 lowercase hex, generated once per install, kept in app
+  storage and **excluded from backup and device transfer** (a copied phone must not share it).
+  iOS: Keychain, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` (survives a reinstall on
+  the same phone, which only means fewer ID changes).
+- `deviceSignature`: Ed25519 by the member's identity key, lowercase hex, over
+  `presence-device:v1:{memberId}:{timestamp}:{deviceId}` (UTF-8), using the same `timestamp`
+  as the presence. Separate from `signature` so the shipped presence signing string stays
+  byte-identical; folding the device ID into it would break presence on every older build.
+
+Both fields are optional. Older senders omit them, and older receivers ignore them. Sign them
+on the live update and on the last-will.
+
+Receivers, after the existing presence checks pass:
+
+1. Use `deviceId` only if `deviceSignature` verifies under that member's Ed25519 key;
+   otherwise ignore it for detection (presence still applies).
+2. Keep, per member, the last verified `deviceId`, whether it was **online**, and the **local
+   receive time**. Use local time, not the sender's `timestamp`, so clock skew can't hide or fake
+   an overlap. An **offline** from the device you're tracking marks it offline. An offline from
+   any *other* device proves nothing about overlap: record nothing.
+3. Alert only on an **online** sighting of a different `deviceId` while the tracked device's last
+   state is **online** and it was seen within **10 minutes**: two phones running at once. Notify
+   locally, *"{name} is signed in on another phone"*, at most once per member per **6 hours**.
+   Anything else is a change of phone and shows nothing. This matters for the common case:
+   after a reinstall or a restore, the old install's last-will offline arrives about 3 minutes
+   after it dies, then the new install comes online. That's a switch, not a clone.
+4. **Your own topic too.** Presence on `familysafe/{me}/presence` that is **online**, has a valid
+   device signature under your own key, and has a `deviceId` that isn't yours means your
+   identity is in use elsewhere: *"Your account is signed in on another phone"*, with the same
+   6-hour cap. Ignore your own ID, and ignore any offline. A restored phone finds its previous
+   install's retained offline there.
+
+An inviter that auto-approves a restored member (§8.4.1) also notifies locally, *"{name} was
+restored on a new phone"*.
 
 #### Protocol version advertisement (since 1.12.6)
 
@@ -1677,6 +1722,13 @@ signature: 7369363820e6719d024dbee66f5935fbe0846ed861183264038d04616beefd66e68af
 payload:   ADD:11111111-2222-3333-4444-555555555555:1:f93f2139ee8553887745ef5210f10bcd3efb5201fe39522dc3d7289f2826edae
 signature: 34d343dff90717fc067e47957c947a83f10d42336d26d3e0130793213f93f5c3bfd66d430dc8a5957dd525c274007530643e2ecaca21bac9e907b3bd34efb90a
 ```
+
+### Presence device signing string (§6.2)
+```
+deviceSigningPayload("alice", 1700000000000, "00ff") = "presence-device:v1:alice:1700000000000:00ff"
+```
+Asserted in Android's `DeviceIdentityTest`. With a 32-hex `memberId`, a 64-byte signature
+and a 32-hex `deviceId`, online and offline presence both pad to exactly 640 bytes.
 
 ### Shared-file key
 ```
