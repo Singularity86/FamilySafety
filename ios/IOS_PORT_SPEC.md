@@ -486,7 +486,8 @@ restored on a new phone"*.
 #### Protocol version advertisement (since 1.12.6)
 
 ```
-PROTOCOL_VERSION = 2      // 1 = pre-1.12.x; 2 = padded + signed + sealed + encrypted manifests
+PROTOCOL_VERSION = 3      // 1 = pre-1.12.x; 2 = padded + signed + sealed + encrypted manifests;
+                          // 3 = removal tombstones + concurrent-edit reconciliation (1.12.7). Advertise 3.
 ```
 
 Three of the changes above (manifest encryption, sealed presence, and the group file key)
