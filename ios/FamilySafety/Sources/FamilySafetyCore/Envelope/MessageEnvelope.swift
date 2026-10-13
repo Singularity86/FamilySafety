@@ -34,9 +34,16 @@ public struct MessageEnvelope: Codable, Equatable {
 /// so an unpadded sender leaks real behaviour (online/offline, movement) through byte
 /// count alone — padding rounds every message of a given type onto the same fixed grid.
 public enum EnvelopePadding {
-    /// Bytes-per-bucket for both location and presence (§6.1; presence was 256 before the
-    /// §6.2 signature was added — it no longer fits, so both types share 512 now).
+    /// Bytes-per-bucket for location (§6.1).
     public static let target = 512
+    /// Presence went 256 → 512 with its signature, then 512 → 640 with the signed device ID
+    /// (Android 2.2), which takes a presence update to about 525 bytes. Online and offline must
+    /// still land in one bucket.
+    public static let presenceTarget = 640
+
+    public static func target(for type: EnvelopeType) -> Int {
+        type == .presenceUpdate ? presenceTarget : target
+    }
 
     /// 1. Serialize with `pad` empty and measure UTF-8 bytes.
     /// 2. Round up to the next multiple of `target`.
@@ -44,7 +51,8 @@ public enum EnvelopePadding {
     ///    JSON escaping, so N characters add exactly N bytes.
     ///
     /// Pad the plaintext, before encryption — padding ciphertext achieves nothing.
-    public static func build(type: EnvelopeType, payload: String, target: Int = EnvelopePadding.target) throws -> MessageEnvelope {
+    public static func build(type: EnvelopeType, payload: String, target explicitTarget: Int? = nil) throws -> MessageEnvelope {
+        let target = explicitTarget ?? Self.target(for: type)
         let unpadded = MessageEnvelope(type: type, payload: payload, pad: "")
         let unpaddedSize = try JSONEncoder().encode(unpadded).count
         let rounded = ((unpaddedSize + target - 1) / target) * target

@@ -20,6 +20,9 @@ struct JibaroFamilySafetyApp: App {
                 .alert("Something needs attention", isPresented: Binding(get: { model.lastError != nil }, set: { if !$0 { model.lastError = nil } })) {
                     Button("OK", role: .cancel) {}
                 } message: { Text(model.lastError ?? "") }
+                .alert("Signed in on another phone", isPresented: Binding(get: { model.identityNotice != nil }, set: { if !$0 { model.identityNotice = nil } })) {
+                    Button("OK", role: .cancel) {}
+                } message: { Text(model.identityNotice ?? "") }
         }
     }
 }

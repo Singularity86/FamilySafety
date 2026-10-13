@@ -19,6 +19,8 @@ public enum NodeEvent: Sendable {
     case connection(MqttConnectionState)
     case prompts([JoinPrompt])
     case presence([String: PresenceStatus])
+    /// Someone's identity (or ours) is signed in on two phones at once (2.2). Show it plainly.
+    case identityAlert(String)
 }
 
 public enum NodeError: Error, Equatable {
@@ -46,6 +48,9 @@ public actor FamilyNode {
 
     private var coordinator: JoinCoordinator?
     private var presence: [String: PresenceStatus] = [:]
+    private let deviceId: String
+    private var cloneDetector = CloneDetector()
+    private var lastSelfCloneAlert: Int64?
     private var running = false
     private var backoffSeconds: UInt64 = 2
     private var connecting = false
@@ -56,7 +61,8 @@ public actor FamilyNode {
     public private(set) var state: NodeState = .noFamily
 
     public init(profile: LocalProfile, credentials: BrokerCredentials, groupPersistence: GroupStatePersistence,
-                inviteSlot: SecretSlot, pendingJoinSlot: SecretSlot, onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
+                inviteSlot: SecretSlot, pendingJoinSlot: SecretSlot, deviceSlot: SecretSlot,
+                onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
         self.profile = profile
         self.identity = try profile.identity()
         self.credentials = credentials
@@ -67,6 +73,15 @@ public actor FamilyNode {
         self.engine = GroupSyncEngine(identity: identity, store: store, outbox: outbox)
         self.desk = try InviterDesk(identity: identity, store: store, engine: engine, outbox: outbox, bookSlot: inviteSlot)
         self.onEvent = onEvent
+        // One per install, never backed up or transferred (Keychain …ThisDeviceOnly).
+        if let saved = try deviceSlot.read().flatMap({ String(data: $0, encoding: .utf8) }), saved.count == 32 {
+            deviceId = saved
+        } else {
+            try SodiumRaw.ensureInitialized()
+            let fresh = Hex.encode(SodiumRaw.randomBytes(16))
+            try deviceSlot.write(Data(fresh.utf8))
+            deviceId = fresh
+        }
     }
 
     public var memberId: String { identity.memberId }
@@ -99,7 +114,7 @@ public actor FamilyNode {
         running = false
         await coordinator?.stop()
         if transport.isConnected, let group = await store.current,
-           let offline = try? PresenceCodec.encode(identity: identity, isOnline: false, timestamp: now(), groupFileKeyHex: group.fileEncryptionKey) {
+           let offline = try? PresenceCodec.encode(identity: identity, isOnline: false, timestamp: now(), groupFileKeyHex: group.fileEncryptionKey, deviceId: deviceId) {
             transport.publish(topic: Topics.presence(memberId: identity.memberId), payload: offline, qos: .qos1, retained: true)
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
@@ -175,7 +190,7 @@ public actor FamilyNode {
         let group = await store.current
         let will: Data
         do {
-            will = try PresenceCodec.encode(identity: identity, isOnline: false, timestamp: now(), groupFileKeyHex: group?.fileEncryptionKey)
+            will = try PresenceCodec.encode(identity: identity, isOnline: false, timestamp: now(), groupFileKeyHex: group?.fileEncryptionKey, deviceId: deviceId)
         } catch { return }
         do {
             try await transport.connect(willPayload: will)
@@ -187,7 +202,7 @@ public actor FamilyNode {
         }
         backoffSeconds = 2
         await resubscribe()
-        if let group, let online = try? PresenceCodec.encode(identity: identity, isOnline: true, timestamp: now(), groupFileKeyHex: group.fileEncryptionKey) {
+        if let group, let online = try? PresenceCodec.encode(identity: identity, isOnline: true, timestamp: now(), groupFileKeyHex: group.fileEncryptionKey, deviceId: deviceId) {
             transport.publish(topic: Topics.presence(memberId: identity.memberId), payload: online, qos: .qos1, retained: true)
             await engine.requestRefresh(reason: "connected")
         }
@@ -276,8 +291,23 @@ public actor FamilyNode {
                 await engine.handleAck(payload: payload)
             } else if topic.hasSuffix("/presence"), let group = await store.current {
                 let sender = topic.split(separator: "/").dropFirst().first.map(String.init) ?? ""
-                guard sender != me, let member = group.findMember(byId: sender),
+                guard let member = group.findMember(byId: sender),
                       let status = PresenceCodec.decode(payload, sender: member, groupFileKeyHex: group.fileEncryptionKey) else { return }
+                if sender == me {
+                    // Our own retained presence comes back with our own ID; another install online means
+                    // our phrase is in use elsewhere (§6.2 rule 4).
+                    guard let other = status.deviceId,
+                          CloneDetector.ownPresenceIsAnotherDevice(isOnline: status.isOnline, deviceId: other, myDeviceId: deviceId) else { return }
+                    let t = now()
+                    if let last = lastSelfCloneAlert, t - last < CloneDetector.cooldown { return }
+                    lastSelfCloneAlert = t
+                    onEvent(.identityAlert("Your account is signed in on another phone. If that isn't you, your recovery phrase may be known to someone else."))
+                    return
+                }
+                if let device = status.deviceId,
+                   cloneDetector.observe(memberId: sender, deviceId: device, isOnline: status.isOnline, now: now()) {
+                    onEvent(.identityAlert("\(member.displayName) is signed in on another phone. If that wasn't them, they should check their phones."))
+                }
                 if let known = presence[sender], known.timestamp > status.timestamp { return }
                 presence[sender] = status
                 onEvent(.presence(presence))

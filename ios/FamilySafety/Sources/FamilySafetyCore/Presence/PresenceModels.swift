@@ -1,12 +1,13 @@
 import CryptoKit
 import Foundation
 
-/// 1 = pre-1.12.x; 2 = padded + signed + sealed + encrypted manifests (§6.2). Set this to
+/// 1 = pre-1.12.x; 2 = padded + signed + sealed + encrypted manifests (§6.2); 3 = tombstones and
+/// merge-don't-arbitrate (1.12.7), which iOS implements in GroupStateStore. Set this to
 /// the generation whose rules are actually implemented — claiming 2 without also doing
 /// padding, signatures, sealed presence and encrypted manifests turns a legible "peer
 /// needs to update" warning back into silent invisibility.
 public enum ProtocolVersion {
-    public static let current = 2
+    public static let current = 3
 }
 
 public struct LocationUpdate: Codable, Equatable {
@@ -41,16 +42,35 @@ public struct PresenceUpdate: Codable, Equatable {
     /// Absent from senders predating Android 1.12.6 — decode a missing field as
     /// generation 1, which is the correct reading of "old client", not a fallback (§6.2).
     public let protocolVersion: Int
+    /// 16 random bytes as 32 lowercase hex, one per install (Android 2.2, F15). Optional.
+    public let deviceId: String?
+    /// Ed25519 by the member over `presence-device:v1:{memberId}:{timestamp}:{deviceId}`.
+    public let deviceSignature: String?
 
-    public init(memberId: String, isOnline: Bool, timestamp: Int64, signature: String? = nil, protocolVersion: Int = ProtocolVersion.current) {
+    public init(memberId: String, isOnline: Bool, timestamp: Int64, signature: String? = nil, protocolVersion: Int = ProtocolVersion.current,
+                deviceId: String? = nil, deviceSignature: String? = nil) {
         self.memberId = memberId
         self.isOnline = isOnline
         self.timestamp = timestamp
         self.signature = signature
         self.protocolVersion = protocolVersion
+        self.deviceId = deviceId
+        self.deviceSignature = deviceSignature
     }
 
-    private enum CodingKeys: String, CodingKey { case memberId, isOnline, timestamp, signature, protocolVersion }
+    private enum CodingKeys: String, CodingKey { case memberId, isOnline, timestamp, signature, protocolVersion, deviceId, deviceSignature }
+
+    public static func deviceSigningPayload(memberId: String, timestamp: Int64, deviceId: String) -> String {
+        "presence-device:v1:\(memberId):\(timestamp):\(deviceId)"
+    }
+
+    /// The device ID, only if its signature verifies under the member's key; nil otherwise, so
+    /// an unsigned or forged ID is never used for clone detection.
+    public func verifiedDeviceId(publicKey: [UInt8]) -> String? {
+        guard let deviceId, let deviceSignature, let sig = Hex.decode(deviceSignature) else { return nil }
+        let payload = Self.deviceSigningPayload(memberId: memberId, timestamp: timestamp, deviceId: deviceId)
+        return SodiumRaw.signVerifyDetached(signature: sig, message: Array(payload.utf8), publicKey: publicKey) ? deviceId : nil
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -59,6 +79,8 @@ public struct PresenceUpdate: Codable, Equatable {
         timestamp = try c.decode(Int64.self, forKey: .timestamp)
         signature = try c.decodeIfPresent(String.self, forKey: .signature)
         protocolVersion = try c.decodeIfPresent(Int.self, forKey: .protocolVersion) ?? 1
+        deviceId = try c.decodeIfPresent(String.self, forKey: .deviceId)
+        deviceSignature = try c.decodeIfPresent(String.self, forKey: .deviceSignature)
     }
 
     /// The exact UTF-8 string that gets Ed25519-signed (§6.2) — built from the fields
@@ -72,11 +94,17 @@ public struct PresenceUpdate: Codable, Equatable {
     /// signature scheme `verifySignature` checks on receive.
     public static func signed(
         memberId: String, isOnline: Bool, timestamp: Int64,
-        ed25519SecretKey64: [UInt8], protocolVersion: Int = ProtocolVersion.current
+        ed25519SecretKey64: [UInt8], protocolVersion: Int = ProtocolVersion.current, deviceId: String? = nil
     ) throws -> PresenceUpdate {
         let payload = signingPayload(memberId: memberId, isOnline: isOnline, timestamp: timestamp)
         let signature = try SodiumRaw.signDetached(message: Array(payload.utf8), secretKey: ed25519SecretKey64)
-        return PresenceUpdate(memberId: memberId, isOnline: isOnline, timestamp: timestamp, signature: Hex.encode(signature), protocolVersion: protocolVersion)
+        var deviceSignature: String?
+        if let deviceId {
+            let devicePayload = deviceSigningPayload(memberId: memberId, timestamp: timestamp, deviceId: deviceId)
+            deviceSignature = Hex.encode(try SodiumRaw.signDetached(message: Array(devicePayload.utf8), secretKey: ed25519SecretKey64))
+        }
+        return PresenceUpdate(memberId: memberId, isOnline: isOnline, timestamp: timestamp, signature: Hex.encode(signature),
+                              protocolVersion: protocolVersion, deviceId: deviceId, deviceSignature: deviceSignature)
     }
 
     /// Verifies `signature` against the sender's roster `ed25519PublicKey` (§6.2). False

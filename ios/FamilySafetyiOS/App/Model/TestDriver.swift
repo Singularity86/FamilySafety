@@ -7,6 +7,7 @@ import Foundation
 /// prints each step to the console. Compiled out of release builds.
 ///
 ///   FS_TEST_NAME=Alice            make a fresh identity with this name if none is saved
+///   FS_TEST_PHRASE="w1 … w12"     use this (throwaway, test-only) phrase instead of a new one
 ///   FS_TEST_CREATE=Fam            create a family with this name when there is none
 ///   FS_TEST_INVITE=1              print a fresh invite code once in a family
 ///   FS_TEST_JOIN=<code>           join with this invite code when there is no family
@@ -22,8 +23,12 @@ enum TestDriver {
     /// Before load: make an identity if asked to.
     static func prepareProfile(_ model: AppModel) {
         guard let name = env["FS_TEST_NAME"], model.profile == nil, model.phase == .welcome,
-              let words = try? Bip39.generate12WordMnemonic() else { return }
-        do { try model.saveProfile(mnemonic: words.joined(separator: " "), displayName: name); log("identity \(name) created") } catch {
+              let phrase = env["FS_TEST_PHRASE"] ?? (try? Bip39.generate12WordMnemonic())?.joined(separator: " ") else { return }
+        do {
+            try model.saveProfile(mnemonic: phrase, displayName: name)
+            // Test identities only: printed so a second Simulator can restore the same one.
+            log("identity \(name) created, phrase \(phrase)")
+        } catch {
             log("identity failed: \(error)")
         }
     }

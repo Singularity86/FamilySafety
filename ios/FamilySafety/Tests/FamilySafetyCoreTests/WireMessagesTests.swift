@@ -26,7 +26,7 @@ final class WireMessagesTests: XCTestCase {
         let bigPayload = String(repeating: "x", count: 900)
         let envelope = try EnvelopePadding.build(type: .presenceUpdate, payload: bigPayload)
         let size = try JSONEncoder().encode(envelope).count
-        XCTAssertEqual(size % EnvelopePadding.target, 0)
+        XCTAssertEqual(size % EnvelopePadding.presenceTarget, 0)
     }
 
     func test_envelopePadding_twoDifferentPayloadLengthsLandInSameOrDifferentBucketsCorrectly() throws {
@@ -34,8 +34,8 @@ final class WireMessagesTests: XCTestCase {
         // the whole point is that the *bucket*, not the exact size, is what an observer sees.
         let short = try JSONEncoder().encode(EnvelopePadding.build(type: .presenceUpdate, payload: "short")).count
         let long = try JSONEncoder().encode(EnvelopePadding.build(type: .presenceUpdate, payload: String(repeating: "y", count: 100))).count
-        XCTAssertEqual(short % EnvelopePadding.target, 0)
-        XCTAssertEqual(long % EnvelopePadding.target, 0)
+        XCTAssertEqual(short % EnvelopePadding.presenceTarget, 0)
+        XCTAssertEqual(long % EnvelopePadding.presenceTarget, 0)
     }
 
     func test_messageEnvelope_decodesAbsentPadAsEmptyString() throws {
