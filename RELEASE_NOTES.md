@@ -9,6 +9,95 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.15.4 (45) — Security and reliability fixes
+
+Builds on 1.15.3 (44). Contains #17–#35: the Android fixes from the 2026-10-11 code review
+(Phase 1, plus 2.2, 2.3 and 3.1), and two efficiency changes. **#27 (2.1) is not included**; it is
+waiting on its two-phone test.
+
+Wire format: **changes, all additive.** `PROTOCOL_VERSION` stays 3, and phones on 1.15.3 work
+with this release in both directions.
+- Presence gains an optional signed `deviceId`, and its padding grows from 512 to 640 bytes.
+- Members sign their own profile (`profileSignature`), and subscribers sign confirmations
+  (`subscriptionSignature`).
+- Receive rules are stricter:
+  - A location is accepted only from the member it describes.
+  - Group chat is no longer re-broadcast during replication.
+  - A phone treats itself as removed only on a tombstone, not because it's missing from a list.
+
+One known effect: a 1.15.3 phone doesn't sign profiles. A rename it makes still arrives directly
+from that phone, but other phones can't pass it on.
+
+Database: **8 → 9**, one migration.
+
+**Not yet run on a device as a combined build.** Check with two phones:
+1. **Upgrade.** Install 44, create a family and send some chat, then install 45 over it. It
+   launches, and the history is still there.
+2. **Second phone.** Restore the same recovery phrase on a second phone. Both phones show the
+   notice that this identity is on two phones.
+3. **Profile edits.** Rename yourself and change your colour on A. Both show on B, including
+   after B force-stops and reopens.
+4. **Crash alert.** Fire the alert from the debug card with B offline, then bring B online. B
+   still receives it.
+5. **Recovery phrase.** Settings → recovery phrase asks for the PIN or fingerprint first.
+
+### Play copy
+
+```
+Security and reliability update.
+• Crash alerts keep sending until each family member's phone confirms them
+• Viewing your recovery phrase now asks for your PIN or fingerprint
+• You're told if your account is signed in on a second phone
+• A storage problem can no longer erase your keys or history
+• Fixes a blank invite screen, and says why a backup export failed
+• Uses less data and battery in the background
+```
+
+### What changed, and why
+
+**Crash alerts could be lost.** An alert was sent once. A phone that was offline at that moment
+never got it. Alerts are now stored and re-sent until each member's phone confirms receipt
+(#23).
+
+**The recovery phrase was shown to whoever held the phone.** The phrase is the whole identity.
+Showing it now asks for the device PIN or fingerprint first (#21).
+
+**One identity, two phones, nobody told.** If someone restored your phrase on another phone,
+nothing showed it. Presence now carries a signed device ID. The family sees a notice when one
+member appears on two devices within ten minutes, and so do you when it's your own identity
+(#31).
+
+**Anyone could rewrite parts of someone else's profile.** Fields outside the signed family
+record, such as name, photo, colour and subscriptions, were taken from whoever sent them. They
+are now taken only from their author, or with the author's newer signature. When added, and by
+whom, can't be changed, and an existing file key can't be replaced (#35).
+
+**Narrower trust elsewhere:**
+- A location is accepted only from the member it belongs to (#19).
+- Replies an outsider can trigger are rate-limited (#25).
+- The public legacy file key is refused in families that have a group key (#24).
+- Shared secrets are cached by member and key, not by a claimed name alone (#29).
+- A phone leaves its family only on a tombstone, never because a list arrived without it (#28).
+
+**A storage error could wipe everything.** A failure opening the encrypted database or key
+store was treated as corruption, and the data was erased. Errors are now surfaced and nothing is
+deleted (#18).
+
+**Smaller fixes:**
+- The invite screen could come up blank (#17).
+- A backup export failure now says why: no family, or no recovery phrase (#22).
+- Phase 1 correctness fixes for the vault, a few races, LAN, avatars, starting at boot, and the
+  location outbox (#26).
+- Sensitive operations clean up what they leave in memory and on disk (#33).
+
+**Efficiency:**
+- Every group chat message used to be re-broadcast during replication, multiplying traffic
+  with each member. That has stopped (#20).
+- Sending waits for acknowledgements instead of polling for them, so the phone wakes less
+  (#32).
+
+---
+
 ## 1.15.3 (44) — Leaving and coming back
 
 Builds on 1.15.2 (43), the wildcard-subscription fix. If 42 never went to production, ship this
