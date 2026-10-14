@@ -415,7 +415,10 @@ class InviteManager @Inject constructor(
             val groupDefForApproval = stateManager.groupDefinition.value
             if (groupDefForApproval != null) {
                 val approvalTopic = MqttConfig.getJoinApprovalTopic(request.requesterId)
-                val groupDefJson = json.encodeToString(groupDefForApproval)
+                // Never a rotated key to anyone the state doesn't list as a member (3.3).
+                val groupDefJson = json.encodeToString(
+                    com.example.familysafety.group.GroupKeys.forRecipient(groupDefForApproval, request.requesterId)
+                )
                 // Encrypt the roster to the joiner's X25519 key and sign with our Ed25519
                 // key (inside encryptMessage). The joiner authenticates our Ed25519 key by
                 // hashing it against the inviterMemberId from the QR invite they scanned —
