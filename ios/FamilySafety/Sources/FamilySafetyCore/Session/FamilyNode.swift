@@ -161,6 +161,49 @@ public actor FamilyNode {
         return try await desk.issueInvite(inviterName: profile.displayName).encodedBase64()
     }
 
+    /// Renames this phone's person and/or sets their colour; signed (3.1) and sent to the family.
+    public func updateProfile(displayName: String? = nil, colorHue: Float?? = .none) async throws {
+        guard case .member = state else { throw NodeError.notInFamily }
+        let updated: GroupDefinition?
+        do { updated = try await store.updateMyProfile(identity: identity, displayName: displayName, colorHue: colorHue, now: now()) } catch {
+            throw NodeError.storageUnavailable
+        }
+        guard let group = updated else { return }
+        setState(.member(group))
+        await engine.broadcast(group, changeType: .nameChanged, changedMemberId: identity.memberId)
+    }
+
+    /// Leaves the family: a self-tombstone with a signed proof goes to everyone else, then this
+    /// phone forgets the family. Offline is announced first, while the will can still be sealed.
+    public func leave() async throws {
+        guard case .member = state else { throw NodeError.notInFamily }
+        let before = await store.current
+        let group: GroupDefinition
+        do { group = try await store.remove(memberId: identity.memberId, identity: identity) } catch { throw NodeError.storageUnavailable }
+        await engine.broadcast(group, changeType: .memberRemoved, changedMemberId: identity.memberId)
+        if let key = before?.fileEncryptionKey,
+           let offline = try? PresenceCodec.encode(identity: identity, isOnline: false, timestamp: now(), groupFileKeyHex: key, deviceId: deviceId) {
+            transport.publish(topic: Topics.presence(memberId: identity.memberId), payload: offline, qos: .qos1, retained: true)
+        }
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        transport.clearRetained(topic: Topics.presence(memberId: identity.memberId))
+        try? await store.forget()
+        presence = [:]
+        onEvent(.presence(presence))
+        setState(.noFamily)
+        await reconnect()
+    }
+
+    /// The creator removes someone else.
+    public func removeMember(_ memberId: String) async throws {
+        guard case .member = state, memberId != identity.memberId else { throw NodeError.notInFamily }
+        let group: GroupDefinition
+        do { group = try await store.remove(memberId: memberId, identity: identity) } catch { throw NodeError.notInFamily }
+        setState(.member(group))
+        await engine.broadcast(group, changeType: .memberRemoved, changedMemberId: memberId)
+        await resubscribe()
+    }
+
     public func approve(requestId: String) async throws {
         try await desk.approve(requestId: requestId)
         await publishPrompts()
@@ -205,6 +248,12 @@ public actor FamilyNode {
         if let group, let online = try? PresenceCodec.encode(identity: identity, isOnline: true, timestamp: now(), groupFileKeyHex: group.fileEncryptionKey, deviceId: deviceId) {
             transport.publish(topic: Topics.presence(memberId: identity.memberId), payload: online, qos: .qos1, retained: true)
             await engine.requestRefresh(reason: "connected")
+            // A joiner was written into the roster by its inviter, unsigned; sign it so relays can
+            // pass on later changes (3.1, Android ensureMyProfileSigned).
+            if let signed = try? await store.updateMyProfile(identity: identity, now: now()) {
+                setState(.member(signed))
+                await engine.broadcast(signed, changeType: .nameChanged, changedMemberId: identity.memberId)
+            }
         }
         transport.flushPendingQueue()
         await coordinator?.start()

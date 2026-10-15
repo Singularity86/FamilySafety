@@ -6,6 +6,9 @@ struct FamilyView: View {
     @EnvironmentObject private var model: AppModel
     let group: GroupDefinition
     @State private var inviting = false
+    @State private var removing: FamilyMember?
+
+    private var isCreator: Bool { group.creatorMemberId == model.memberId }
 
     var body: some View {
         NavigationStack {
@@ -20,6 +23,11 @@ struct FamilyView: View {
                         ForEach(sortedMembers, id: \.memberId) { member in
                             MemberRow(member: member, isMe: member.memberId == model.memberId,
                                       status: model.presence[member.memberId])
+                                .swipeActions {
+                                    if isCreator && member.memberId != model.memberId {
+                                        Button("Remove", role: .destructive) { removing = member }
+                                    }
+                                }
                         }
                     } header: { Text("\(group.members.count) in \(group.groupName)").font(Typeface.label) }
                 }
@@ -37,6 +45,15 @@ struct FamilyView: View {
             .navigationTitle(group.groupName)
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $inviting) { InviteView() }
+            .confirmationDialog("Remove \(removing?.displayName ?? "") from the family?",
+                                isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
+                                titleVisibility: .visible) {
+                Button("Remove", role: .destructive) {
+                    if let id = removing?.memberId { Task { await model.removeMember(id) } }
+                }
+            } message: {
+                Text("Their phone stops receiving the family's locations, messages and files. They can only come back with a new invite.")
+            }
         }
     }
 
@@ -154,6 +171,8 @@ struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var revealing = false
     @State private var notice: String?
+    @State private var name = ""
+    @State private var leaving = false
 
     var body: some View {
         NavigationStack {
@@ -166,11 +185,22 @@ struct SettingsView: View {
                             .font(Typeface.small)
                     }
                     .listRowBackground(Palette.surface)
-                    Section {
-                        LabeledContent("Name", value: model.profile?.displayName ?? "")
+                    Section("You") {
+                        HStack {
+                            TextField("Your name", text: $name).font(Typeface.body).submitLabel(.done)
+                                .onSubmit { Task { await model.rename(name) } }
+                            if name != (model.profile?.displayName ?? "") {
+                                Button("Save") { Task { await model.rename(name) } }.font(Typeface.bodyStrong).foregroundStyle(Palette.amber)
+                            }
+                        }
+                        ColourChooser()
                         LabeledContent("Member ID") { Text(model.memberId ?? "").font(Typeface.small).textSelection(.enabled) }
                     }
                     .font(Typeface.body).listRowBackground(Palette.surface)
+                    Section {
+                        Button("Leave family", role: .destructive) { leaving = true }.font(Typeface.body)
+                    }
+                    .listRowBackground(Palette.surface)
                 }
                 .scrollContentBackground(.hidden)
                 .padding(.horizontal, -Spacing.m)
@@ -178,6 +208,12 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $revealing) { RevealPhraseView(words: model.recoveryPhrase()) }
+            .onAppear { name = model.profile?.displayName ?? "" }
+            .confirmationDialog("Leave the family?", isPresented: $leaving, titleVisibility: .visible) {
+                Button("Leave", role: .destructive) { Task { await model.leaveFamily() } }
+            } message: {
+                Text("This phone stops sharing and forgets the family. To come back you'll need a new invite. Your recovery phrase stays the same.")
+            }
             .alert("Recovery phrase", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(notice ?? "") }
@@ -212,5 +248,34 @@ struct RevealPhraseView: View {
         }
         // Rule 5: the words don't outlive the screen.
         .onDisappear { words = [] }
+    }
+}
+
+/// The twelve person colours; picking one is signed and sent to the family.
+struct ColourChooser: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        let me = currentMember
+        let mine = PersonPalette.forMember(memberId: model.memberId ?? "", colorHue: me?.colorHue)
+        VStack(alignment: .leading, spacing: Spacing.s) {
+            Text("Your colour").font(Typeface.label).foregroundStyle(Palette.secondaryText)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: Spacing.s) {
+                ForEach(PersonPalette.colors, id: \.name) { c in
+                    Button { Task { await model.setColor(c) } } label: {
+                        Circle().fill(Color(hex: c.fill)).frame(width: 36, height: 36)
+                            .overlay(Circle().stroke(Palette.text, lineWidth: c == mine ? 3 : 0).padding(-4))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(c.name + (c == mine ? ", chosen" : ""))
+                }
+            }
+        }
+        .padding(.vertical, Spacing.xs)
+    }
+
+    private var currentMember: FamilyMember? {
+        if case .member(let g) = model.nodeState { return g.findMember(byId: model.memberId ?? "") }
+        return nil
     }
 }

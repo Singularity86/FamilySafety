@@ -12,11 +12,14 @@ import Foundation
 ///   FS_TEST_INVITE=1              print a fresh invite code once in a family
 ///   FS_TEST_JOIN=<code>           join with this invite code when there is no family
 ///   FS_TEST_APPROVE=1             approve every verified join request as it arrives
+///   FS_TEST_RENAME=Name           once in a family, rename this person (signed, 3.1)
+///   FS_TEST_COLOR=Teal            once in a family, choose this palette colour
 @MainActor
 enum TestDriver {
     static let env = ProcessInfo.processInfo.environment
     private static var invited = false
     private static var acted = false
+    private static var edited = false
 
     static func log(_ line: String) { print("[test] \(line)") }
 
@@ -40,6 +43,15 @@ enum TestDriver {
             acted = true
             if let name = env["FS_TEST_CREATE"] { Task { await model.createFamily(name: name) } }
             if let code = env["FS_TEST_JOIN"] { Task { let ok = await model.join(code: code); log("join started: \(ok) \(model.lastError ?? "")") } }
+        case .member where !edited && (env["FS_TEST_RENAME"] != nil || env["FS_TEST_COLOR"] != nil):
+            edited = true
+            Task {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                if let name = env["FS_TEST_RENAME"] { await model.rename(name); log("renamed to \(name)") }
+                if let colour = env["FS_TEST_COLOR"], let c = PersonPalette.colors.first(where: { $0.name == colour }) {
+                    await model.setColor(c); log("colour \(colour)")
+                }
+            }
         case .member where env["FS_TEST_INVITE"] != nil && !invited:
             invited = true
             Task { if let code = await model.issueInvite() { log("invite \(code)") } }

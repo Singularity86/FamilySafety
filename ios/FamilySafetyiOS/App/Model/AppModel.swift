@@ -87,6 +87,22 @@ final class AppModel: ObservableObject {
         do { return try await node.issueInvite() } catch { lastError = Self.message(error); return nil }
     }
 
+    func rename(_ name: String) async {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let profile else { return }
+        guard await run({ try await $0.updateProfile(displayName: trimmed) }) else { return }
+        let renamed = LocalProfile(mnemonic: profile.mnemonic, displayName: trimmed)
+        try? profileSlot.writeJSON(renamed)
+        self.profile = renamed
+    }
+
+    func setColor(_ colour: PersonColor) async {
+        await run { try await $0.updateProfile(colorHue: .some(colour.storedHue)) }
+    }
+
+    func leaveFamily() async { await run { try await $0.leave() } }
+    func removeMember(_ memberId: String) async { await run { try await $0.removeMember(memberId) } }
+
     func approve(_ prompt: JoinPrompt) async { await run { try await $0.approve(requestId: prompt.requestId) } }
     func reject(_ prompt: JoinPrompt) async { await run { try await $0.reject(requestId: prompt.requestId) } }
 

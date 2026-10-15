@@ -96,14 +96,51 @@ public actor GroupStateStore {
             addedAtEpochMs: now, addedByMemberId: inviterMemberId, avatarHash: joiner.avatarHash, colorHue: joiner.colorHue,
             joinEpoch: Tombstones.nextJoinEpoch(memberId: joiner.memberId, tombstones: Set(group.removedMemberIds))
         )
-        let next = GroupDefinition(
-            groupId: group.groupId, groupName: group.groupName, createdAtEpochMs: group.createdAtEpochMs,
-            creatorMemberId: group.creatorMemberId, members: group.members + [entry], version: group.version + 1,
-            previousStateHash: group.computeStateHash(), fileEncryptionKey: group.fileEncryptionKey,
-            removedMemberIds: group.removedMemberIds, subscriberMemberId: group.subscriberMemberId,
-            subscriptionConfirmedAtEpochMs: group.subscriptionConfirmedAtEpochMs, grantCode: group.grantCode,
-            removalProofs: group.removalProofs
-        )
+        let next = group.with(members: group.members + [entry], version: group.version + 1,
+                              previousStateHash: .some(group.computeStateHash()))
+        do { try persistence.save(next) } catch { throw LocalEditError.storageUnavailable }
+        current = next
+        return next
+    }
+
+    /// This phone's own profile, changed and signed (3.1), as the next version. Returns nil when
+    /// nothing changed.
+    public func updateMyProfile(identity: FamilySafeIdentity, displayName: String? = nil, colorHue: Float?? = .none,
+                                now: Int64) throws -> GroupDefinition? {
+        guard let group = current, let me = group.findMember(byId: localMemberId) else { throw LocalEditError.noFamily }
+        let name = displayName ?? me.displayName
+        let hue = colorHue ?? me.colorHue
+        guard name != me.displayName || hue != me.colorHue || me.profileSignature == nil else { return nil }
+        let signed = try ProfileGuard.signed(me.withProfile(displayName: name, avatarHash: me.avatarHash, colorHue: hue,
+                                                            updatedAtMs: nil, signature: nil),
+                                             groupId: group.groupId, identity: identity, now: now)
+        return try save(group.with(members: group.members.map { $0.memberId == localMemberId ? signed : $0 },
+                                   version: group.version + 1, previousStateHash: .some(group.computeStateHash())))
+    }
+
+    /// Removes `memberId` (the creator may remove anyone; anyone may remove themselves) with a
+    /// tombstone and a signed removal proof, so any member can relay it (Android removeMember).
+    public func remove(memberId: String, identity: FamilySafeIdentity) throws -> GroupDefinition {
+        guard let group = current, let target = group.findMember(byId: memberId) else { throw LocalEditError.noFamily }
+        guard localMemberId == group.creatorMemberId || localMemberId == memberId else { throw LocalEditError.notMember }
+        let tombstone = Tombstones.key(target)
+        try SodiumRaw.ensureInitialized()
+        let proofSig = try SodiumRaw.signDetached(message: Array(RemovalProof.signingPayload(groupId: group.groupId, tombstone: tombstone).utf8),
+                                                  secretKey: identity.ed25519SecretKey64)
+        let proof = RemovalProof(tombstone: tombstone, authorizerMemberId: localMemberId, signature: Hex.encode(proofSig))
+        return try save(group.with(members: group.members.filter { $0.memberId != memberId }, version: group.version + 1,
+                                   previousStateHash: .some(group.computeStateHash()),
+                                   removedMemberIds: group.removedMemberIds + [tombstone],
+                                   removalProofs: group.removalProofs + [proof]))
+    }
+
+    /// Forgets the family on this phone (after leaving, or after an authorized removal).
+    public func forget() throws {
+        try persistence.delete()
+        current = nil
+    }
+
+    private func save(_ next: GroupDefinition) throws -> GroupDefinition {
         do { try persistence.save(next) } catch { throw LocalEditError.storageUnavailable }
         current = next
         return next
@@ -139,7 +176,21 @@ public actor GroupStateStore {
             return .rejected(error as? GroupTransitionRejection ?? .immutableFieldChanged)
         }
 
-        return commit(Self.withPreservedTombstones(current: current, remote: remote), previous: current)
+        return commit(Self.withPreservedTombstones(current: current, remote: remote), previous: current, updater: updaterMemberId)
+    }
+
+    /// What every remote state passes through before it's committed (Android commitStateLocked):
+    /// a state without a file key keeps ours; held keyring entries are never dropped (3.3); and
+    /// profile and subscription changes stand only when their author made or signed them (3.1).
+    static func guarded(_ incoming: GroupDefinition, current: GroupDefinition, updater: String?) -> GroupDefinition {
+        var next = incoming
+        if (next.fileEncryptionKey ?? "").isEmpty, let ours = current.fileEncryptionKey, !ours.isEmpty {
+            next = next.with(fileEncryptionKey: .some(ours))
+        }
+        let held = Set(current.groupKeys.map(\.kid))
+        let added = next.groupKeys.filter { !held.contains($0.kid) && $0.isValid }
+        next = next.with(groupKeys: current.groupKeys + added)
+        return ProfileGuard.reconcile(current: current, incoming: next, updaterMemberId: updater)
     }
 
     private func reconcileConcurrent(
@@ -158,8 +209,9 @@ public actor GroupStateStore {
         } catch {
             return .rejected(error as? GroupTransitionRejection ?? .immutableFieldChanged)
         }
-        let merged = GroupStateMerge.merge(winner: remote, ours: current) ?? remote
-        return commit(merged, previous: current)
+        let merged = GroupStateMerge.merge(winner: remote, ours: current)
+        // A merge of two branches has no single author (Android: updater null).
+        return commit(merged ?? remote, previous: current, updater: merged == nil ? updaterMemberId : nil)
     }
 
     private func reconcileDiverged(
@@ -174,11 +226,13 @@ public actor GroupStateStore {
         } catch {
             return .rejected(error as? GroupTransitionRejection ?? .immutableFieldChanged)
         }
-        let resolved = GroupStateMerge.merge(winner: remote, ours: current) ?? remote
-        return commit(Self.withPreservedTombstones(current: current, remote: resolved), previous: current)
+        let merged = GroupStateMerge.merge(winner: remote, ours: current)
+        return commit(Self.withPreservedTombstones(current: current, remote: merged ?? remote), previous: current,
+                      updater: merged == nil ? updaterMemberId : nil)
     }
 
-    private func commit(_ next: GroupDefinition, previous: GroupDefinition) -> GroupApplyOutcome {
+    private func commit(_ incoming: GroupDefinition, previous: GroupDefinition, updater: String?) -> GroupApplyOutcome {
+        let next = Self.guarded(incoming, current: previous, updater: updater)
         if !next.containsMember(localMemberId) {
             // F26: only an authorized tombstone ending *our* membership counts as removal.
             let ourKey = previous.findMember(byId: localMemberId).map(Tombstones.key)

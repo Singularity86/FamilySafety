@@ -28,6 +28,12 @@ public struct FamilyMember: Codable, Hashable, Sendable {
     /// Which membership this is for `memberId` (Android 1.15.3+, §6.5): 0 the first time, one
     /// more each time someone who left or was removed is let back in. Hashed only when > 0.
     public let joinEpoch: Int
+    /// When this member last changed their own profile (3.1). Signed with it; never hashed.
+    public let profileUpdatedAtMs: Int64?
+    /// Ed25519 by this member over `ProfileGuard.profileMessage` (3.1).
+    public let profileSignature: String?
+    /// Fields this build doesn't know, kept verbatim and written back out.
+    public let extras: [String: JSONValue]
 
     public init(
         memberId: String,
@@ -38,7 +44,10 @@ public struct FamilyMember: Codable, Hashable, Sendable {
         addedByMemberId: String? = nil,
         avatarHash: String? = nil,
         colorHue: Float? = nil,
-        joinEpoch: Int = 0
+        joinEpoch: Int = 0,
+        profileUpdatedAtMs: Int64? = nil,
+        profileSignature: String? = nil,
+        extras: [String: JSONValue] = [:]
     ) {
         self.memberId = memberId
         self.displayName = displayName
@@ -49,11 +58,39 @@ public struct FamilyMember: Codable, Hashable, Sendable {
         self.avatarHash = avatarHash
         self.colorHue = colorHue
         self.joinEpoch = joinEpoch
+        self.profileUpdatedAtMs = profileUpdatedAtMs
+        self.profileSignature = profileSignature
+        self.extras = extras
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case memberId, displayName, ed25519PublicKey, x25519PublicKey, addedAtEpochMs
-        case addedByMemberId, avatarHash, colorHue, joinEpoch
+        case addedByMemberId, avatarHash, colorHue, joinEpoch, profileUpdatedAtMs, profileSignature
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(memberId, forKey: .memberId)
+        try c.encode(displayName, forKey: .displayName)
+        try c.encode(ed25519PublicKey, forKey: .ed25519PublicKey)
+        try c.encode(x25519PublicKey, forKey: .x25519PublicKey)
+        try c.encode(addedAtEpochMs, forKey: .addedAtEpochMs)
+        try c.encodeIfPresent(addedByMemberId, forKey: .addedByMemberId)
+        try c.encodeIfPresent(avatarHash, forKey: .avatarHash)
+        try c.encodeIfPresent(colorHue, forKey: .colorHue)
+        try c.encode(joinEpoch, forKey: .joinEpoch)
+        try c.encodeIfPresent(profileUpdatedAtMs, forKey: .profileUpdatedAtMs)
+        try c.encodeIfPresent(profileSignature, forKey: .profileSignature)
+        try encoder.encodeExtras(extras)
+    }
+
+    /// The same member with a new profile (the cosmetic fields 3.1 covers).
+    public func withProfile(displayName: String, avatarHash: String?, colorHue: Float?,
+                            updatedAtMs: Int64?, signature: String?) -> FamilyMember {
+        FamilyMember(memberId: memberId, displayName: displayName, ed25519PublicKey: ed25519PublicKey,
+                     x25519PublicKey: x25519PublicKey, addedAtEpochMs: addedAtEpochMs, addedByMemberId: addedByMemberId,
+                     avatarHash: avatarHash, colorHue: colorHue, joinEpoch: joinEpoch,
+                     profileUpdatedAtMs: updatedAtMs, profileSignature: signature, extras: extras)
     }
 
     /// Android omits default-valued fields on the sync path, so every optional field may be
@@ -69,6 +106,9 @@ public struct FamilyMember: Codable, Hashable, Sendable {
         avatarHash = try c.decodeIfPresent(String.self, forKey: .avatarHash)
         colorHue = try c.decodeIfPresent(Float.self, forKey: .colorHue)
         joinEpoch = try c.decodeIfPresent(Int.self, forKey: .joinEpoch) ?? 0
+        profileUpdatedAtMs = try c.decodeIfPresent(Int64.self, forKey: .profileUpdatedAtMs)
+        profileSignature = try c.decodeIfPresent(String.self, forKey: .profileSignature)
+        extras = try decoder.unknownFields(known: Set(CodingKeys.allCases.map(\.rawValue)))
     }
 }
 
@@ -152,6 +192,12 @@ public struct GroupDefinition: Codable, Equatable, Sendable {
     public let grantCode: String?
     /// Proofs for tombstones (Android 1.15.3+). Unordered on the wire (Android uses a Set).
     public let removalProofs: [RemovalProof]
+    /// Ed25519 by `subscriberMemberId` over `ProfileGuard.subscriptionMessage` (3.1). Unhashed.
+    public let subscriptionSignature: String?
+    /// The family's keyring after removals (3.3). Epoch 0 is `fileEncryptionKey`. Unhashed;
+    /// merged as a union, never shrunk.
+    public let groupKeys: [GroupKey]
+    public let extras: [String: JSONValue]
 
     public init(
         groupId: String,
@@ -166,7 +212,10 @@ public struct GroupDefinition: Codable, Equatable, Sendable {
         subscriberMemberId: String? = nil,
         subscriptionConfirmedAtEpochMs: Int64? = nil,
         grantCode: String? = nil,
-        removalProofs: [RemovalProof] = []
+        removalProofs: [RemovalProof] = [],
+        subscriptionSignature: String? = nil,
+        groupKeys: [GroupKey] = [],
+        extras: [String: JSONValue] = [:]
     ) {
         self.groupId = groupId
         self.groupName = groupName
@@ -181,12 +230,36 @@ public struct GroupDefinition: Codable, Equatable, Sendable {
         self.subscriptionConfirmedAtEpochMs = subscriptionConfirmedAtEpochMs
         self.grantCode = grantCode
         self.removalProofs = removalProofs
+        self.subscriptionSignature = subscriptionSignature
+        self.groupKeys = groupKeys
+        self.extras = extras
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case groupId, groupName, createdAtEpochMs, creatorMemberId, members, version
         case previousStateHash, fileEncryptionKey, removedMemberIds
         case subscriberMemberId, subscriptionConfirmedAtEpochMs, grantCode, removalProofs
+        case subscriptionSignature, groupKeys
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(groupId, forKey: .groupId)
+        try c.encode(groupName, forKey: .groupName)
+        try c.encode(createdAtEpochMs, forKey: .createdAtEpochMs)
+        try c.encode(creatorMemberId, forKey: .creatorMemberId)
+        try c.encode(members, forKey: .members)
+        try c.encode(version, forKey: .version)
+        try c.encodeIfPresent(previousStateHash, forKey: .previousStateHash)
+        try c.encodeIfPresent(fileEncryptionKey, forKey: .fileEncryptionKey)
+        if !removedMemberIds.isEmpty { try c.encode(removedMemberIds, forKey: .removedMemberIds) }
+        try c.encodeIfPresent(subscriberMemberId, forKey: .subscriberMemberId)
+        try c.encodeIfPresent(subscriptionConfirmedAtEpochMs, forKey: .subscriptionConfirmedAtEpochMs)
+        try c.encodeIfPresent(grantCode, forKey: .grantCode)
+        if !removalProofs.isEmpty { try c.encode(removalProofs, forKey: .removalProofs) }
+        try c.encodeIfPresent(subscriptionSignature, forKey: .subscriptionSignature)
+        if !groupKeys.isEmpty { try c.encode(groupKeys, forKey: .groupKeys) }
+        try encoder.encodeExtras(extras)
     }
 
     /// Tolerates senders that predate this field entirely (absent, not just null).
@@ -205,6 +278,9 @@ public struct GroupDefinition: Codable, Equatable, Sendable {
         subscriptionConfirmedAtEpochMs = try c.decodeIfPresent(Int64.self, forKey: .subscriptionConfirmedAtEpochMs)
         grantCode = try c.decodeIfPresent(String.self, forKey: .grantCode)
         removalProofs = try c.decodeIfPresent([RemovalProof].self, forKey: .removalProofs) ?? []
+        subscriptionSignature = try c.decodeIfPresent(String.self, forKey: .subscriptionSignature)
+        groupKeys = try c.decodeIfPresent([GroupKey].self, forKey: .groupKeys) ?? []
+        extras = try decoder.unknownFields(known: Set(CodingKeys.allCases.map(\.rawValue)))
     }
 
     /// Deterministic hash of this group state, used for hash-chain integrity; members
@@ -295,7 +371,9 @@ public struct GroupDefinition: Codable, Equatable, Sendable {
         subscriberMemberId: String?? = .none,
         subscriptionConfirmedAtEpochMs: Int64?? = .none,
         grantCode: String?? = .none,
-        removalProofs: [RemovalProof]? = nil
+        removalProofs: [RemovalProof]? = nil,
+        subscriptionSignature: String?? = .none,
+        groupKeys: [GroupKey]? = nil
     ) -> GroupDefinition {
         GroupDefinition(
             groupId: groupId,
@@ -310,7 +388,10 @@ public struct GroupDefinition: Codable, Equatable, Sendable {
             subscriberMemberId: subscriberMemberId ?? self.subscriberMemberId,
             subscriptionConfirmedAtEpochMs: subscriptionConfirmedAtEpochMs ?? self.subscriptionConfirmedAtEpochMs,
             grantCode: grantCode ?? self.grantCode,
-            removalProofs: removalProofs ?? self.removalProofs
+            removalProofs: removalProofs ?? self.removalProofs,
+            subscriptionSignature: subscriptionSignature ?? self.subscriptionSignature,
+            groupKeys: groupKeys ?? self.groupKeys,
+            extras: extras
         )
     }
 }
@@ -336,4 +417,25 @@ public enum GroupSignaturePayloads {
     ) -> String {
         "ADD:\(groupId):\(preAddVersion):\(newMemberEd25519PublicKeyHex)"
     }
+}
+
+/// One entry of the family keyring (3.3, spec §6.5). `kid` = first 8 bytes of SHA-256(key), hex.
+public struct GroupKey: Codable, Hashable, Sendable {
+    public let kid: String
+    public let epoch: Int
+    public let key: String
+
+    public init(kid: String, epoch: Int, key: String) {
+        self.kid = kid
+        self.epoch = epoch
+        self.key = key
+    }
+
+    public static func kid(forKeyHex keyHex: String) -> String? {
+        guard let bytes = Hex.decode(keyHex), bytes.count == 32 else { return nil }
+        return Hex.encode(Array(SHA256.hash(data: Data(bytes)).prefix(8)))
+    }
+
+    /// Well-formed: a 32-byte key whose kid matches it.
+    public var isValid: Bool { epoch >= 0 && Self.kid(forKeyHex: key) == kid.lowercased() }
 }
