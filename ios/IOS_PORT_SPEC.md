@@ -41,6 +41,7 @@ Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the bi
 | next (remediation 2.2b) | behaviour | **Client ID per install:** `familysafe_{memberId}_{deviceId}`. Without it, two installs of one identity evicted each other on the broker and the 2.2 warning never fired. It also stops an outsider with the shipped broker credentials from knocking a member offline by connecting under their member ID. No payload changes; the old session expires on the broker (2 h). | §4, §6.2 |
 | next (remediation 3.1) | **wire** | **Authorship of non-hashed fields.** The sync envelope's sender must equal `updaterMemberId`. Members self-sign their profile (`profileUpdatedAtMs`, `profileSignature`) and the subscriber signs confirmations (`subscriptionSignature`); a changed profile or subscription is taken only from its author or with a valid, newer signature, otherwise receivers keep theirs. `addedAt`/`addedBy` are immutable, and a set file key can't be replaced. All new fields are optional and unhashed; `PROTOCOL_VERSION` stays 3. | §6.5, §7.3 |
 | next (remediation 2.2) | **wire** | **Signed device ID in presence.** Optional `deviceId` and `deviceSignature` (over `presence-device:v1:…`). Receivers notify when one member shows two devices within 10 min, or your own identity shows another device. Presence padding goes from 512 to **640**. The existing presence signature is unchanged and older peers ignore the new fields, so `PROTOCOL_VERSION` stays 3. | §6.1, §6.2, §12 |
+| next (remediation 3.4) | **wire** | **Replay window; `PROTOCOL_VERSION` 4.** To a recipient advertising ≥ 4, the §3 plaintext is a sequenced body `{"seq","ts","body"}` with a per-sender clock-seeded `seq`; receivers keep a persisted 256-entry window per (sender, Ed25519 key) and refuse replays, bodies over 7 days old or over 24 h ahead, and unsequenced bodies after sequenced ones (surfaced as "needs to update"). Refresh requests and acks go inside the envelope to such peers; acks go to the updater's new `group_ack` inbox. Advertising 4 means 3.2 strict + 3.3 + 3.4; unsigned history by a ≥ 4 author is dropped. The "needs update" warning stays below 3 (`MIN_COMPATIBLE_VERSION`). | §3, §5, §6.2, §6.4, §6.6, §12 |
 | next (remediation 3.2) | **wire** | **Author-signed history.** `LocationUpdate`, `ChatMessagePayload` and `ReplicatedMessage` gain an optional `authorSig`: the author's Ed25519 over a fixed `LOC:v1:…` / `CHAT:v1:…` string with fixed-point coordinates. Replicated items that fail are dropped, live items that carry a bad signature are dropped, and unsigned history is accepted for one release (until 3.4, `PROTOCOL_VERSION` 4). Older peers ignore the field; `PROTOCOL_VERSION` stays 3. | §6.2, §6.3, §6.6, §12 |
 
 Not in this table because they do not touch interop: private-chat UI, Family/Chat lists, the
@@ -226,7 +227,7 @@ validation (§7.3).
 
 ---
 
-## 3. E2EE message envelope (used by everything except presence, acks, sync-requests, join-requests, file wrappers)
+## 3. E2EE message envelope (used by everything except presence, join-requests, file wrappers, and acks/sync-requests to peers below protocol 4)
 
 JSON (field order irrelevant; decode must ignore unknown keys):
 ```json
@@ -260,6 +261,44 @@ member but carries someone else's key poisons that member's entry (Android PR #2
 The same envelope also wraps the join approval/rejection payloads, where the sender is not
 yet in a roster — there the sender's keys arrive alongside and are authenticated by hashing
 against the QR invite's `inviterMemberId` (§8.4).
+
+### 3.1 Sequenced body and replay window (remediation 3.4, protocol 4)
+
+A signature proves who sent an envelope, not when, so a captured one could be published again
+and taken as new each time. To a recipient that advertises `protocolVersion` ≥ 4 in
+authenticated presence (or has itself sent you a sequenced body), the plaintext you encrypt is
+a **sequenced body** wrapping the message:
+
+```json
+{ "seq": 1800000000000000, "ts": 1800000000000, "body": "<the message JSON, as a string>" }
+```
+
+- `seq`: one counter per sender (shared by all recipients), strictly increasing:
+  `seq = max(lastSeq + 1, nowMs * 1000)`, with `lastSeq` saved before the number is used.
+  Seeded from the clock, so a reinstalled or restored phone needs no saved state.
+- `ts`: send time, ms.
+- To a recipient below 4 (or never seen), send the bare message as before; they can't parse the
+  wrapper.
+
+**Receiving**, after the signature has verified and the ciphertext opened. A plaintext is
+sequenced if it is a JSON object with integer `seq`, integer `ts` and string `body`. Keep a
+window per **(sender memberId, sender Ed25519 key)** — never per ID alone: a join request brings
+its own key, and keyed by ID a joiner naming a member could push that member's window past all
+their traffic. Verdicts (Android `ReplayVerdict`, iOS `ReplayWindow.swift`):
+
+| Verdict | When |
+|---|---|
+| `tooOld` | `ts < now − 7 days` |
+| `fromTheFuture` | `ts > now + 24 h` or `seq > (now + 24 h) × 1000` (receiver clock). A badly wrong sender clock fails at once instead of pushing their window ahead for months. |
+| `replay` | `seq ≤ floor`, or `seq` already in `seen` |
+| `unsequencedAfterSequenced` | a bare (unsequenced) body from a sender whose window exists. Surface the member as "needs to update". |
+| `accept` | otherwise: add `seq` to `seen`; past **256** entries evict the smallest and set `floor` to it. Deliver `body`. |
+
+A refused envelope is authentic: don't treat it as a decrypt failure (no roster refresh).
+Persist `floor` and `seen` (not only the highest `seq`): MQTT orders per topic only, so a
+sender's group sync can overtake its chat, and a restart in between must still take the chat. A
+duplicate delivery (LAN and broker, QoS 1 redelivery) is now refused as `replay`; that is
+intended.
 
 ---
 
@@ -371,8 +410,9 @@ presence publishes, which are QoS 0 (§4). The presence last-will stays QoS 1.
 | `familysafe/{id}/chat/receipt` | Envelope of `DeliveryReceipt` (DELIVERED) | ✅ | no |
 | `familysafe/{id}/chat/read` | Envelope of `DeliveryReceipt` (READ) | ✅ | no |
 | `familysafe/{id}/group_sync` | Envelope of `GroupSyncMessage` | ✅ per-recipient | no |
-| `familysafe/group/{groupId}/ack` | plaintext `GroupUpdateAck` | ❌ | no |
-| `familysafe/{id}/sync_request` | plaintext `GroupStateRefreshRequest` | ❌ | no |
+| `familysafe/group/{groupId}/ack` | plaintext `GroupUpdateAck`, only to an updater below protocol 4 | ❌ | no |
+| `familysafe/{updaterId}/group_ack` | Envelope of `GroupUpdateAck`, to an updater at protocol ≥ 4 (3.4) | ✅ per-recipient | no |
+| `familysafe/{id}/sync_request` | Envelope of `GroupStateRefreshRequest` to a peer at ≥ 4; plaintext to an older one (3.4) | ✅ / ❌ | no |
 | `familysafe/{id}/removal_vote` | Envelope of `RemovalVoteMessage` (§6.4, §7.5) | ✅ per-recipient | **yes** (cleared by the recipient once applied; see §7.5 caveats) |
 | `familysafe/{inviterId}/join_request` | plaintext `JoinRequest` | ❌ (contains only public data) | **yes** (cleared after decision) |
 | `familysafe/{joinerId}/join_approval` | plaintext `JoinApprovalMessage` **or** `JoinRejectionMessage` (each carries an inner Envelope) | inner ✅ | **yes** (joiner clears once consumed — §8.3) |
@@ -392,7 +432,7 @@ Subscriptions on connect (since 1.15.2), **2 + one per peer**, which fits a fami
 inside the 10-subscription quota (§4):
 - `familysafe/{me}/#` — every own topic: `chat`, `location_inbox`, `chat/receipt`, `chat/read`,
   `replication/request|data|announce`, `join_request`, `join_approval`, `sync_request`,
-  `removal_vote`, `group_sync`, `files/request`, `files/repair`, `files/availability`,
+  `removal_vote`, `group_sync`, `group_ack`, `files/request`, `files/repair`, `files/availability`,
   `vault/repair`. It also delivers your own retained `presence` back to you; drop any presence
   whose sender is yourself (Android already did).
 - `familysafe/group/{groupId}/#` — group `ack`, files `manifest`, files `chunk/…`,
@@ -500,7 +540,8 @@ Receivers verify under the author's `ed25519PublicKey` from the current roster: 
 - Replicated (§6.6): drop an item whose author isn't in the roster (it can't be checked), and drop
   one whose `authorSig` fails. An item with no `authorSig` is **accepted for one release**, because
   history written before 3.2 has none. Remediation 3.4 (`PROTOCOL_VERSION` 4) ends that: an author
-  who advertises ≥ 4 must have signed everything, and unsigned items by them are dropped.
+  who advertises ≥ 4 must have signed everything, and unsigned items by them are dropped
+  (Android since 3.4). Their own history from before 3.2 then no longer replicates; accepted.
 - A signed fix still pads to a fixed size: moving and stationary fixes are the same length.
 
 #### Device identity (remediation 2.2, F15)
@@ -552,7 +593,15 @@ restored on a new phone"*.
 
 ```
 PROTOCOL_VERSION = 2      // 1 = pre-1.12.x; 2 = padded + signed + sealed + encrypted manifests
+                          // 3 = tombstones + reconciliation (state hash changed)
+                          // 4 = signs all history (3.2), keyring (3.3), sequenced envelopes (3.4)
+MIN_COMPATIBLE_VERSION = 3
 ```
+
+Android advertises **4** from remediation 3.4. A 3 still interoperates fully; it only keeps the
+family-wide switches (key rotation, dropping unsigned history) off. So rule 3 below compares
+against `MIN_COMPATIBLE_VERSION`, not your own version. **Don't advertise 4 until 3.2 strict, 3.3
+and 3.4 are all implemented**: peers act on it.
 
 Three of the changes above (manifest encryption, sealed presence, and the group file key)
 **replace** a message shape rather than extending it, so a peer on an older build and a
@@ -577,7 +626,8 @@ Receivers:
    downgrade checks all first. Otherwise a forged presence claiming version 1 lets anyone
    who can publish to the topic paint a current peer as outdated, and an unauthenticated
    version claim is a free denial-of-trust.
-3. **Surface any peer below your own `PROTOCOL_VERSION` in the UI**, naming the member.
+3. **Surface any peer below `MIN_COMPATIBLE_VERSION` in the UI**, naming the member, and any
+   whose envelopes were refused as `unsequencedAfterSequenced` (§3.1).
    The point of the field is that the failure becomes legible; recording it and staying
    quiet reproduces the original bug with extra steps.
 
@@ -716,13 +766,21 @@ with no priority flag on the wire. What differs is the sender's obligation:
   "previousStateHash": "<hex>", "voterMemberId": "...",
   "signature": "<hex Ed25519 over the REMOVE_QUORUM string, §7.5>", "timestamp": 0 }
 
-// GroupUpdateAck — plaintext broadcast on the group ack topic
+// GroupUpdateAck — to an updater at protocol ≥ 4: inside an envelope on their group_ack inbox;
+// to an older updater: plaintext broadcast on the group ack topic
 { "groupId": "...", "version": 0, "memberId": "<acker>", "timestamp": 0 }
 
-// GroupStateRefreshRequest — plaintext on each peer's sync_request topic
+// GroupStateRefreshRequest — on each peer's sync_request topic; inside an envelope to a peer
+// at protocol ≥ 4, plaintext to an older one
 { "groupId": "...", "requesterMemberId": "...", "minimumVersion": 0,
   "changedMemberId": null, "reason": "...", "timestamp": 0 }
 ```
+**Sealed control messages (since 3.4).** Tell the two forms apart by the payload: a §3 envelope
+(has `senderMemberId`, `nonce`, `ciphertext`, `signature`) or the bare JSON. An envelope must
+decrypt from a roster member, pass the replay window (§3.1), and name that member
+(`memberId` / `requesterMemberId` = the envelope's sender). Take a plaintext one only if it names
+a roster member who has **never** sent you a sequenced body; once they have, a plaintext one in
+their name is a forgery or a replay. Plaintext naming a non-member is ignored.
 **Replies are rate-limited (since Android PR #25, F16).** A peer MAY rate-limit the roster
 broadcasts it sends in reply to refresh requests or to stale versions (Android: 10 per minute
 in total). The limit must be global, never keyed only by `requesterMemberId`, which is unsigned.
@@ -2017,6 +2075,23 @@ fingerprint(ed25519 = 32 × 0x01, x25519 = 32 × 0x02)       = 367443   (shown "
 HMAC-SHA256(key = 32 × 0x07, msg = UTF-8 "JOIN:v2:test")  = d6855d7c0a3be87c363e0c5d5f3df3ac5ce67f4ad242ee224e932b34ae09efe4
 ```
 Asserted in Android's `JoinV2Test`.
+
+### Sequenced body and replay window (§3.1)
+```
+nextSeq(nowMs = 1800000000000), lastSeq 0          = 1800000000000000
+nextSeq again, same nowMs                          = 1800000000000001
+nextSeq(nowMs = 1799999940000) after those (clock back 60 s) = 1800000000000002
+encode(seq 1800000000000000, ts 1800000000000, body {"x":1})
+  = {"seq":1800000000000000,"ts":1800000000000,"body":"{\"x\":1}"}
+receiver nowMs = 1800000000000:
+  ts = now − 8 days                                 → tooOld
+  ts = now + 365 days, seq = ts × 1000              → fromTheFuture, window unchanged
+  ts = now, seq = (now + 2 days) × 1000             → fromTheFuture
+  same sealed body twice (also across a restart)    → accept, then replay
+  seq 1..257 into an empty window                   → floor 1, 256 seen; 1 → replay
+```
+Field order in the encoded body doesn't matter to receivers. Asserted in Android's
+`EnvelopeReplayTest`.
 
 ---
 

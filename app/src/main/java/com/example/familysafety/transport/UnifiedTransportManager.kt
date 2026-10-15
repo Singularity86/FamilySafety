@@ -201,6 +201,10 @@ class UnifiedTransportManager @Inject constructor(
                         groupSyncManagerProvider.get().handleAckMessage(payload)
                     }
 
+                    topic.endsWith("/group_ack") -> {
+                        groupSyncManagerProvider.get().handleAckMessage(payload)
+                    }
+
                     topic.endsWith("/join_request") -> {
                         inviteManagerProvider.get().handleIncomingJoinRequest(payload)
                     }

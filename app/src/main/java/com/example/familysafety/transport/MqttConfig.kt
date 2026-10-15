@@ -64,6 +64,7 @@ object MqttConfig {
             topic.endsWith("/join_request") ||
             topic.endsWith("/join_approval") ||
             topic.endsWith("/removal_vote") ||
+            topic.endsWith("/group_ack") ||
             (topic.contains("/group/") && topic.endsWith("/ack"))
 
 
@@ -127,6 +128,14 @@ object MqttConfig {
         return "familysafe/group/$groupId/ack"
     }
     
+    /**
+     * The updater's own inbox for acks sent inside an envelope (3.4). Replaces the plaintext
+     * group-wide [getGroupAckTopic] for updaters on protocol 4; covered by [getOwnWildcardTopic].
+     */
+    fun getGroupAckInboxTopic(memberId: String): String {
+        return "familysafe/$memberId/group_ack"
+    }
+
     fun getSyncRequestTopic(memberId: String): String {
         return "familysafe/$memberId/sync_request"
     }

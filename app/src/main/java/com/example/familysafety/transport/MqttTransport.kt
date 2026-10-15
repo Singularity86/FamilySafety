@@ -1194,7 +1194,7 @@ class MqttTransport @Inject constructor(
         if (_peerProtocolVersions.value[senderId] != presenceUpdate.protocolVersion) {
             _peerProtocolVersions.value = _peerProtocolVersions.value +
                 (senderId to presenceUpdate.protocolVersion)
-            if (presenceUpdate.protocolVersion < MessageProtocol.PROTOCOL_VERSION) {
+            if (presenceUpdate.protocolVersion < MessageProtocol.MIN_COMPATIBLE_VERSION) {
                 Timber.w(
                     "$TAG: ${senderId.take(8)} speaks protocol " +
                         "${presenceUpdate.protocolVersion}, this build speaks " +
@@ -1261,6 +1261,11 @@ class MqttTransport @Inject constructor(
         }
 
         val decryptedPayload = decryptResult.getOrElse {
+            // Authentic but already taken (3.4): not a key problem, so no roster refresh.
+            if (it is com.example.familysafety.crypto.ReplayedEnvelopeException) {
+                Timber.d("$TAG: Dropped replayed location from ${senderId.take(8)}: ${it.message}")
+                return
+            }
             Timber.w("$TAG: Failed to decrypt message from $senderId")
             securityEventRepository?.recordDecryptFailure(senderId)
             val now = System.currentTimeMillis()

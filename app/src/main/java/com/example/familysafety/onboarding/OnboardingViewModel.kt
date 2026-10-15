@@ -242,7 +242,8 @@ class OnboardingViewModel @Inject constructor(
                 json.encodeToString(joinRequest)
             } else {
                 // A fresh E2EEManager: this phone's identity was created a moment ago.
-                val e2ee = E2EEManager(cryptoProvider)
+                // Its own ReplayGuard is safe: it only seals, and the sequence counter is on disk.
+                val e2ee = E2EEManager(cryptoProvider, com.example.familysafety.crypto.ReplayGuard(context))
                 json.encodeToString(
                     invite.requestMessage(
                         signedRequest = joinRequest,

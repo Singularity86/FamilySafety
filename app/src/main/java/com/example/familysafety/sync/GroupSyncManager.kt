@@ -125,7 +125,8 @@ class GroupSyncManager @Inject constructor(
                         val encrypted = e2eeManager.encryptMessage(
                             plaintext = messageJson,
                             recipientMemberId = member.memberId,
-                            recipientX25519PublicKey = member.x25519PublicKey.hexToByteArray()
+                            recipientX25519PublicKey = member.x25519PublicKey.hexToByteArray(),
+                            recipientEd25519Hex = member.ed25519PublicKey
                         )
                         val topic = MqttConfig.getGroupSyncInboxTopic(member.memberId)
                         val sent = transportProvider.sendMessage(
@@ -188,19 +189,24 @@ class GroupSyncManager @Inject constructor(
                     reason = reason,
                     timestamp = System.currentTimeMillis()
                 )
-                val payload = json.encodeToString(request).toByteArray()
+                val requestJson = json.encodeToString(request)
 
                 val peers = groupDefinition.members.filter { it.memberId != myMemberId }
                 var sentCount = 0
                 var failedCount = 0
                 peers.forEach { member ->
                     val topic = MqttConfig.getSyncRequestTopic(member.memberId)
-                    val sent = transportProvider.sendMessage(
-                        recipientId = member.memberId,
-                        topic = topic,
-                        payload = payload,
-                        qos = MqttConfig.DEFAULT_QOS
-                    )
+                    val sent = try {
+                        transportProvider.sendMessage(
+                            recipientId = member.memberId,
+                            topic = topic,
+                            payload = controlPayload(requestJson, member).toByteArray(),
+                            qos = MqttConfig.DEFAULT_QOS
+                        )
+                    } catch (e: Exception) {
+                        Timber.e(e, "Failed to send refresh request to ${member.memberId.take(8)}")
+                        false
+                    }
                     if (sent) {
                         sentCount++
                     } else {
@@ -240,7 +246,7 @@ class GroupSyncManager @Inject constructor(
      */
     suspend fun handleAckMessage(payload: String) {
         try {
-            val ack = json.decodeFromString<GroupUpdateAck>(payload)
+            val ack = openControlMessage<GroupUpdateAck>(payload, "ack") { it.memberId } ?: return
             val myMemberId = currentMemberId
             if (ack.memberId == myMemberId) return // ignore our own
             val set = versionAcks.computeIfAbsent(ack.version) {
@@ -266,7 +272,9 @@ class GroupSyncManager @Inject constructor(
      */
     suspend fun handleSyncRequestMessage(payload: String) {
         try {
-            val request = json.decodeFromString<GroupStateRefreshRequest>(payload)
+            val request = openControlMessage<GroupStateRefreshRequest>(payload, "refresh request") {
+                it.requesterMemberId
+            } ?: return
             val manager = groupStateManager ?: return
             val currentGroup = manager.groupDefinition.value ?: return
             val myMemberId = currentMemberId ?: return
@@ -288,10 +296,10 @@ class GroupSyncManager @Inject constructor(
                 return
             }
 
-            // The request is unsigned plaintext, so anyone on the broker can send it and name
-            // any requester. Each one made this phone send the whole roster to every member
-            // (F16). One shared limit, not one per named requester, which costs nothing to
-            // forge. A single broadcast reaches every member, so ten a minute is plenty.
+            // From a member still on protocol 3 the request is unsigned plaintext, so anyone on
+            // the broker can send it naming them. Each one made this phone send the whole roster
+            // to every member (F16). One shared limit, not one per named requester, which costs
+            // nothing to forge. A single broadcast reaches every member, so ten a minute is plenty.
             if (!responseLimiter.allowRequest(RESPONSE_LIMIT_KEY)) {
                 Timber.w("Refresh request from ${request.requesterMemberId.take(8)} dropped: rate limited")
                 return
@@ -378,7 +386,7 @@ class GroupSyncManager @Inject constructor(
                     currentGroup.computeStateHash()
                 ) {
                     Timber.d("Received same version, identical state")
-                    sendAcknowledgment(syncMessage.groupId, syncMessage.version)
+                    sendAcknowledgment(syncMessage.groupId, syncMessage.version, syncMessage.updaterMemberId)
                 } else {
                     // Two members edited from the same parent. Acknowledging and dropping
                     // this — the old behaviour — is what forked groups permanently: both
@@ -437,7 +445,7 @@ class GroupSyncManager @Inject constructor(
                     return@withContext
                 }
 
-                sendAcknowledgment(syncMessage.groupId, syncMessage.version)
+                sendAcknowledgment(syncMessage.groupId, syncMessage.version, syncMessage.updaterMemberId)
 
                 // Reconciling a concurrent edit leaves us holding a state the sender does
                 // not have — either ours won, or we merged their branch into a successor.
@@ -479,7 +487,7 @@ class GroupSyncManager @Inject constructor(
         }
     }
 
-    private suspend fun sendAcknowledgment(groupId: String, version: Long) {
+    private suspend fun sendAcknowledgment(groupId: String, version: Long, updaterMemberId: String) {
         withContext(Dispatchers.IO) {
             try {
                 val myMemberId = currentMemberId ?: return@withContext
@@ -492,10 +500,22 @@ class GroupSyncManager @Inject constructor(
                 )
 
                 val ackJson = json.encodeToString(ack)
-                val topic = MqttConfig.getGroupAckTopic(groupId)
+                val updater = groupStateManager?.groupDefinition?.value?.findMemberById(updaterMemberId)
 
-                // Acks are broadcast to anyone watching for that version
-                transportProvider.broadcastMessage(topic, ackJson.toByteArray(), MqttConfig.DEFAULT_QOS)
+                if (updater != null && e2eeManager.peerSequences(updater.memberId, updater.ed25519PublicKey)) {
+                    // Only the updater waits on acks, so only they get one, sealed (3.4).
+                    transportProvider.sendMessage(
+                        recipientId = updater.memberId,
+                        topic = MqttConfig.getGroupAckInboxTopic(updater.memberId),
+                        payload = controlPayload(ackJson, updater).toByteArray(),
+                        qos = MqttConfig.DEFAULT_QOS
+                    )
+                } else {
+                    // An updater on protocol 3 still listens on the group-wide topic.
+                    transportProvider.broadcastMessage(
+                        MqttConfig.getGroupAckTopic(groupId), ackJson.toByteArray(), MqttConfig.DEFAULT_QOS
+                    )
+                }
                 Timber.d("Sent acknowledgment for version $version")
 
             } catch (e: Exception) {
@@ -700,7 +720,8 @@ class GroupSyncManager @Inject constructor(
                 val encrypted = e2eeManager.encryptMessage(
                     plaintext = messageJson,
                     recipientMemberId = member.memberId,
-                    recipientX25519PublicKey = member.x25519PublicKey.hexToByteArray()
+                    recipientX25519PublicKey = member.x25519PublicKey.hexToByteArray(),
+                    recipientEd25519Hex = member.ed25519PublicKey
                 )
                 transportProvider.sendMessage(
                     recipientId = member.memberId,
@@ -826,6 +847,65 @@ class GroupSyncManager @Inject constructor(
         scope.cancel()
         versionAcks.clear()
         ackCounts.value = emptyMap()
+    }
+
+    /**
+     * [messageJson] as sent to [recipient]: inside an envelope for a peer on protocol 4, so it is
+     * authenticated and replay-checked (3.4); plaintext for an older peer, which can't read that.
+     */
+    private fun controlPayload(messageJson: String, recipient: FamilyMember): String =
+        if (e2eeManager.peerSequences(recipient.memberId, recipient.ed25519PublicKey)) {
+            e2eeManager.encryptMessage(
+                plaintext = messageJson,
+                recipientMemberId = recipient.memberId,
+                recipientX25519PublicKey = recipient.x25519PublicKey.hexToByteArray(),
+                recipientEd25519Hex = recipient.ed25519PublicKey
+            )
+        } else messageJson
+
+    /**
+     * A refresh request or ack, from a roster member, or null to ignore it.
+     *
+     * Inside an envelope (3.4), the member it names ([claimedSender]) must be the envelope's
+     * sender. In plaintext it proves nothing, so it is taken only while the member it names has
+     * never sent us a sequenced envelope; once they have, a plaintext one is a forgery or replay.
+     */
+    private inline fun <reified T> openControlMessage(
+        payload: String,
+        what: String,
+        claimedSender: (T) -> String
+    ): T? {
+        val group = groupStateManager?.groupDefinition?.value ?: return null
+        val envelopeSender = E2EEManager.peekSenderMemberId(payload)
+        if (envelopeSender != null) {
+            val sender = group.findMemberById(envelopeSender) ?: run {
+                Timber.w("Sealed $what from non-member ${envelopeSender.take(8)} — ignoring")
+                return null
+            }
+            val plaintext = try {
+                e2eeManager.decryptMessage(
+                    encryptedMessageJson = payload,
+                    senderX25519PublicKey = sender.x25519PublicKey.hexToByteArray(),
+                    senderEd25519PublicKey = sender.ed25519PublicKey.hexToByteArray()
+                )
+            } catch (e: Exception) {
+                Timber.w("Dropped sealed $what from ${envelopeSender.take(8)}: ${e.message}")
+                return null
+            }
+            val message = json.decodeFromString<T>(plaintext)
+            if (claimedSender(message) != sender.memberId) {
+                Timber.w("Sealed $what from ${sender.memberId.take(8)} names someone else — ignoring")
+                return null
+            }
+            return message
+        }
+        val message = json.decodeFromString<T>(payload)
+        val named = group.findMemberById(claimedSender(message)) ?: return null
+        if (e2eeManager.hasSequenced(named.memberId, named.ed25519PublicKey)) {
+            Timber.w("Plaintext $what naming ${named.memberId.take(8)}, who seals theirs — ignoring")
+            return null
+        }
+        return message
     }
 
     private fun extractSenderMemberId(encryptedPayload: String): String? {

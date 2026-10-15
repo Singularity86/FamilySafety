@@ -55,6 +55,7 @@ class MainViewModel @Inject constructor(
     private val avatarRepository: AvatarRepository,
     private val locationPublishOutboxRepository: LocationPublishOutboxRepository,
     private val mqttTransport: MqttTransport,
+    private val replayGuard: com.example.familysafety.crypto.ReplayGuard,
     private val securityEventRepository: SecurityEventRepository,
     private val networkMonitor: NetworkMonitor,
     private val routingService: RoutingService,
@@ -197,11 +198,16 @@ class MainViewModel @Inject constructor(
      *
      * A member absent from the map has not been heard from yet — unknown, not outdated —
      * so they are excluded rather than assumed stale.
+     *
+     * Also anyone whose envelopes come unsequenced after sequenced ones (3.4): an older build
+     * reinstalled, whose messages are now refused until they update.
      */
-    val outdatedMembers: StateFlow<Set<String>> = mqttTransport.peerProtocolVersions
-        .map { versions ->
-            versions.filterValues { it < MessageProtocol.PROTOCOL_VERSION }.keys
-        }
+    val outdatedMembers: StateFlow<Set<String>> = combine(
+        mqttTransport.peerProtocolVersions,
+        replayGuard.downgradedMembers
+    ) { versions, downgraded ->
+        versions.filterValues { it < MessageProtocol.MIN_COMPATIBLE_VERSION }.keys + downgraded
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
     private val _keySyncRequestState = MutableStateFlow<KeySyncRequestState>(KeySyncRequestState.Idle)
