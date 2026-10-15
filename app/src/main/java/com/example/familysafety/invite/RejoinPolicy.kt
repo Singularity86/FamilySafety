@@ -45,7 +45,7 @@ object RejoinPolicy {
 
         val signature = request.signature ?: return Verdict.AskInviter
         val valid = try {
-            verifySignature(request.signingBytes(), signature.hexToBytes(), edHex)
+            verifySignature(request.signedBytes(), signature.hexToBytes(), edHex)
         } catch (e: Exception) {
             false
         }

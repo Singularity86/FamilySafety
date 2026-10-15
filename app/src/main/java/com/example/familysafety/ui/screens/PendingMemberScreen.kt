@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.familysafety.group.MembershipState
 import com.example.familysafety.main.EncryptionChip
+import com.example.familysafety.ui.theme.NumericFamily
 import com.example.familysafety.ui.theme.Spacing
 import com.example.familysafety.ui.theme.TextDisabled
 import com.example.familysafety.ui.theme.rememberReducedMotion
@@ -88,6 +89,27 @@ fun PendingMemberScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
+
+            state.fingerprint?.let { code ->
+                Spacer(modifier = Modifier.height(Spacing.lg))
+                Text(
+                    text = "Your code",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "${code.take(3)} ${code.drop(3)}",
+                    style = MaterialTheme.typography.headlineMedium.copy(fontFamily = NumericFamily),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "${state.invitedByName.ifBlank { "Your inviter" }} sees the same code. " +
+                        "If you're together, check it matches.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
 
             Spacer(modifier = Modifier.height(Spacing.xl))
 

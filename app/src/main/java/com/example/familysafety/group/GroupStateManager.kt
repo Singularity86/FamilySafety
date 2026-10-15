@@ -177,10 +177,8 @@ class GroupStateManager(
             }
 
             // Verify cryptographic approval
-            val approvalMessage = buildMemberAdditionApprovalMessage(
-                groupId = currentGroup.groupId,
-                groupVersion = currentGroup.version,
-                newMemberPublicKey = newMember.ed25519PublicKey
+            val approvalMessage = memberAdditionApprovalMessage(
+                currentGroup.groupId, currentGroup.version, newMember
             )
 
             val signatureValid = cryptoProvider.verifySignature(
@@ -1174,12 +1172,16 @@ class GroupStateManager(
         return key.joinToString("") { "%02x".format(it) }
     }
 
-    private fun buildMemberAdditionApprovalMessage(
-        groupId: String,
-        groupVersion: Long,
-        newMemberPublicKey: String
-    ): ByteArray {
-        return "ADD:$groupId:$groupVersion:$newMemberPublicKey".toByteArray(Charsets.UTF_8)
+    companion object {
+        /**
+         * What an inviter signs to approve [member] joining at [groupVersion]: both keys and the
+         * name, so the approval is for exactly the identity the inviter saw (F13). Checked only
+         * by the inviter's own addMember; it never crosses the wire, so no peer depends on its
+         * format.
+         */
+        fun memberAdditionApprovalMessage(groupId: String, groupVersion: Long, member: FamilyMember): ByteArray =
+            ("ADD:v2:$groupId:$groupVersion:${member.ed25519PublicKey}:" +
+                "${member.x25519PublicKey}:${member.displayName}").toByteArray(Charsets.UTF_8)
     }
 
     private fun buildMemberRemovalApprovalMessage(
