@@ -50,16 +50,9 @@ fun SyncIndicator(
     val syncState by syncManager.syncState.collectAsState()
 
     when (val state = syncState) {
-        is GroupSyncManager.SyncState.Idle -> SyncInfoSlot(
-            title = "Sync idle",
-            message = "Okay. No family-list sync is running right now.",
-            details = "The family list is the shared record of who's in your family, their device keys, and " +
-                "group settings like the family name. It's kept in sync automatically whenever something " +
-                "changes — there's nothing to do while it's idle.",
-            modifier = modifier
-        ) {
-            SyncPlaceholder()
-        }
+        // Nothing to report, so nothing drawn. An empty placeholder pill used to hold the slot,
+        // which pushed the family name off the bar on narrow phones.
+        is GroupSyncManager.SyncState.Idle -> Unit
         is GroupSyncManager.SyncState.Syncing -> SyncInfoSlot(
             title = "Syncing family state",
             message = "Working. Jibaro Family Safety is checking the family list, member keys, and group version.",
@@ -153,6 +146,9 @@ private fun SyncedChip(version: Long, modifier: Modifier = Modifier) {
         closed = true
     }
 
+    // Once the shutter has closed the chip goes away entirely, as when idle.
+    if (closed) return
+
     SyncInfoSlot(
         title = "Synced",
         message = "Working. This device has family list version $version, including the current members and their keys.",
@@ -161,18 +157,14 @@ private fun SyncedChip(version: Long, modifier: Modifier = Modifier) {
             "agree on the same members and keys. Version $version is the most recent one this device has seen.",
         modifier = modifier
     ) {
-        if (closed) {
-            SyncPlaceholder()
-        } else {
-            SyncChip(
-                text = "Synced v$version",
-                iconTint = statusColors.successText,
-                containerColor = statusColors.successIndicator.copy(alpha = 0.10f),
-                borderColor = statusColors.successIndicator.copy(alpha = 0.24f),
-                icon = Icons.Default.Check,
-                shutterProgress = shutterProgress.value
-            )
-        }
+        SyncChip(
+            text = "Synced v$version",
+            iconTint = statusColors.successText,
+            containerColor = statusColors.successIndicator.copy(alpha = 0.10f),
+            borderColor = statusColors.successIndicator.copy(alpha = 0.24f),
+            icon = Icons.Default.Check,
+            shutterProgress = shutterProgress.value
+        )
     }
 }
 
@@ -186,27 +178,6 @@ private fun SyncInfoSlot(
 ) {
     ChipInfoPopup(title = title, message = message, details = details, modifier = modifier) {
         content()
-    }
-}
-
-@Composable
-private fun SyncPlaceholder(modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier.width(SyncSlotWidth),
-        shape = ChipShape,
-        color = Color.Transparent,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Spacer(modifier = Modifier.size(12.dp))
-        }
     }
 }
 
