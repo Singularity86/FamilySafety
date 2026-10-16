@@ -171,11 +171,19 @@ object MessageProtocol {
      * already holds.
      */
     @Serializable
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     data class SealedPresence(
         /** Schema marker; 2 = sealed under the group key. Absent shape = legacy plaintext. */
         val v: Int,
         /** Base64 of `nonce ‖ ciphertext ‖ tag` over the plaintext presence envelope. */
-        val data: String
+        val data: String,
+        /**
+         * Which group key sealed it (3.3, [com.example.familysafety.group.GroupKeys]). Absent
+         * means the epoch-0 key, and is left out entirely so unrotated families send the bytes
+         * older builds expect.
+         */
+        @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+        val kid: String? = null
     )
 
     /**

@@ -296,6 +296,10 @@ object GroupTransitionValidator {
             return "file key changed"
         }
 
+        // Rotated keys (3.3): existing entries are immutable, new ones must be genuine and no
+        // newer than the removals in the same state.
+        GroupKeys.rejectReason(current, remote)?.let { return it }
+
         return null
     }
 }

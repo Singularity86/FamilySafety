@@ -227,7 +227,12 @@ data class GroupDefinition(
     val grantCode: String? = null,
     val removalProofs: Set<RemovalProof> = emptySet(),
     /** [subscriberMemberId]'s signature over [ProfileGuard.subscriptionMessage] (F25). Not hashed. */
-    val subscriptionSignature: String? = null
+    val subscriptionSignature: String? = null,
+    /**
+     * Keys made after removals (3.3, see [GroupKeys]); [fileEncryptionKey] stays as epoch 0.
+     * Append-only and not hashed, for the same reasons as [fileEncryptionKey].
+     */
+    val groupKeys: List<GroupKey> = emptyList()
 ) {
     /**
      * Computes deterministic hash of this group state for hash chain integrity.

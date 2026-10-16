@@ -592,6 +592,39 @@ class GroupStateManager(
         }
     }
 
+    /**
+     * Add a new group key if a removal has happened since the newest one (3.3, F17).
+     *
+     * [gateOpen] says whether every member who counts can read a rotated key; the caller knows
+     * their advertised protocol versions. Any member may rotate: concurrent rotations are
+     * harmless, because keyrings are unioned and every phone picks the same current key.
+     * The new key travels in the ordinary group update, which is encrypted per current member,
+     * so whoever was removed never receives it.
+     *
+     * @return true if a key was added.
+     */
+    suspend fun rotateGroupKeyIfDue(gateOpen: (GroupDefinition) -> Boolean): Boolean {
+        return stateMutex.withLock {
+            val currentGroup = _groupDefinition.value ?: return@withLock false
+            if (!currentGroup.containsMember(localMemberId)) return@withLock false
+            if (!GroupKeys.rotationDue(currentGroup) || !gateOpen(currentGroup)) return@withLock false
+
+            val updatedGroup = GroupKeys.rotated(currentGroup).copy(
+                version = currentGroup.version + 1,
+                previousStateHash = currentGroup.computeStateHash()
+            )
+            try {
+                persistence.saveGroupDefinition(updatedGroup)
+            } catch (e: Exception) {
+                return@withLock false
+            }
+            _groupDefinition.value = updatedGroup
+            _events.emit(GroupStateEvent.GroupUpdated(currentGroup, updatedGroup))
+            timber.log.Timber.i("Rotated the group key for epoch ${updatedGroup.removedMemberIds.size}")
+            true
+        }
+    }
+
     suspend fun updateMyColorHue(hue: Float): GroupOperationResult<GroupDefinition> {
         return stateMutex.withLock {
             val currentGroup = _groupDefinition.value
@@ -1056,9 +1089,13 @@ class GroupStateManager(
         // A state without a file key is from a sender that doesn't carry it, not a request
         // to forget ours: taking it verbatim would cut this phone off from every file.
         val ourKey = current?.fileEncryptionKey
-        val withKey = if (incoming.fileEncryptionKey.isNullOrBlank() && !ourKey.isNullOrBlank()) {
+        val withFileKey = if (incoming.fileEncryptionKey.isNullOrBlank() && !ourKey.isNullOrBlank()) {
             incoming.copy(fileEncryptionKey = ourKey)
         } else incoming
+        // Likewise for rotated keys (3.3): a relay on an older build drops groupKeys, and taking
+        // that as "forget them" would cut this phone off from everything sealed since.
+        val withKey = if (current == null) withFileKey
+        else withFileKey.copy(groupKeys = GroupKeys.union(withFileKey.groupKeys, current.groupKeys))
         // Profile and subscription changes only from their author, and only if newer (F25).
         val newState = if (current == null) withKey else ProfileGuard.reconcile(current, withKey, updaterMemberId) { message, signatureHex, keyHex ->
             cryptoProvider.verifySignature(message, signatureHex.hexToByteArray(), keyHex)

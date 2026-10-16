@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+
 package com.example.familysafety.files
 
 import kotlinx.serialization.Serializable
@@ -27,7 +29,14 @@ data class SharedFile(
      * the field: they replicate everything, so reading their files as essential matches what
      * they will actually do.
      */
-    val isEssential: Boolean = true
+    val isEssential: Boolean = true,
+    /**
+     * Which group key the file's chunks are under (3.3); absent = the epoch-0 key. A chunk is
+     * accepted only if its kid matches this, so a removed member, who still holds old keys,
+     * can't plant chunks.
+     */
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val kid: String? = null
 )
 
 @Serializable
@@ -78,7 +87,10 @@ data class EncryptedFileManifest(
      * so a manifest from a build that predates signing still parses and can be reported as
      * unsigned rather than failing to decode.
      */
-    val signature: String = ""
+    val signature: String = "",
+    /** Which group key encrypted [data] (3.3); absent = the epoch-0 key. */
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val kid: String? = null
 )
 
 /**
@@ -88,8 +100,8 @@ data class EncryptedFileManifest(
  * signature, and the ciphertext is signed rather than the plaintext so a manifest is
  * authenticated before anything is decrypted.
  */
-fun manifestSigningPayload(keyVersion: Int, data: String): ByteArray =
-    "$keyVersion|$data".toByteArray(Charsets.UTF_8)
+fun manifestSigningPayload(keyVersion: Int, data: String, kid: String? = null): ByteArray =
+    (if (kid == null) "$keyVersion|$data" else "$keyVersion|$kid|$data").toByteArray(Charsets.UTF_8)
 
 @Serializable
 data class FileChunkMessage(
@@ -103,7 +115,10 @@ data class FileChunkMessage(
      * fileEncryptionKey. Defaults to 1 so chunks from older builds, which omit the
      * field entirely, still decrypt.
      */
-    val keyVersion: Int = FILE_KEY_VERSION_LEGACY
+    val keyVersion: Int = FILE_KEY_VERSION_LEGACY,
+    /** Which group key encrypted [data] (3.3); absent = the epoch-0 key. Must match the file's. */
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val kid: String? = null
 )
 
 /** Key derived from the public groupId. Readable by anyone on the broker. */
@@ -210,5 +225,8 @@ const val HOLDING_PARTIAL = "PARTIAL"
 data class EncryptedFileMessage(
     val keyVersion: Int,
     /** Base64 of `nonce ‖ ciphertext ‖ tag`. */
-    val data: String
+    val data: String,
+    /** Which group key encrypted [data] (3.3); absent = the epoch-0 key. */
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val kid: String? = null
 )

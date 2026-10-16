@@ -67,7 +67,12 @@ data class SharedFileEntity(
      * listed until someone opens them. Defaults true so nothing silently stops replicating,
      * including files that predate the column.
      */
-    val isEssential: Boolean = true
+    val isEssential: Boolean = true,
+    /**
+     * Which group key the file is under (3.3); null = the epoch-0 key. Every chunk must carry the
+     * same kid, which stops a removed member, who still holds the old key, injecting chunks.
+     */
+    val kid: String? = null
 ) {
     // Room's generated equals/hashCode would compare the ByteArray by reference. That makes
     // two rows with identical bitmaps unequal, which quietly breaks Flow distinctUntilChanged

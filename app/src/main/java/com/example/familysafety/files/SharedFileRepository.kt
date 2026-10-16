@@ -1,5 +1,6 @@
 package com.example.familysafety.files
 
+import com.example.familysafety.group.GroupKeys
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -190,7 +191,7 @@ class SharedFileRepository @Inject constructor(
             val fileId = UUID.randomUUID().toString()
             stagedFileId = fileId
 
-            val (fileKey, fileKeyVersion) = resolveEncryptionKey(groupId)
+            val (fileKey, fileKeyVersion, fileKid) = resolveEncryptionKey(groupId)
 
             // Pass 1: stream the source straight into the encrypted blob, hashing the
             // plaintext as it goes. Peak memory is one buffer, not the file — and, unlike the
@@ -249,7 +250,8 @@ class SharedFileRepository @Inject constructor(
                 chunksReceived = totalChunks,
                 downloadState = "COMPLETE",
                 chunkBitmap = ChunkBitmap.full(totalChunks),
-                blobKeyVersion = fileKeyVersion
+                blobKeyVersion = fileKeyVersion,
+                kid = fileKid
             )
             sharedFileDao.upsert(entity)
             broadcastManifest(groupId)
@@ -308,6 +310,8 @@ class SharedFileRepository @Inject constructor(
         onProgress: (Int) -> Unit = {}
     ) {
         var sent = 0
+        // Re-served verbatim under the key the file is stored in, never the current one.
+        val kid = sharedFileDao.getFileById(fileId)?.kid
         for (index in indices) {
             val ciphertext = fileStore.readChunk(fileId, index, strideBytes()) ?: continue
             val chunkMsg = FileChunkMessage(
@@ -315,7 +319,8 @@ class SharedFileRepository @Inject constructor(
                 chunkIndex = index,
                 totalChunks = totalChunks,
                 data = Base64.getEncoder().encodeToString(ciphertext),
-                keyVersion = fileKeyVersion
+                keyVersion = fileKeyVersion,
+                kid = kid
             )
             transportProvider.broadcastMessage(
                 topic = MqttConfig.getFileChunkTopic(groupId, fileId, index),
@@ -397,10 +402,17 @@ class SharedFileRepository @Inject constructor(
                 val entity = sharedFileDao.getFileById(fileId)
                 if (entity?.downloadState == "COMPLETE") return@launch
 
+                // A chunk must be under the key its manifest entry names (3.3). Someone removed
+                // from the family still holds the old keys and could otherwise plant chunks.
+                if (entity != null && !sameKid(entity.kid, chunkMsg.kid)) {
+                    Timber.w("$TAG: chunk $chunkIndex of $fileId is under a different group key than its file — dropping")
+                    return@launch
+                }
+
                 val encryptedBytes = Base64.getDecoder().decode(chunkMsg.data)
                 // Use the key the sender tagged the chunk with, not our current one:
                 // during the upgrade a group holds files under both key versions.
-                val fileKey = keyForVersion(groupId, chunkMsg.keyVersion)
+                val fileKey = keyForVersion(groupId, chunkMsg.keyVersion, chunkMsg.kid)
                 if (fileKey == null) {
                     Timber.w(
                         "$TAG: chunk $chunkIndex of $fileId needs key version " +
@@ -812,12 +824,13 @@ class SharedFileRepository @Inject constructor(
 
     /** Encrypt a file-subsystem control message under the group key. */
     private fun sealFileMessage(groupId: String, plaintext: String): ByteArray? {
-        val (key, keyVersion) = resolveEncryptionKey(groupId)
+        val (key, keyVersion, kid) = resolveEncryptionKey(groupId)
         return runCatching {
             json.encodeToString(
                 EncryptedFileMessage(
                     keyVersion = keyVersion,
-                    data = Base64.getEncoder().encodeToString(encrypt(plaintext.toByteArray(), key))
+                    data = Base64.getEncoder().encodeToString(encrypt(plaintext.toByteArray(), key)),
+                    kid = kid
                 )
             ).toByteArray()
         }.getOrNull()
@@ -826,7 +839,7 @@ class SharedFileRepository @Inject constructor(
     private fun openFileMessage(groupId: String, raw: String): String? {
         val wrapped = runCatching { json.decodeFromString<EncryptedFileMessage>(raw) }.getOrNull()
             ?: return null
-        val key = keyForVersion(groupId, wrapped.keyVersion) ?: return null
+        val key = keyForVersion(groupId, wrapped.keyVersion, wrapped.kid) ?: return null
         return runCatching {
             String(decrypt(Base64.getDecoder().decode(wrapped.data), key))
         }.getOrNull()
@@ -961,7 +974,7 @@ class SharedFileRepository @Inject constructor(
         val manifest = FileManifest(groupId, files, System.currentTimeMillis())
         val topic = MqttConfig.getFileManifestTopic(groupId)
 
-        val (fileKey, fileKeyVersion) = resolveEncryptionKey(groupId)
+        val (fileKey, fileKeyVersion, manifestKid) = resolveEncryptionKey(groupId)
         val payload = if (fileKeyVersion != FILE_KEY_VERSION_LEGACY) {
             val data = Base64.getEncoder().encodeToString(
                 encrypt(json.encodeToString(padManifest(manifest)).toByteArray(), fileKey)
@@ -969,10 +982,11 @@ class SharedFileRepository @Inject constructor(
             val wrapped = EncryptedFileManifest(
                 keyVersion = fileKeyVersion,
                 data = data,
+                kid = manifestKid,
                 signerMemberId = groupStateManager.localMember.value?.memberId.orEmpty(),
                 signature = runCatching {
                     cryptoProvider
-                        .signMessage(manifestSigningPayload(fileKeyVersion, data))
+                        .signMessage(manifestSigningPayload(fileKeyVersion, data, manifestKid))
                         .joinToString("") { "%02x".format(it) }
                 }.onFailure { Timber.e(it, "$TAG: could not sign manifest") }.getOrDefault("")
             )
@@ -1018,7 +1032,7 @@ class SharedFileRepository @Inject constructor(
             .getOrNull()
             ?.let { wrapped ->
                 if (!verifyManifestSignature(wrapped)) return null
-                val key = keyForVersion(groupId, wrapped.keyVersion)
+                val key = keyForVersion(groupId, wrapped.keyVersion, wrapped.kid)
                 if (key == null) {
                     Timber.w(
                         "$TAG: manifest is encrypted under key version ${wrapped.keyVersion}, " +
@@ -1067,7 +1081,7 @@ class SharedFileRepository @Inject constructor(
         }
         val ok = runCatching {
             cryptoProvider.verifySignature(
-                message = manifestSigningPayload(wrapped.keyVersion, wrapped.data),
+                message = manifestSigningPayload(wrapped.keyVersion, wrapped.data, wrapped.kid),
                 signature = wrapped.signature.hexToBytes(),
                 publicKey = signer.ed25519PublicKey.hexToBytes()
             )
@@ -1104,7 +1118,7 @@ class SharedFileRepository @Inject constructor(
         if (!ChunkBitmap.isComplete(entity.chunkBitmap, entity.chunkCount)) return
 
         val groupId = groupStateManager.groupDefinition.value?.groupId ?: return
-        val fileKey = keyForVersion(groupId, entity.blobKeyVersion) ?: run {
+        val fileKey = keyForVersion(groupId, entity.blobKeyVersion, entity.kid) ?: run {
             Timber.w("$TAG: cannot complete $fileId — no key for version ${entity.blobKeyVersion}")
             return
         }
@@ -1175,7 +1189,7 @@ class SharedFileRepository @Inject constructor(
         val bitmap = if (needsRebuild && fileStore.blobFile(fileId).exists()) {
             val groupId = groupStateManager.groupDefinition.value?.groupId ?: return
             val keyVersion = if (entity.blobKeyVersion != 0) entity.blobKeyVersion else FILE_KEY_VERSION_GROUP_SECRET
-            val key = keyForVersion(groupId, keyVersion) ?: return
+            val key = keyForVersion(groupId, keyVersion, entity.kid) ?: return
             fileStore.rebuildBitmap(fileId, entity.chunkCount, strideBytes()) { slot ->
                 decrypt(slot, key)
             }.also {
@@ -1256,7 +1270,8 @@ class SharedFileRepository @Inject constructor(
         if (pending.isEmpty()) return
         Timber.i("$TAG: ${pending.size} file(s) still stored as plaintext — encrypting")
 
-        val (fileKey, fileKeyVersion) = resolveEncryptionKey(groupId)
+        // Under the epoch-0 key, which is what these rows' absent kid means.
+        val (fileKey, fileKeyVersion) = resolveEncryptionKey(groupId, epochZero = true)
         for (entity in pending) {
             val plaintext = entity.localPath?.let { File(it) }
             if (plaintext == null || !plaintext.exists()) {
@@ -1326,7 +1341,7 @@ class SharedFileRepository @Inject constructor(
         if (target.exists() && target.length() > 0) return target
 
         val groupId = groupStateManager.groupDefinition.value?.groupId ?: return null
-        val key = keyForVersion(groupId, entity.blobKeyVersion) ?: return null
+        val key = keyForVersion(groupId, entity.blobKeyVersion, entity.kid) ?: return null
 
         target.parentFile?.mkdirs()
         val hash = runCatching {
@@ -1382,15 +1397,22 @@ class SharedFileRepository @Inject constructor(
      * on screen to say why. Confirmed 2026-08-30 that every device in the family is on 29
      * or later before flipping this.
      */
-    private fun resolveEncryptionKey(groupId: String): Pair<ByteArray, Int> {
-        val groupKey = groupKeyHex()
+    private data class EncryptionKey(val key: ByteArray, val version: Int, val kid: String?)
+
+    /**
+     * Uses the family's current group key (3.3) and returns its kid to stamp, or null for the
+     * epoch-0 key. [epochZero] forces the epoch-0 key, for rows whose kid is absent.
+     */
+    private fun resolveEncryptionKey(groupId: String, epochZero: Boolean = false): EncryptionKey {
+        val def = groupStateManager.groupDefinition.value
+        val kid = if (epochZero || def == null) null else GroupKeys.stampFor(def)
+        val groupKey = if (def == null) null else GroupKeys.keyHexFor(def, kid)
         return if (groupKey != null) {
-            GroupCipher.deriveSubkey(groupKey, GroupCipher.PURPOSE_FILES) to
-                FILE_KEY_VERSION_GROUP_SUBKEY
+            EncryptionKey(GroupCipher.deriveSubkey(groupKey, GroupCipher.PURPOSE_FILES), FILE_KEY_VERSION_GROUP_SUBKEY, kid)
         } else {
             // No group key at all: a family created before 1.12.0. Nothing to derive from,
             // so these stay on the legacy key and this flip is a no-op for them.
-            deriveLegacyFileKey(groupId) to FILE_KEY_VERSION_LEGACY
+            EncryptionKey(deriveLegacyFileKey(groupId), FILE_KEY_VERSION_LEGACY, null)
         }
     }
 
@@ -1406,9 +1428,21 @@ class SharedFileRepository @Inject constructor(
      * fallback could never succeed — GCM would reject the wrong key anyway — but it turned
      * "this build is too old to read that" into an indistinguishable decryption failure.
      */
-    private fun keyForVersion(groupId: String, keyVersion: Int): ByteArray? =
-        // Refuses the public legacy key in a family that has a group key; see FileKeys.
-        FileKeys.forVersion(groupId, groupKeyHex(), keyVersion)
+    private fun keyForVersion(groupId: String, keyVersion: Int, kid: String? = null): ByteArray? {
+        if (kid == null) {
+            // Refuses the public legacy key in a family that has a group key; see FileKeys.
+            return FileKeys.forVersion(groupId, groupKeyHex(), keyVersion)
+        }
+        // A named key we don't hold is unreadable, never the legacy key: passing null on would
+        // read as "a family with no group key" and open the public one.
+        val def = groupStateManager.groupDefinition.value ?: return null
+        val keyHex = GroupKeys.keyHexFor(def, kid) ?: return null
+        return FileKeys.forVersion(groupId, keyHex, keyVersion)
+    }
+
+    /** Both absent, or the same key id. */
+    private fun sameKid(a: String?, b: String?): Boolean =
+        if (a == null || b == null) a == b else a.equals(b, ignoreCase = true)
 
     private fun groupKeyHex(): String? =
         groupStateManager.groupDefinition.value?.fileEncryptionKey?.takeIf { it.isNotBlank() }
@@ -1514,7 +1548,8 @@ class SharedFileRepository @Inject constructor(
         contentHash = contentHash, uploaderMemberId = uploaderMemberId,
         uploadedAt = uploadedAt, chunkCount = chunkCount,
         isDeleted = isDeleted, deletedByMemberId = deletedByMemberId, deletedAt = deletedAt,
-        isEssential = isEssential
+        isEssential = isEssential,
+        kid = kid
     )
 
     /**
@@ -1566,7 +1601,8 @@ class SharedFileRepository @Inject constructor(
         uploadedAt = uploadedAt, chunkCount = chunkCount,
         isDeleted = isDeleted, deletedByMemberId = deletedByMemberId, deletedAt = deletedAt,
         localPath = null, chunksReceived = 0, downloadState = if (isDeleted) "COMPLETE" else "PENDING",
-        isEssential = isEssential
+        isEssential = isEssential,
+        kid = kid
     )
 }
 

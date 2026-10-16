@@ -37,6 +37,7 @@ Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the bi
 | 1.15.3 (44) | **wire** | **Removal proofs.** `GroupDefinition.removalProofs` (optional): per tombstone, a signature by the creator or by the member who left, over `REMOVAL_PROOF:v1:{groupId}:{tombstone}`. Any member may now relay a removal carrying one; before, a removal heard second-hand was refused. Not hashed. Older peers ignore the field. | §6.5, §7.3 |
 | 1.15.3 (44) | product | Leaving while unable to reach the family (no relay, no member on the same Wi-Fi) warns first: the departure can't be sent once the keys are erased. | — |
 | next (remediation 2.1) | **wire** | **Authenticated join (join v2).** The invite gains `v`, `inviteId`, a one-time `inviteSecret`, the inviter's keys and `expiresAt`. The joiner sends `JoinRequestV2Message`: the request encrypted to the inviter, signed over `JOIN:v2:…`, with an HMAC under the invite secret. The inviter verifies before showing it, with a 6-digit fingerprint on both screens. Negotiated by the invite's `"v": "2"`, so `PROTOCOL_VERSION` stays 3: a v1 invite still gets a v1 request, and Android still accepts v1 requests (flagged "Unverified") for one release. | §8.2–§8.4, §12 |
+| next (remediation 3.3) | **wire** | **Group-key rotation.** `GroupDefinition.groupKeys` (optional, unhashed): a new key per removal, sent only to remaining members; `fileEncryptionKey` stays as epoch 0. Sealed presence, manifests, chunks, file messages and manifest entries carry an optional `kid`; a chunk must match its entry's `kid`. Rotation waits until every member seen in 30 days advertises protocol ≥ 4, so it's dormant until 3.4. Android database 10 → 11. | §6.2, §6.5, §6.7, §7.3, §12 |
 | next (remediation 2.2b) | behaviour | **Client ID per install:** `familysafe_{memberId}_{deviceId}`. Without it, two installs of one identity evicted each other on the broker and the 2.2 warning never fired. It also stops an outsider with the shipped broker credentials from knocking a member offline by connecting under their member ID. No payload changes; the old session expires on the broker (2 h). | §4, §6.2 |
 | next (remediation 3.1) | **wire** | **Authorship of non-hashed fields.** The sync envelope's sender must equal `updaterMemberId`. Members self-sign their profile (`profileUpdatedAtMs`, `profileSignature`) and the subscriber signs confirmations (`subscriptionSignature`); a changed profile or subscription is taken only from its author or with a valid, newer signature, otherwise receivers keep theirs. `addedAt`/`addedBy` are immutable, and a set file key can't be replaced. All new fields are optional and unhashed; `PROTOCOL_VERSION` stays 3. | §6.5, §7.3 |
 | next (remediation 2.2) | **wire** | **Signed device ID in presence.** Optional `deviceId` and `deviceSignature` (over `presence-device:v1:…`). Receivers notify when one member shows two devices within 10 min, or your own identity shows another device. Presence padding goes from 512 to **640**. The existing presence signature is unchanged and older peers ignore the new fields, so `PROTOCOL_VERSION` stays 3. | §6.1, §6.2, §12 |
@@ -607,7 +608,8 @@ peer. Key:
 presenceKey = SHA-256( groupFileKeyBytes ‖ "presence" )
 ```
 
-`groupFileKeyBytes` is `GroupDefinition.fileEncryptionKey` hex-decoded. The purpose label
+`groupFileKeyBytes` is `GroupDefinition.fileEncryptionKey` hex-decoded, or, when the wrapper
+carries a `kid`, the rotated key it names (§6.5 "Group-key rotation"; since 3.3). The purpose label
 gives domain separation, so recovering the presence key does not yield the file key.
 AES-256-GCM, 12-byte nonce, 128-bit tag, `nonce ‖ ciphertext ‖ tag` — the same layout as
 file chunks.
@@ -821,6 +823,76 @@ so it needs no separate distribution path. Two consequences for an implementatio
   diagnostics export.
 - It is **not** covered by `computeStateHash` (§7.1) — see the note there.
 
+#### Group-key rotation (remediation 3.3, F17)
+
+Someone who leaves or is removed keeps every key they ever held. Without rotation they could go
+on opening sealed presence (who is online, and every abrupt "offline"), the retained manifest and
+every new file. So each removal gets a new family key, sent only to the people still in it.
+
+**Keyring.** `GroupDefinition.groupKeys` (optional, unhashed, default `[]`):
+
+```json
+"groupKeys": [ { "kid": "<16 hex>", "epoch": 1, "key": "<64 hex>" } ]
+```
+
+- `fileEncryptionKey` is **epoch 0** and is never replaced, so §7.3's "a set file key can't be
+  replaced" still holds. Rotated keys go in `groupKeys` with epoch ≥ 1.
+- `kid` = lowercase hex of the first 8 bytes of `SHA-256(keyBytes)`. It's derived from the key,
+  so a kid can't be paired with other key bytes.
+- `epoch` = how many tombstones existed when the key was made (`removedMemberIds.size`).
+- **Current key:** the highest epoch, ties broken by the lowest kid. Every phone that holds the
+  same keys picks the same one, so concurrent rotations converge.
+- Keyrings are **unioned** on every merge and every commit. Never drop an entry: older files and
+  manifests are sealed under them. A relay that doesn't carry `groupKeys` (older build, or iOS
+  before B1) is not a request to forget them; keep yours.
+
+**Who rotates, and when.** A rotation is due when `removedMemberIds.size` > the current key's
+epoch. Any member who holds a state with a rotation due adds
+`{ kid, epoch: removedMemberIds.size, key: 32 random bytes }` and sends it as an ordinary group
+update (`changeType` `VERSION_SYNC`; a new enum value would break older decoders). Group sync is
+encrypted per current member, so the removed member never receives it. Two members rotating at
+once is harmless (see current key).
+
+**Only when everyone can follow.** A phone on an older build can't read anything sealed under a
+rotated key, so rotation waits until every member who counts advertises `protocolVersion` ≥ **4**
+(§6.2). A member counts if their presence was received in the last **30 days** (local receive
+time). A member never heard from blocks the gate until this phone has been watching for 30 days,
+so a fresh install doesn't open it before it has heard from anyone. Re-check whenever a member's
+advertised version changes.
+
+**Using keys.** Encrypt with the current key and stamp its `kid`. Leave `kid` out entirely for
+the epoch-0 key, so unrotated families send exactly the bytes older builds expect. Decrypt with
+the key the `kid` names; an absent `kid` means `fileEncryptionKey`. Subkeys are unchanged:
+`SHA-256(key ‖ purpose)`. A `kid` this phone doesn't hold opens nothing. Never fall back to the
+legacy file key for it. Ask for a group refresh, through the F16 rate limiter (Android: 2 per
+10 min), because anyone can publish junk kids.
+
+| Carries `kid` | Where |
+|---|---|
+| Sealed presence | `{"v":2,"kid":…,"data":…}` (§6.2 "Sealed presence") |
+| Encrypted manifest | `EncryptedFileManifest.kid`; also inside its signing payload (§6.7) |
+| File chunk | `FileChunkMessage.kid` |
+| File control message | `EncryptedFileMessage.kid` |
+| Manifest entry | `SharedFile.kid`: the key the file's chunks are under |
+
+**Files.** A new upload is under the current key, and its manifest entry records that `kid`. A
+chunk is accepted only if its `kid` equals its file's entry `kid` (both absent counts as equal).
+Without this, a removed member, who still holds the old keys, could plant chunks into a file.
+Re-serving and repair keep the file's own `kid`; ciphertext is still re-served verbatim (§6.7).
+A file's `kid` is fixed when the file is first seen.
+
+**After a rotation.**
+- Republish the retained manifest under the new key.
+- **Reconnect once** to re-seal the last-will. The will is sealed at connect time, so until then
+  it still opens under the old key, and the removed member could read our next abrupt "offline".
+
+**Never to anyone outside the roster.** A `GroupDefinition` sent to someone not in its own
+`members` carries no `groupKeys` at all. Group updates and refresh replies go to current members
+only; a refresh request is answered by a broadcast to the roster, never to the named requester.
+The join approval is the one message sent to a single recipient, and they are in its `members`.
+
+Not covered: whatever the removed member received before the removal stays readable to them.
+
 ### 6.6 Replication (all inside per-peer envelopes)
 
 **Private chats stay private (since 1.15.0).** A conversation id of the form `idA:idB` exists
@@ -1001,6 +1073,7 @@ before anything is decrypted:
 
 ```
 signingPayload = UTF8("{keyVersion}|{data}")     // data = the base64 string as published
+signingPayload = UTF8("{keyVersion}|{kid}|{data}")   // when kid is present (3.3, §6.5)
 signature      = hex(Ed25519_sign(signingPayload, ourEd25519PrivateKey))
 signerMemberId = our memberId
 ```
@@ -1425,9 +1498,13 @@ Reject the update if any of:
 - `groupName` changed and updater is not the creator;
 - a surviving member's `addedAtEpochMs` or `addedByMemberId` changed at the same `joinEpoch`
   (fixed at the add; remediation 3.1);
-- `fileEncryptionKey` is set on both sides and differs (key rotation, remediation 3.3, will be the
-  only legal change). An incoming state *without* a key is not a removal: keep yours. A phone
-  without one may take it from any updater.
+- `fileEncryptionKey` is set on both sides and differs. It is epoch 0 and never changes; rotation
+  adds to `groupKeys` instead (§6.5). An incoming state *without* a key is not a removal: keep
+  yours. A phone without one may take it from any updater.
+- a `groupKeys` entry is malformed, its `kid` isn't the first 8 bytes of SHA-256 of its key, an
+  entry you already hold comes back with a different epoch, or a new entry's epoch is < 1 or
+  greater than the incoming state's `removedMemberIds.size` (so nobody can keep minting keys).
+  Entries you hold that the incoming state lacks are kept, not dropped (§6.5).
 
 Before applying, also check the **envelope's authenticated sender equals
 `GroupSyncMessage.updaterMemberId`**, and drop the message otherwise (remediation 3.1). Each
@@ -1920,6 +1997,13 @@ chatMessage("m1", "alice:dana", sender "dana", 5, "TEXT", reply null, content "h
 ```
 Asserted in Android's `AuthorSignaturesTest`. Note the negative longitude: half-up gives
 −1224500000, half-away-from-zero would give −1224500001.
+
+### Group key id (§6.5)
+```
+key: 1111111111111111111111111111111111111111111111111111111111111111
+kid: 02d449a31fbb267c        // first 8 bytes of SHA-256(key bytes)
+```
+Asserted in Android's `GroupKeysTest`.
 
 ### Shared-file key
 ```
