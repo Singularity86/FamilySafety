@@ -33,10 +33,18 @@ object MessageProtocol {
      * the reconciliation, so it stays forkable. Naming those peers is better than watching
      * them diverge quietly.
      *
-     * Bump this only when a change breaks interoperability. Additive fields do not
-     * warrant it; older peers ignore what they do not understand.
+     * Version 4 (remediation 3.2–3.4) doesn't break a 3: envelopes to a 3 stay unsequenced and
+     * their control messages stay plaintext. It promises that this phone signs all history it
+     * writes, holds a keyring, and sequences envelopes, so the family switches to key rotation and
+     * strict history only once everyone advertises it.
+     *
+     * Bump this only when a change breaks interoperability or a family-wide switch needs to
+     * know who supports it. Additive fields do not warrant it.
      */
-    const val PROTOCOL_VERSION = 3
+    const val PROTOCOL_VERSION = 4
+
+    /** Oldest version that still interoperates; below it, the UI says the member must update. */
+    const val MIN_COMPATIBLE_VERSION = 3
     
     /**
      * Sizes every envelope is padded up to, in bytes. Chosen to sit above the natural

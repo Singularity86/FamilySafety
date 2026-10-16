@@ -73,8 +73,12 @@ object AuthorSignatures {
         return if (valid) Verdict.ACCEPT else Verdict.DROP
     }
 
-    /** One release of grace for unsigned history (F24); see [judge]. */
-    const val ACCEPT_UNSIGNED_HISTORY = true
+    /**
+     * Whether to take unsigned history by an author (F24). Unsigned items by an author on
+     * protocol 4 are dropped (3.4): they sign everything they write, so most such items are
+     * forgeries. The cost is their own history from before 3.2, which no longer replicates.
+     */
+    fun acceptUnsignedFrom(authorAdvertisesProtocol4: Boolean): Boolean = !authorAdvertisesProtocol4
 
     private fun sha256Hex(text: String): String =
         MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))

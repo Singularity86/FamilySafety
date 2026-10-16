@@ -521,7 +521,7 @@ class ReplicationManager @Inject constructor(
                                 loc.authorSig,
                                 roster?.findMemberById(loc.memberId)?.ed25519PublicKey,
                                 AuthorSignatures.location(loc),
-                                acceptUnsigned = AuthorSignatures.ACCEPT_UNSIGNED_HISTORY,
+                                acceptUnsigned = AuthorSignatures.acceptUnsignedFrom(e2eeManager.advertisesProtocol4(loc.memberId)),
                                 verify = e2eeManager::verifyAuthor
                             )
                             if (verdict == AuthorSignatures.Verdict.DROP) {
@@ -568,7 +568,7 @@ class ReplicationManager @Inject constructor(
                                 m.authorSig,
                                 roster?.findMemberById(m.senderId)?.ed25519PublicKey,
                                 AuthorSignatures.chatMessage(entity),
-                                acceptUnsigned = AuthorSignatures.ACCEPT_UNSIGNED_HISTORY,
+                                acceptUnsigned = AuthorSignatures.acceptUnsignedFrom(e2eeManager.advertisesProtocol4(m.senderId)),
                                 verify = e2eeManager::verifyAuthor
                             )
                             if (verdict == AuthorSignatures.Verdict.DROP) {

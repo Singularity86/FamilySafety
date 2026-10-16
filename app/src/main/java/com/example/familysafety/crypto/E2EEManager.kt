@@ -15,7 +15,8 @@ import javax.inject.Singleton
 
 @Singleton
 class E2EEManager @Inject constructor(
-    private val cryptoProvider: LazysodiumCryptoProvider
+    private val cryptoProvider: LazysodiumCryptoProvider,
+    private val replayGuard: ReplayGuard
 ) {
     private val lazySodium = LazySodiumAndroid(SodiumAndroid())
     private val sharedSecretCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
@@ -47,16 +48,25 @@ class E2EEManager @Inject constructor(
         }
     }
 
+    /**
+     * @param recipientEd25519Hex the recipient's roster key, if known; lets a recipient who has
+     *   already sent us sequenced envelopes get them back before their presence is seen (3.4)
+     */
     fun encryptMessage(
         plaintext: String,
         recipientMemberId: String,
-        recipientX25519PublicKey: ByteArray
+        recipientX25519PublicKey: ByteArray,
+        recipientEd25519Hex: String? = null
     ): String {
         val sharedSecret = getOrComputeSharedSecret(recipientMemberId, recipientX25519PublicKey)
 
         val nonce = lazySodium.randomBytesBuf(SecretBox.NONCEBYTES)
-        
-        val plaintextBytes = plaintext.toByteArray(Charsets.UTF_8)
+
+        // Sequenced only for a peer that can read it (3.4); older builds would fail to parse it.
+        val body = if (replayGuard.sequenceFor(recipientMemberId, recipientEd25519Hex)) {
+            replayGuard.seal(plaintext)
+        } else plaintext
+        val plaintextBytes = body.toByteArray(Charsets.UTF_8)
         val ciphertext = ByteArray(plaintextBytes.size + SecretBox.MACBYTES)
 
         val encryptSuccess = lazySodium.cryptoSecretBoxEasy(
@@ -128,8 +138,14 @@ class E2EEManager @Inject constructor(
         if (!decryptSuccess) {
             throw EncryptionException("Failed to decrypt message")
         }
-        
-        return String(plaintext, Charsets.UTF_8)
+
+        // Last, and only once the signature has verified: the window then moves for this sender
+        // and key only. Throws ReplayedEnvelopeException for a copy already taken (3.4).
+        return replayGuard.open(
+            senderId = encryptedMessage.senderMemberId,
+            senderEd25519Hex = senderEd25519PublicKey.toHexString(),
+            plaintext = String(plaintext, Charsets.UTF_8)
+        )
     }
 
     private fun getOrComputeSharedSecret(
@@ -172,6 +188,17 @@ class E2EEManager @Inject constructor(
             publicKey = ed25519Hex.hexToByteArray()
         )
 
+    /** Whether envelopes to this member are sequenced, so control messages can go inside one (3.4). */
+    fun peerSequences(memberId: String, ed25519Hex: String): Boolean =
+        replayGuard.sequenceFor(memberId, ed25519Hex)
+
+    /** Whether this member has sent us sequenced envelopes; their plaintext control messages are then forgeries. */
+    fun hasSequenced(memberId: String, ed25519Hex: String): Boolean =
+        replayGuard.hasSequenced(memberId, ed25519Hex)
+
+    /** Whether this member advertises protocol 4, and so signs all the history they write (3.2). */
+    fun advertisesProtocol4(memberId: String): Boolean = replayGuard.advertisesSequenced(memberId)
+
     fun clearSharedSecretCache() {
         sharedSecretCache.clear()
     }
@@ -205,4 +232,4 @@ data class RecipientKeys(
         ed25519PublicKey.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }
 
-class EncryptionException(message: String) : Exception(message)
+open class EncryptionException(message: String) : Exception(message)
