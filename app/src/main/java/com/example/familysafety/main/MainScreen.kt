@@ -299,10 +299,14 @@ fun MainScreen(
                             ),
                             title = {
                                 if (groupName.isNotBlank()) {
-                                    ShrinkToFitText(
+                                    // Wraps to a second line rather than shrinking and clipping: a long
+                                    // family name next to the status chips was cut off mid-word.
+                                    Text(
                                         text = groupName,
                                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                                        color = MaterialTheme.colorScheme.onSurface
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 } else {
                                     Text("Jibaro:\nFamily Safety", style = MaterialTheme.typography.titleMedium)
@@ -657,33 +661,3 @@ fun MainScreen(
     }
 }
 
-/**
- * Single-line text that steps its font size down until it fits, instead of wrapping or
- * truncating. Resets whenever [text] changes so switching families doesn't stay shrunk
- * from a longer previous name.
- */
-@Composable
-private fun ShrinkToFitText(
-    text: String,
-    style: TextStyle,
-    color: Color,
-    modifier: Modifier = Modifier,
-    minFontSize: androidx.compose.ui.unit.TextUnit = 14.sp
-) {
-    var fontSize by remember(text) { mutableStateOf(style.fontSize) }
-    Text(
-        text = text,
-        style = style,
-        color = color,
-        fontSize = fontSize,
-        maxLines = 1,
-        softWrap = false,
-        overflow = TextOverflow.Clip,
-        modifier = modifier,
-        onTextLayout = { result ->
-            if (result.didOverflowWidth && fontSize > minFontSize) {
-                fontSize = (fontSize.value - 1).sp
-            }
-        }
-    )
-}
