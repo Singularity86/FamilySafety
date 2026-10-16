@@ -9,6 +9,41 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.15.5 (46) — Authenticated joins, signed history, key rotation, replay protection
+
+Builds on 1.15.4 (45). Contains everything open on 2026-10-16: #27 (2.1 authenticated join),
+#40 (2.2b client ID per install), #38 (3.2 author-signed history), #42 (3.3 group-key rotation),
+#43 (3.4 replay window) and #44 (top bar title wrap).
+
+Wire format: **changes. `PROTOCOL_VERSION` goes to 4**; phones on 3 (1.15.4, current iOS) keep
+working in both directions:
+- Join v2 is negotiated by the invite, and v1 requests are still accepted (marked "Unverified").
+- To peers on 3, envelopes stay unsequenced and refresh requests and acks stay plaintext.
+- Key rotation and the dropping of unsigned history switch on only once every member advertises 4,
+  so they stay off while anyone in the family is on 1.15.4 or iOS.
+
+Database: **9 → 10 → 11**, two migrations. Upgrade from 1.15.4 checked on an emulator on 2026-10-16:
+roster, names and colours kept, and a protocol-3 member isn't flagged "needs update". The first launch
+after the update froze once ("isn't responding"); the trace showed the emulator's renderer stalled
+while the app ran uncompiled, and later launches were clean. Watch for it on a real phone.
+
+**Not yet run on a device:** 3.3 rotation and 3.4 replay protection live between two protocol-4
+phones (joint test T7); they stay off until iOS advertises 4.
+
+### Play copy
+
+```
+Security update.
+• Joining a family now checks a one-time invite code, so no one else can slip in
+• Messages and location history prove who wrote them
+• Once every phone is updated, removing someone changes the family's key
+• Between updated phones, old messages replayed by someone else are ignored
+• Each install gets its own connection, so two phones can't knock each other offline
+• Long family names wrap instead of being cut off
+```
+
+---
+
 ## 1.15.4 (45) — Security and reliability fixes
 
 Builds on 1.15.3 (44). Contains #17–#35: the Android fixes from the 2026-10-11 code review
