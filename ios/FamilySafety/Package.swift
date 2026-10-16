@@ -72,6 +72,13 @@ let package = Package(
             name: "ReconnectHarness",
             dependencies: ["FamilySafetyCore", "HarnessSupport"]
         ),
+        // Manual capture/replay of sealed group_sync envelopes for joint check T3. NOT part of
+        // the app. Same credential rules as PresenceHarness.
+        .executableTarget(
+            name: "ReplayHarness",
+            dependencies: ["FamilySafetyCore", "HarnessSupport",
+                           .product(name: "CocoaMQTT", package: "CocoaMQTT")]
+        ),
         // Broker-credential lookup shared by the harnesses. NOT part of the app.
         .target(
             name: "HarnessSupport",
