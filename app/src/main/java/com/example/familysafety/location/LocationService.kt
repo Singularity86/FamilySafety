@@ -472,7 +472,7 @@ class LocationService : Service() {
         val fresh = requestFreshFix()
         val lastKnown = locationRepository.myLocation.value
         if (fresh != null && (lastKnown == null || fresh.time > lastKnown.timestamp)) {
-            val memberLocation = MemberLocation(
+            val memberLocation = signedFix(MemberLocation(
                 memberId = id,
                 latitude = fresh.latitude,
                 longitude = fresh.longitude,
@@ -480,7 +480,7 @@ class LocationService : Service() {
                 timestamp = fresh.time,
                 speed = if (fresh.hasSpeed()) fresh.speed else null,
                 bearing = if (fresh.hasBearing()) fresh.bearing else null
-            )
+            ))
             if (DataValidator.validateLocation(memberLocation) is ValidationResult.Valid) {
                 Timber.i("LocationService: heartbeat ($trigger) captured a fresh fix")
                 locationRepository.updateMyLocation(memberLocation)
@@ -642,7 +642,7 @@ class LocationService : Service() {
                 tag = "LocationService",
                 operation = "location update"
             ) {
-                val memberLocation = MemberLocation(
+                val memberLocation = signedFix(MemberLocation(
                     memberId = id,
                     latitude = location.latitude,
                     longitude = location.longitude,
@@ -650,7 +650,7 @@ class LocationService : Service() {
                     timestamp = location.time,
                     speed = if (location.hasSpeed()) location.speed else null,
                     bearing = if (location.hasBearing()) location.bearing else null
-                )
+                ))
 
                 when (val validationResult = DataValidator.validateLocation(memberLocation)) {
                     is ValidationResult.Invalid -> {
@@ -752,7 +752,8 @@ class LocationService : Service() {
         val newestPending = locationPublishOutboxRepository.getNewestPendingTimestamp(id)
         val now = System.currentTimeMillis()
         if (newestPending != null && now - newestPending < LOCATION_INTERVAL_STATIONARY) return
-        val heartbeatLocation = lastLocation.copy(timestamp = System.currentTimeMillis())
+        // Re-stamped, so re-signed: the old signature covered the old time.
+        val heartbeatLocation = signedFix(lastLocation.copy(timestamp = System.currentTimeMillis()))
         locationRepository.updateMyLocation(heartbeatLocation)
         locationPublishOutboxRepository.enqueue(heartbeatLocation)
     }
@@ -777,6 +778,21 @@ class LocationService : Service() {
             locationPublishOutboxRepository.markAttempt(newest.id, "publish deferred")
         }
         return delivered
+    }
+
+    /**
+     * [location] (this phone's own fix) signed by this phone (F24), so the fix still proves
+     * who reported it when it's passed on later as history.
+     */
+    private fun signedFix(location: MemberLocation): MemberLocation {
+        val unsigned = location.copy(authorSig = null)
+        return runCatching {
+            unsigned.copy(
+                authorSig = e2eeManager.signAsSelf(
+                    com.example.familysafety.replication.AuthorSignatures.location(unsigned)
+                )
+            )
+        }.onFailure { Timber.w(it, "LocationService: could not sign a fix") }.getOrDefault(unsigned)
     }
 
     private fun String.hexToByteArray(): ByteArray =

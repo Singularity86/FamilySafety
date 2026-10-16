@@ -134,7 +134,13 @@ data class ChatMessageEntity(
     /**
      * Optional: reply to another message ID.
      */
-    val replyToMessageId: String? = null
+    val replyToMessageId: String? = null,
+
+    /**
+     * The sender's signature over the message (F24), kept so it can be passed on with it.
+     * Null for messages from before this existed, or from older builds.
+     */
+    val authorSig: String? = null
 ) {
     companion object {
         /**

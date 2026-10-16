@@ -1197,6 +1197,21 @@ class MqttTransport @Inject constructor(
         }
         if (envelope.type == "location_update") {
             val memberLocation = acceptedLocation(senderId, envelope.payload) ?: return
+            // The envelope already binds a live fix to its sender; a signature that doesn't
+            // verify is still a fault worth refusing rather than storing and passing on (F24).
+            memberLocation.authorSig?.let { sig ->
+                val ok = runCatching {
+                    e2eeManager.verifyAuthor(
+                        com.example.familysafety.replication.AuthorSignatures.location(memberLocation.copy(authorSig = null)),
+                        sig,
+                        senderKeys.ed25519PublicKey
+                    )
+                }.getOrDefault(false)
+                if (!ok) {
+                    Timber.w("$TAG: location from ${senderId.take(8)} carries a bad author signature — dropped")
+                    return
+                }
+            }
             locationRepository.updateMemberLocation(memberLocation)
         }
     }
