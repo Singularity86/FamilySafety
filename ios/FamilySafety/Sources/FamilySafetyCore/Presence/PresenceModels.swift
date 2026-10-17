@@ -7,7 +7,7 @@ import Foundation
 /// padding, signatures, sealed presence and encrypted manifests turns a legible "peer
 /// needs to update" warning back into silent invisibility.
 public enum ProtocolVersion {
-    public static let current = 3
+    public static let current = 4
     /// Below this a peer can't interoperate; the UI names them (§6.2 rule 3).
     public static let minCompatible = 3
 }
@@ -16,14 +16,17 @@ public struct LocationUpdate: Codable, Equatable {
     public let memberId: String
     public let latitude: Double
     public let longitude: Double
-    public let accuracy: Double
+    /// float32 on Android; kept as Float so the author signature (3.2) widens it the same way.
+    public let accuracy: Float
     public let timestamp: Int64
-    public let speed: Double?
-    public let bearing: Double?
+    public let speed: Float?
+    public let bearing: Float?
+    /// The author's Ed25519 over `AuthorSignatures.location` (3.2, F24). Optional for older senders.
+    public let authorSig: String?
 
     public init(
-        memberId: String, latitude: Double, longitude: Double, accuracy: Double,
-        timestamp: Int64, speed: Double? = nil, bearing: Double? = nil
+        memberId: String, latitude: Double, longitude: Double, accuracy: Float,
+        timestamp: Int64, speed: Float? = nil, bearing: Float? = nil, authorSig: String? = nil
     ) {
         self.memberId = memberId
         self.latitude = latitude
@@ -32,6 +35,7 @@ public struct LocationUpdate: Codable, Equatable {
         self.timestamp = timestamp
         self.speed = speed
         self.bearing = bearing
+        self.authorSig = authorSig
     }
 }
 
