@@ -8,6 +8,8 @@ import Foundation
 /// needs to update" warning back into silent invisibility.
 public enum ProtocolVersion {
     public static let current = 3
+    /// Below this a peer can't interoperate; the UI names them (§6.2 rule 3).
+    public static let minCompatible = 3
 }
 
 public struct LocationUpdate: Codable, Equatable {
@@ -124,10 +126,23 @@ public struct SealedPresence: Codable, Equatable {
     public let v: Int
     /// Base64 of `nonce ‖ ciphertext ‖ tag` over the presence `MessageEnvelope`.
     public let data: String
+    /// The rotated group key it's sealed under (3.3). Absent for the epoch-0 file key, so an
+    /// unrotated family sends exactly the bytes older builds expect.
+    public let kid: String?
 
-    public init(v: Int = 2, data: String) {
+    public init(v: Int = 2, data: String, kid: String? = nil) {
         self.v = v
         self.data = data
+        self.kid = kid
+    }
+
+    private enum CodingKeys: String, CodingKey { case v, data, kid }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(v, forKey: .v)
+        try c.encode(data, forKey: .data)
+        if let kid { try c.encode(kid, forKey: .kid) }
     }
 }
 
@@ -149,13 +164,13 @@ public enum PresenceSealing {
     /// Seals at connect time, together with the presence signature — the last-will body
     /// must already be final when handed to the broker, since the device signs/seals it
     /// once and cannot do either after it's gone.
-    public static func seal(envelopeJSON: Data, groupFileEncryptionKeyHex: String) throws -> SealedPresence {
+    public static func seal(envelopeJSON: Data, groupFileEncryptionKeyHex: String, kid: String? = nil) throws -> SealedPresence {
         guard let key = presenceKey(groupFileEncryptionKeyHex: groupFileEncryptionKeyHex) else {
             throw PresenceSealingError.noGroupKey
         }
         let box = try AES.GCM.seal(envelopeJSON, using: key)
         guard let combined = box.combined else { throw PresenceSealingError.malformedContainer }
-        return SealedPresence(data: combined.base64EncodedString())
+        return SealedPresence(data: combined.base64EncodedString(), kid: kid)
     }
 
     public static func open(_ sealed: SealedPresence, groupFileEncryptionKeyHex: String) throws -> Data {

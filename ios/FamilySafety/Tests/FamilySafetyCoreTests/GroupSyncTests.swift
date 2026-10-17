@@ -277,6 +277,157 @@ final class GroupSyncTests: XCTestCase {
         XCTAssertEqual(event, .ignored("envelope sender is not the updater"))
     }
 
+    // MARK: - Protocol 4 (3.3 keyring, 3.4 sealed control messages)
+
+    func test_keys_currentIsHighestEpochThenLowestKid_andRotationDue() throws {
+        let alice = try identity("alice")
+        let fileKey = String(repeating: "11", count: 32)
+        var g = group([member(alice, "A")], creator: alice, version: 1).with(fileEncryptionKey: .some(fileKey))
+        XCTAssertEqual(GroupKeys.current(g)?.epoch, 0)
+        XCTAssertNil(GroupKeys.stamp(g))
+        XCTAssertFalse(GroupKeys.rotationDue(g))
+        g = g.with(removedMemberIds: ["x"])
+        XCTAssertTrue(GroupKeys.rotationDue(g))
+        let k1 = try GroupKeys.newKey(epoch: 1), k2 = try GroupKeys.newKey(epoch: 1)
+        g = g.with(groupKeys: [k1, k2])
+        XCTAssertEqual(GroupKeys.current(g)?.kid, min(k1.kid, k2.kid))
+        XCTAssertEqual(GroupKeys.stamp(g), min(k1.kid, k2.kid))
+        XCTAssertFalse(GroupKeys.rotationDue(g))
+        XCTAssertEqual(GroupKeys.keyHex(g, kid: nil), fileKey)
+        XCTAssertEqual(GroupKeys.keyHex(g, kid: k2.kid.uppercased()), k2.key)
+        XCTAssertNil(GroupKeys.keyHex(g, kid: "00000000deadbeef"))
+    }
+
+    func test_keys_rejectsForgedChangedOrPrematureEntries() throws {
+        let alice = try identity("alice")
+        let k1 = try GroupKeys.newKey(epoch: 1)
+        let current = group([member(alice, "A")], creator: alice, version: 1).with(removedMemberIds: ["x"], groupKeys: [k1])
+        XCTAssertFalse(GroupKeys.rejects(current: current, remote: current))
+        XCTAssertTrue(GroupKeys.rejects(current: current, remote: current.with(groupKeys: [GroupKey(kid: k1.kid, epoch: 2, key: k1.key)])))
+        let other = try GroupKeys.newKey(epoch: 1)
+        XCTAssertTrue(GroupKeys.rejects(current: current, remote: current.with(groupKeys: [k1, GroupKey(kid: k1.kid, epoch: 1, key: other.key)])))
+        XCTAssertTrue(GroupKeys.rejects(current: current, remote: current.with(groupKeys: [k1, try GroupKeys.newKey(epoch: 2)])))
+        XCTAssertFalse(GroupKeys.rejects(current: current, remote: current.with(groupKeys: [k1, other])))
+    }
+
+    func test_keys_gateWaitsForEveryoneCountedAtFour() {
+        let day: Int64 = 86_400_000
+        let now = 100 * day
+        let ok = GroupKeys.everyoneAtLeast(memberIds: ["me", "a", "b"], selfId: "me",
+                                           sightings: ["a": PeerSighting(protocolVersion: 4, seenAtMs: now - day),
+                                                       "b": PeerSighting(protocolVersion: 3, seenAtMs: now - 31 * day)],
+                                           observingSinceMs: now - 40 * day, nowMs: now, required: 4)
+        XCTAssertTrue(ok, "b is silent past 30 days, so it no longer counts")
+        XCTAssertFalse(GroupKeys.everyoneAtLeast(memberIds: ["me", "a"], selfId: "me",
+                                                 sightings: ["a": PeerSighting(protocolVersion: 3, seenAtMs: now)],
+                                                 observingSinceMs: 0, nowMs: now, required: 4))
+        XCTAssertFalse(GroupKeys.everyoneAtLeast(memberIds: ["me", "a"], selfId: "me", sightings: [:],
+                                                 observingSinceMs: now - day, nowMs: now, required: 4),
+                       "never heard from, and not yet watching 30 days")
+    }
+
+    func test_presence_sealedUnderRotatedKeyCarriesKid_andUnknownKidIsReported() throws {
+        let alice = try identity("alice")
+        let fileKey = String(repeating: "22", count: 32)
+        let k1 = try GroupKeys.newKey(epoch: 1)
+        let rotated = group([member(alice, "A")], creator: alice, version: 2)
+            .with(fileEncryptionKey: .some(fileKey), removedMemberIds: ["x"], groupKeys: [k1])
+        let payload = try PresenceCodec.encode(identity: alice, isOnline: true, timestamp: 5, group: rotated)
+        XCTAssertEqual(try JSONDecoder().decode(SealedPresence.self, from: payload).kid, k1.kid)
+        guard case .status(let s) = PresenceCodec.read(payload, sender: member(alice, "A"), group: rotated) else { return XCTFail() }
+        XCTAssertEqual(s.protocolVersion, ProtocolVersion.current)
+        let behind = rotated.with(groupKeys: [])
+        XCTAssertEqual(PresenceCodec.read(payload, sender: member(alice, "A"), group: behind), .unknownKey)
+        // Unrotated: no kid on the wire, exactly the bytes older builds expect.
+        let plain = try PresenceCodec.encode(identity: alice, isOnline: true, timestamp: 5, group: behind)
+        XCTAssertFalse(String(decoding: plain, as: UTF8.self).contains("kid"))
+    }
+
+    func test_store_rotatesOnlyWhenDueAndGateOpen() async throws {
+        let alice = try identity("alice")
+        let base = group([member(alice, "A")], creator: alice, version: 3)
+            .with(fileEncryptionKey: .some(String(repeating: "33", count: 32)), removedMemberIds: ["gone"])
+        let store = GroupStateStore(localMemberId: alice.memberId, persistence: InMemoryGroupStatePersistence(initial: base))
+        try await store.load()
+        let closed = try await store.rotateKeyIfDue(gateOpen: { _ in false })
+        XCTAssertNil(closed)
+        let rotated = try await store.rotateKeyIfDue(gateOpen: { _ in true })
+        XCTAssertEqual(rotated?.version, 4)
+        XCTAssertEqual(rotated?.groupKeys.map(\.epoch), [1])
+        let again = try await store.rotateKeyIfDue(gateOpen: { _ in true })
+        XCTAssertNil(again)
+    }
+
+    func test_engine_atProtocol4_sealsAcksAndRequests_andRefusesReplays() async throws {
+        let p = try await pair()
+        await p.aliceEngine.recordSighting(memberId: p.bob.memberId, protocolVersion: 4)
+        await p.bobEngine.recordSighting(memberId: p.alice.memberId, protocolVersion: 4)
+        let renamed = p.base.with(groupName: "Renamed", version: 3, previousStateHash: .some(p.base.computeStateHash()))
+        await p.aliceEngine.broadcast(renamed, changeType: .nameChanged)
+        let toBob = await p.aliceOut.to(Topics.groupSyncInbox(memberId: p.bob.memberId))
+        let first = await p.bobEngine.handleGroupSync(payload: toBob[0])
+        XCTAssertEqual(first, .outcome(.applied(renamed)))
+        // Replaying the same sealed update is refused, not applied again or treated as a decrypt failure.
+        let replay = await p.bobEngine.handleGroupSync(payload: toBob[0])
+        XCTAssertEqual(replay, .refused(.replay))
+        // The ack goes sealed to Alice's own inbox, not the group-wide topic.
+        let plainAcks = await p.bobOut.to(Topics.groupAck(groupId: "g-1"))
+        XCTAssertTrue(plainAcks.isEmpty)
+        let sealedAcks = await p.bobOut.to(Topics.groupAckInbox(memberId: p.alice.memberId))
+        XCTAssertEqual(sealedAcks.count, 1)
+        await p.aliceEngine.handleAck(payload: sealedAcks[0])
+        let acked = await p.aliceEngine.acks[3]
+        XCTAssertEqual(acked, [p.bob.memberId])
+        // Once Bob has sequenced to Alice, a plaintext ack or request in his name is refused.
+        let forgedAck = try JSONEncoder().encode(GroupUpdateAck(groupId: "g-1", version: 9, memberId: p.bob.memberId, timestamp: 1))
+        await p.aliceEngine.handleAck(payload: forgedAck)
+        let forged = await p.aliceEngine.acks[9]
+        XCTAssertNil(forged)
+        let forgedRequest = try JSONEncoder().encode(GroupStateRefreshRequest(groupId: "g-1", requesterMemberId: p.bob.memberId,
+                                                                             minimumVersion: 1, reason: "x", timestamp: 1))
+        let refused = await p.aliceEngine.handleRefreshRequest(payload: forgedRequest)
+        XCTAssertEqual(refused, .ignored("unauthenticated or malformed refresh request"))
+        // A sealed request from Bob opens and is judged on its merits (Alice is still at v2,
+        // Bob asks for v3, so she has nothing newer to send).
+        await p.bobEngine.requestRefresh(reason: "test")
+        let requests = await p.bobOut.to(Topics.syncRequest(memberId: p.alice.memberId))
+        XCTAssertNotNil(EncryptedEnvelope.peekSenderMemberId(json: requests[0]))
+        let judged = await p.aliceEngine.handleRefreshRequest(payload: requests[0])
+        XCTAssertEqual(judged, .ignored("we are behind too"))
+    }
+
+    func test_engine_downgradeAfterSequencedIsRefusedAndSurfaced() async throws {
+        let p = try await pair()
+        await p.aliceEngine.recordSighting(memberId: p.bob.memberId, protocolVersion: 4)
+        let v3 = p.base.with(groupName: "One", version: 3, previousStateHash: .some(p.base.computeStateHash()))
+        await p.aliceEngine.broadcast(v3, changeType: .nameChanged)
+        let sealed = await p.aliceOut.to(Topics.groupSyncInbox(memberId: p.bob.memberId))
+        _ = await p.bobEngine.handleGroupSync(payload: sealed[0])
+        // Alice's next update arrives unsequenced (a phone gone back to an older build, or a replay).
+        let legacyAlice = GroupSyncEngine(identity: p.alice, store: p.aliceStore, outbox: p.aliceOut, now: { 1_800_000_000_000 })
+        let v4 = v3.with(groupName: "Two", version: 4, previousStateHash: .some(v3.computeStateHash()))
+        await legacyAlice.broadcast(v4, changeType: .nameChanged)
+        let bare = await p.aliceOut.to(Topics.groupSyncInbox(memberId: p.bob.memberId))
+        let event = await p.bobEngine.handleGroupSync(payload: bare[1])
+        XCTAssertEqual(event, .refused(.unsequencedAfterSequenced))
+        let outdated = await p.bobEngine.outdatedMembers(v3)
+        XCTAssertEqual(outdated, [p.alice.memberId])
+    }
+
+    func test_engine_ledgerPersistsAcrossRestart() async throws {
+        let p = try await pair()
+        let slot = InMemorySlot()
+        let first = GroupSyncEngine(identity: p.alice, store: p.aliceStore, outbox: p.aliceOut, ledgerSlot: slot, now: { 1_800_000_000_000 })
+        await first.recordSighting(memberId: p.bob.memberId, protocolVersion: 4)
+        await first.broadcast(p.base, changeType: .fullSync)
+        let seqBefore = await first.ledger.counter.last
+        let second = GroupSyncEngine(identity: p.alice, store: p.aliceStore, outbox: p.aliceOut, ledgerSlot: slot, now: { 1 })
+        let restored = await second.ledger
+        XCTAssertEqual(restored.sightings[p.bob.memberId]?.protocolVersion, 4)
+        XCTAssertEqual(restored.counter.last, seqBefore)
+        XCTAssertGreaterThan(seqBefore, 0)
+    }
+
     func test_engine_refreshRequests_membersOnly_andRateLimited_F16() async throws {
         let p = try await pair()
         let stranger = try identity("stranger")
@@ -284,7 +435,7 @@ final class GroupSyncTests: XCTestCase {
             try JSONEncoder().encode(GroupStateRefreshRequest(groupId: "g-1", requesterMemberId: id, minimumVersion: 1, reason: "x", timestamp: 1))
         }
         let strangerEvent = await p.aliceEngine.handleRefreshRequest(payload: try request(from: stranger.memberId))
-        XCTAssertEqual(strangerEvent, .ignored("requester not a member"))
+        XCTAssertEqual(strangerEvent, .ignored("unauthenticated or malformed refresh request"))
         let first = await p.aliceEngine.handleRefreshRequest(payload: try request(from: p.bob.memberId))
         let second = await p.aliceEngine.handleRefreshRequest(payload: try request(from: p.bob.memberId))
         let third = await p.aliceEngine.handleRefreshRequest(payload: try request(from: p.bob.memberId))

@@ -21,6 +21,9 @@ public enum NodeEvent: Sendable {
     case presence([String: PresenceStatus])
     /// Someone's identity (or ours) is signed in on two phones at once (2.2). Show it plainly.
     case identityAlert(String)
+    /// Members whose app is too old to follow the family, or who went back to an older one
+    /// (§6.2 rule 3). Name them in the UI.
+    case needsUpdate(Set<String>)
 }
 
 public enum NodeError: Error, Equatable {
@@ -56,12 +59,15 @@ public actor FamilyNode {
     private var connecting = false
     /// A reconnect asked for while a connect was in flight; done as soon as it finishes.
     private var reconnectRequested = false
+    /// Which group key sealed the last-will at connect; a rotation needs a reconnect to re-seal it.
+    private var willKid: String?
+    private var lastNeedsUpdate: Set<String> = []
     private var inbound: AsyncStream<(String, Data)>.Continuation?
     private var bridge: TransportBridge?
     public private(set) var state: NodeState = .noFamily
 
     public init(profile: LocalProfile, credentials: BrokerCredentials, groupPersistence: GroupStatePersistence,
-                inviteSlot: SecretSlot, pendingJoinSlot: SecretSlot, deviceSlot: SecretSlot,
+                inviteSlot: SecretSlot, pendingJoinSlot: SecretSlot, deviceSlot: SecretSlot, ledgerSlot: SecretSlot,
                 onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
         self.profile = profile
         self.identity = try profile.identity()
@@ -79,7 +85,7 @@ public actor FamilyNode {
         }
         self.transport = MqttTransport(memberId: identity.memberId, credentials: credentials, deviceId: deviceId)
         self.outbox = TransportOutbox(transport: transport)
-        self.engine = GroupSyncEngine(identity: identity, store: store, outbox: outbox)
+        self.engine = GroupSyncEngine(identity: identity, store: store, outbox: outbox, ledgerSlot: ledgerSlot)
         self.desk = try InviterDesk(identity: identity, store: store, engine: engine, outbox: outbox, bookSlot: inviteSlot)
         self.onEvent = onEvent
     }
@@ -114,7 +120,7 @@ public actor FamilyNode {
         running = false
         await coordinator?.stop()
         if transport.isConnected, let group = await store.current,
-           let offline = try? PresenceCodec.encode(identity: identity, isOnline: false, timestamp: now(), groupFileKeyHex: group.fileEncryptionKey, deviceId: deviceId) {
+           let offline = try? PresenceCodec.encode(identity: identity, isOnline: false, timestamp: now(), group: group, deviceId: deviceId) {
             transport.publish(topic: Topics.presence(memberId: identity.memberId), payload: offline, qos: .qos1, retained: true)
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
@@ -181,8 +187,8 @@ public actor FamilyNode {
         let group: GroupDefinition
         do { group = try await store.remove(memberId: identity.memberId, identity: identity) } catch { throw NodeError.storageUnavailable }
         await engine.broadcast(group, changeType: .memberRemoved, changedMemberId: identity.memberId)
-        if let key = before?.fileEncryptionKey,
-           let offline = try? PresenceCodec.encode(identity: identity, isOnline: false, timestamp: now(), groupFileKeyHex: key, deviceId: deviceId) {
+        if let before,
+           let offline = try? PresenceCodec.encode(identity: identity, isOnline: false, timestamp: now(), group: before, deviceId: deviceId) {
             transport.publish(topic: Topics.presence(memberId: identity.memberId), payload: offline, qos: .qos1, retained: true)
         }
         try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -202,6 +208,7 @@ public actor FamilyNode {
         setState(.member(group))
         await engine.broadcast(group, changeType: .memberRemoved, changedMemberId: memberId)
         await resubscribe()
+        await groupChanged()
     }
 
     public func approve(requestId: String) async throws {
@@ -233,7 +240,7 @@ public actor FamilyNode {
         let group = await store.current
         let will: Data
         do {
-            will = try PresenceCodec.encode(identity: identity, isOnline: false, timestamp: now(), groupFileKeyHex: group?.fileEncryptionKey, deviceId: deviceId)
+            will = try PresenceCodec.encode(identity: identity, isOnline: false, timestamp: now(), group: group, deviceId: deviceId)
         } catch { return }
         do {
             try await transport.connect(willPayload: will)
@@ -244,8 +251,9 @@ public actor FamilyNode {
             return
         }
         backoffSeconds = 2
+        willKid = group.flatMap(GroupKeys.stamp)
         await resubscribe()
-        if let group, let online = try? PresenceCodec.encode(identity: identity, isOnline: true, timestamp: now(), groupFileKeyHex: group.fileEncryptionKey, deviceId: deviceId) {
+        if let group, let online = try? PresenceCodec.encode(identity: identity, isOnline: true, timestamp: now(), group: group, deviceId: deviceId) {
             transport.publish(topic: Topics.presence(memberId: identity.memberId), payload: online, qos: .qos1, retained: true)
             await engine.requestRefresh(reason: "connected")
             // A joiner was written into the roster by its inviter, unsigned; sign it so relays can
@@ -257,6 +265,7 @@ public actor FamilyNode {
         }
         transport.flushPendingQueue()
         await coordinator?.start()
+        await groupChanged()
     }
 
     /// The last-will is fixed at connect, so a new family (or a new key) needs a new session.
@@ -332,16 +341,29 @@ public actor FamilyNode {
             if let group = await store.current {
                 setState(.member(group))
                 if group.members.map(\.memberId) != before { await resubscribe() }
+                await groupChanged()
             }
         case Topics.syncRequest(memberId: me):
             _ = await engine.handleRefreshRequest(payload: payload)
+        case Topics.groupAckInbox(memberId: me):
+            await engine.handleAck(payload: payload)
         default:
             if let group = await store.current, topic == Topics.groupAck(groupId: group.groupId) {
                 await engine.handleAck(payload: payload)
             } else if topic.hasSuffix("/presence"), let group = await store.current {
                 let sender = topic.split(separator: "/").dropFirst().first.map(String.init) ?? ""
-                guard let member = group.findMember(byId: sender),
-                      let status = PresenceCodec.decode(payload, sender: member, groupFileKeyHex: group.fileEncryptionKey) else { return }
+                guard let member = group.findMember(byId: sender) else { return }
+                let status: PresenceStatus
+                switch PresenceCodec.read(payload, sender: member, group: group) {
+                case .status(let read): status = read
+                case .unknownKey: await engine.unknownGroupKeySeen(); return
+                case .invalid: return
+                }
+                if sender != me {
+                    // Authenticated, so the version it advertises can be recorded (§6.2 rule 2).
+                    await engine.recordSighting(memberId: sender, protocolVersion: status.protocolVersion)
+                    await groupChanged()
+                }
                 if sender == me {
                     // Our own retained presence comes back with our own ID; another install online means
                     // our phrase is in use elsewhere (§6.2 rule 4).
@@ -365,6 +387,29 @@ public actor FamilyNode {
     }
 
     // MARK: - Helpers
+
+    /// After the family's state or a member's advertised version changed: add a group key if a
+    /// removal calls for one and everyone can follow (3.3), re-seal the last-will under a new
+    /// current key, and refresh who needs to update.
+    private func groupChanged() async {
+        guard case .member = state, var group = await store.current else { return }
+        let gateOpen = await engine.rotationGateOpen(group)
+        if GroupKeys.rotationDue(group), gateOpen,
+           let rotated = try? await store.rotateKeyIfDue(gateOpen: { _ in gateOpen }) {
+            group = rotated
+            setState(.member(rotated))
+            await engine.broadcast(rotated, changeType: .versionSync)
+        }
+        if transport.isConnected, GroupKeys.stamp(group) != willKid {
+            willKid = GroupKeys.stamp(group)
+            await reconnect()
+        }
+        let outdated = await engine.outdatedMembers(group)
+        if outdated != lastNeedsUpdate {
+            lastNeedsUpdate = outdated
+            onEvent(.needsUpdate(outdated))
+        }
+    }
 
     private func resumeJoin(_ pending: PendingJoin) {
         coordinator = JoinCoordinator(identity: identity, pending: pending, publisher: outbox, store: store)

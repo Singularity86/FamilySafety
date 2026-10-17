@@ -22,7 +22,8 @@ struct FamilyView: View {
                     Section {
                         ForEach(sortedMembers, id: \.memberId) { member in
                             MemberRow(member: member, isMe: member.memberId == model.memberId,
-                                      status: model.presence[member.memberId])
+                                      status: model.presence[member.memberId],
+                                      needsUpdate: model.needsUpdate.contains(member.memberId))
                                 .swipeActions {
                                     if isCreator && member.memberId != model.memberId {
                                         Button("Remove", role: .destructive) { removing = member }
@@ -70,6 +71,7 @@ struct MemberRow: View {
     let member: FamilyMember
     let isMe: Bool
     let status: PresenceStatus?
+    var needsUpdate = false
 
     var body: some View {
         HStack(spacing: Spacing.m) {
@@ -89,6 +91,7 @@ struct MemberRow: View {
 
     private var detail: String {
         if isMe { return "This phone" }
+        if needsUpdate { return "Needs to update the app to stay in sync" }
         guard let status else { return "Not heard from yet" }
         if status.isOnline { return "Online" }
         let date = Date(timeIntervalSince1970: Double(status.timestamp) / 1000)

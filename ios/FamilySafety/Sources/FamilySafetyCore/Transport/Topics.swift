@@ -29,6 +29,11 @@ public enum Topics {
         "familysafe/group/\(groupId)/ack"
     }
 
+    /// Acks to an updater at protocol ≥ 4, sealed to them (3.4). Under `familysafe/{me}/#`.
+    public static func groupAckInbox(memberId: String) -> String {
+        "familysafe/\(memberId)/group_ack"
+    }
+
     public static func syncRequest(memberId: String) -> String {
         "familysafe/\(memberId)/sync_request"
     }

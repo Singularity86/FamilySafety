@@ -9,6 +9,8 @@ public protocol GroupSyncOutbox: Sendable {
 /// What handling one inbound message did — for the UI's sync indicator and for tests.
 public enum GroupSyncEvent: Equatable {
     case ignored(String)
+    /// An authentic envelope the replay window refused (§3.1). Not a decrypt failure.
+    case refused(ReplayWindow.Verdict)
     case acknowledged(version: Int64)
     case outcome(GroupApplyOutcome)
     case answeredRefresh(requester: String)
@@ -61,14 +63,24 @@ public actor GroupSyncEngine {
     private var refreshOverall = WindowRateLimiter(limit: 6, windowMs: 60_000)
     private var staleRebroadcast = WindowRateLimiter(limit: 1, windowMs: 60_000)
     private var outgoingRefresh = WindowRateLimiter(limit: 2, windowMs: 60_000)
+    /// "Unknown key, ask for a refresh" is triggerable by anyone publishing junk kids (3.3, F16).
+    private var unknownKeyRefresh = WindowRateLimiter(limit: 2, windowMs: 10 * 60_000)
     public private(set) var acks: [Int64: Set<String>] = [:]
+    public private(set) var ledger: ProtocolLedger
+    private let ledgerSlot: SecretSlot?
+    /// Members whose envelopes were refused as a downgrade (§3.1); shown as "needs to update".
+    public private(set) var downgraded: Set<String> = []
 
+    /// - Parameter ledgerSlot: where the protocol ledger persists (3.3, 3.4); nil keeps it in memory.
     public init(
         identity: FamilySafeIdentity,
         store: GroupStateStore,
         outbox: GroupSyncOutbox,
+        ledgerSlot: SecretSlot? = nil,
         now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }
     ) {
+        self.ledgerSlot = ledgerSlot
+        self.ledger = (try? ledgerSlot?.readJSON(ProtocolLedger.self)) ?? ProtocolLedger(observingSinceMs: now())
         self.identity = identity
         self.crypto = E2EECrypto(
             localMemberId: identity.memberId,
@@ -86,19 +98,13 @@ public actor GroupSyncEngine {
     @discardableResult
     public func handleGroupSync(payload: Data) async -> GroupSyncEvent {
         guard let current = await store.current else { return .ignored("no group yet") }
-        guard let senderId = EncryptedEnvelope.peekSenderMemberId(json: payload) else {
-            return .ignored("no sender in envelope")
+        let senderId: String, plaintext: String
+        switch open(payload, roster: current) {
+        case .opened(let sender, let body): senderId = sender.memberId; plaintext = body
+        case .refused(let event): return event
         }
-        guard let sender = current.findMember(byId: senderId),
-              let senderX = Hex.decode(sender.x25519PublicKey),
-              let senderEd = Hex.decode(sender.ed25519PublicKey) else {
-            return .ignored("sender not in our roster")
-        }
-        guard let plaintext = try? crypto.decrypt(
-            envelopeJSON: payload, senderMemberId: senderId,
-            senderX25519PublicKey: senderX, senderEd25519PublicKey: senderEd
-        ), let message = try? JSONDecoder().decode(GroupSyncMessage.self, from: Data(plaintext.utf8)) else {
-            return .ignored("undecryptable or malformed")
+        guard let message = try? JSONDecoder().decode(GroupSyncMessage.self, from: Data(plaintext.utf8)) else {
+            return .ignored("malformed group sync")
         }
         guard message.updaterMemberId == senderId else {
             return .ignored("envelope sender is not the updater")
@@ -115,34 +121,32 @@ public actor GroupSyncEngine {
         }
         if message.version == current.version &&
             message.groupDefinition.computeStateHash() == current.computeStateHash() {
-            await sendAck(groupId: message.groupId, version: message.version)
+            await sendAck(groupId: message.groupId, version: message.version, updaterMemberId: senderId)
             return .acknowledged(version: message.version)
         }
         return await apply(message, current: current)
     }
 
-    /// A message on `familysafe/group/{gid}/ack`. Plaintext on the wire (Android parity), so
-    /// only ever used for display — never for a decision.
+    /// An ack: sealed on `familysafe/{me}/group_ack` from a peer at protocol ≥ 4, or plaintext on
+    /// `familysafe/group/{gid}/ack` from an older one (§6.4). Only ever used for display.
     public func handleAck(payload: Data) async {
-        guard let ack = try? JSONDecoder().decode(GroupUpdateAck.self, from: payload),
-              ack.memberId != identity.memberId,
-              let current = await store.current, ack.groupId == current.groupId,
-              current.containsMember(ack.memberId) else { return }
+        guard let current = await store.current,
+              let ack = openControl(GroupUpdateAck.self, payload, roster: current, claimedSender: \.memberId),
+              ack.memberId != identity.memberId, ack.groupId == current.groupId else { return }
         acks[ack.version, default: []].insert(ack.memberId)
         acks = acks.filter { $0.key >= current.version - 5 }
     }
 
-    /// A message on `familysafe/{me}/sync_request`. Plaintext and unsigned on the wire
-    /// (Android parity), so it is treated as a hint: answered only for current members, and
-    /// rate-limited so a stranger can't turn it into a broadcast storm (F16).
+    /// A message on `familysafe/{me}/sync_request`: sealed from a peer at protocol ≥ 4, else
+    /// plaintext and unsigned (§6.4). Treated as a hint either way: answered only for current
+    /// members, and rate-limited so a stranger can't turn it into a broadcast storm (F16).
     @discardableResult
     public func handleRefreshRequest(payload: Data) async -> GroupSyncEvent {
-        guard let request = try? JSONDecoder().decode(GroupStateRefreshRequest.self, from: payload) else {
-            return .ignored("malformed refresh request")
+        guard let current = await store.current else { return .ignored("no group yet") }
+        guard let request = openControl(GroupStateRefreshRequest.self, payload, roster: current, claimedSender: \.requesterMemberId) else {
+            return .ignored("unauthenticated or malformed refresh request")
         }
-        guard let current = await store.current, request.groupId == current.groupId else {
-            return .ignored("different group")
-        }
+        guard request.groupId == current.groupId else { return .ignored("different group") }
         guard request.requesterMemberId != identity.memberId else { return .ignored("our own request") }
         guard current.containsMember(request.requesterMemberId) else { return .ignored("requester not a member") }
         guard current.version >= request.minimumVersion else { return .ignored("we are behind too") }
@@ -152,6 +156,35 @@ public actor GroupSyncEngine {
         }
         await broadcast(current, changeType: .fullSync, changedMemberId: request.changedMemberId)
         return .answeredRefresh(requester: request.requesterMemberId)
+    }
+
+    // MARK: - Protocol ledger (3.3, 3.4)
+
+    /// Records what a member's *authenticated* presence advertised (§6.2 rule 2).
+    public func recordSighting(memberId: String, protocolVersion: Int) {
+        let t = now()
+        let previous = ledger.sightings[memberId]
+        ledger.sightings[memberId] = PeerSighting(protocolVersion: protocolVersion, seenAtMs: t)
+        // Persist on a change, and otherwise about hourly: the 30-day gate needs no finer clock.
+        if previous?.protocolVersion != protocolVersion || t - (previous?.seenAtMs ?? 0) > 3_600_000 { saveLedger() }
+    }
+
+    /// Whether every member who counts can read a rotated key (3.3).
+    public func rotationGateOpen(_ group: GroupDefinition) -> Bool {
+        GroupKeys.everyoneAtLeast(memberIds: group.members.map(\.memberId), selfId: identity.memberId,
+                                  sightings: ledger.sightings, observingSinceMs: ledger.observingSinceMs,
+                                  nowMs: now(), required: GroupKeys.rotationProtocolVersion)
+    }
+
+    /// Members to show as "needs to update" (§6.2 rule 3).
+    public func outdatedMembers(_ group: GroupDefinition) -> Set<String> {
+        ledger.outdated(group, downgraded: downgraded).subtracting([identity.memberId])
+    }
+
+    /// Presence sealed under a key we don't hold: ask for the current state, rate-limited.
+    public func unknownGroupKeySeen() async {
+        guard unknownKeyRefresh.allow("*", now: now()) else { return }
+        await requestRefresh(reason: "unknown group key")
     }
 
     // MARK: - Outbound
@@ -176,8 +209,7 @@ public actor GroupSyncEngine {
         )
         guard let json = try? JSONEncoder().encode(message), let plaintext = String(data: json, encoding: .utf8) else { return }
         for peer in group.members where peer.memberId != identity.memberId {
-            guard let key = Hex.decode(peer.x25519PublicKey),
-                  let envelope = try? crypto.encrypt(plaintext: plaintext, recipientMemberId: peer.memberId, recipientX25519PublicKey: key) else { continue }
+            guard let envelope = seal(plaintext, to: peer) else { continue }
             await outbox.send(topic: Topics.groupSyncInbox(memberId: peer.memberId), payload: envelope, qos: 1, retained: false)
         }
     }
@@ -189,8 +221,9 @@ public actor GroupSyncEngine {
             groupId: current.groupId, requesterMemberId: identity.memberId,
             minimumVersion: current.version, changedMemberId: changedMemberId, reason: reason, timestamp: now()
         )
-        guard let payload = try? JSONEncoder().encode(request) else { return }
+        guard let json = try? JSONEncoder().encode(request) else { return }
         for peer in current.members where peer.memberId != identity.memberId {
+            guard let payload = controlPayload(json, to: peer) else { continue }
             await outbox.send(topic: Topics.syncRequest(memberId: peer.memberId), payload: payload, qos: 1, retained: false)
         }
     }
@@ -213,7 +246,7 @@ public actor GroupSyncEngine {
 
         switch outcome {
         case .applied(let resolved):
-            await sendAck(groupId: message.groupId, version: message.version)
+            await sendAck(groupId: message.groupId, version: message.version, updaterMemberId: message.updaterMemberId)
             // We merged their branch with ours: send the result back so both sides converge.
             if resolved.computeStateHash() != message.groupDefinition.computeStateHash() {
                 await broadcast(resolved, changeType: .fullSync)
@@ -223,7 +256,7 @@ public actor GroupSyncEngine {
             }
         case .keptOurs(let ours):
             // Android acks here too, then sends its winning branch back.
-            await sendAck(groupId: message.groupId, version: message.version)
+            await sendAck(groupId: message.groupId, version: message.version, updaterMemberId: message.updaterMemberId)
             await broadcast(ours, changeType: .fullSync)
         case .refusedMissingSelf:
             await requestRefresh(reason: "missing_self")
@@ -246,9 +279,98 @@ public actor GroupSyncEngine {
             SodiumRaw.signVerifyDetached(signature: signature, message: payload, publicKey: key)
     }
 
-    private func sendAck(groupId: String, version: Int64) async {
+    /// Only the updater waits on acks: one at protocol ≥ 4 gets it sealed on their own inbox;
+    /// an older one still listens on the group-wide topic (3.4).
+    private func sendAck(groupId: String, version: Int64, updaterMemberId: String) async {
         let ack = GroupUpdateAck(groupId: groupId, version: version, memberId: identity.memberId, timestamp: now())
-        guard let payload = try? JSONEncoder().encode(ack) else { return }
-        await outbox.send(topic: Topics.groupAck(groupId: groupId), payload: payload, qos: 1, retained: false)
+        guard let json = try? JSONEncoder().encode(ack) else { return }
+        if let updater = await store.current?.findMember(byId: updaterMemberId), ledger.speaksSequenced(updater) {
+            guard let sealed = controlPayload(json, to: updater) else { return }
+            await outbox.send(topic: Topics.groupAckInbox(memberId: updater.memberId), payload: sealed, qos: 1, retained: false)
+        } else {
+            await outbox.send(topic: Topics.groupAck(groupId: groupId), payload: json, qos: 1, retained: false)
+        }
+    }
+
+    // MARK: - Envelopes (§3, §3.1)
+
+    private enum Opened {
+        case opened(sender: FamilyMember, body: String)
+        case refused(GroupSyncEvent)
+    }
+
+    /// Encrypts `plaintext` to `peer`, as a sequenced body when they can read one. The counter is
+    /// saved before the number is used, so a crash can't reuse it.
+    private func seal(_ plaintext: String, to peer: FamilyMember) -> Data? {
+        guard let key = Hex.decode(peer.x25519PublicKey) else { return nil }
+        var body = plaintext
+        if ledger.speaksSequenced(peer) {
+            let t = now()
+            let seq = ledger.counter.next(nowMs: t)
+            guard saveLedger(),
+                  let json = try? JSONEncoder().encode(SequencedBody(seq: seq, ts: t, body: plaintext)),
+                  let wrapped = String(data: json, encoding: .utf8) else { return nil }
+            body = wrapped
+        }
+        return try? crypto.encrypt(plaintext: body, recipientMemberId: peer.memberId, recipientX25519PublicKey: key)
+    }
+
+    /// Verifies and opens an envelope from a roster member, then runs the replay window.
+    private func open(_ payload: Data, roster: GroupDefinition) -> Opened {
+        guard let senderId = EncryptedEnvelope.peekSenderMemberId(json: payload) else {
+            return .refused(.ignored("no sender in envelope"))
+        }
+        // Keys come from OUR roster, never from the envelope.
+        guard let sender = roster.findMember(byId: senderId),
+              let senderX = Hex.decode(sender.x25519PublicKey),
+              let senderEd = Hex.decode(sender.ed25519PublicKey) else {
+            return .refused(.ignored("sender not in our roster"))
+        }
+        guard let plaintext = try? crypto.decrypt(envelopeJSON: payload, senderMemberId: senderId,
+                                                  senderX25519PublicKey: senderX, senderEd25519PublicKey: senderEd) else {
+            return .refused(.ignored("undecryptable"))
+        }
+        let sequenced = SequencedBody.parse(plaintext)
+        let verdict = ledger.window.check(sender: ProtocolLedger.windowKey(sender), body: sequenced, nowMs: now())
+        guard verdict == .accept else {
+            if verdict == .unsequencedAfterSequenced { downgraded.insert(senderId) }
+            return .refused(.refused(verdict))
+        }
+        if let sequenced {
+            downgraded.remove(senderId)
+            saveLedger()
+            return .opened(sender: sender, body: sequenced.body)
+        }
+        return .opened(sender: sender, body: plaintext)
+    }
+
+    /// The payload for a refresh request or ack to `peer`: sealed at protocol ≥ 4, else bare.
+    private func controlPayload(_ json: Data, to peer: FamilyMember) -> Data? {
+        guard ledger.speaksSequenced(peer) else { return json }
+        guard let plaintext = String(data: json, encoding: .utf8) else { return nil }
+        return seal(plaintext, to: peer)
+    }
+
+    /// A refresh request or ack from a roster member, or nil. Sealed, the member it names must
+    /// be the envelope's sender. Plaintext proves nothing, so it's taken only while the member it
+    /// names has never sent us a sequenced body; once they have, it's a forgery or a replay.
+    private func openControl<T: Decodable>(_ type: T.Type, _ payload: Data, roster: GroupDefinition,
+                                           claimedSender: (T) -> String) -> T? {
+        if EncryptedEnvelope.peekSenderMemberId(json: payload) != nil {
+            guard case .opened(let sender, let body) = open(payload, roster: roster),
+                  let message = try? JSONDecoder().decode(T.self, from: Data(body.utf8)),
+                  claimedSender(message) == sender.memberId else { return nil }
+            return message
+        }
+        guard let message = try? JSONDecoder().decode(T.self, from: payload),
+              let named = roster.findMember(byId: claimedSender(message)),
+              !ledger.window.hasSequenced(ProtocolLedger.windowKey(named)) else { return nil }
+        return message
+    }
+
+    @discardableResult
+    private func saveLedger() -> Bool {
+        guard let ledgerSlot else { return true }
+        return (try? ledgerSlot.writeJSON(ledger)) != nil
     }
 }

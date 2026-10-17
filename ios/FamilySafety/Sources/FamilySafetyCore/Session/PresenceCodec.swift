@@ -6,40 +6,61 @@ public struct PresenceStatus: Equatable, Sendable {
     public let timestamp: Int64
     /// The sender's install, only when its device signature verified (2.2).
     public let deviceId: String?
+    /// What the sender advertises (§6.2); recorded only because the presence authenticated.
+    public let protocolVersion: Int
 
-    public init(isOnline: Bool, timestamp: Int64, deviceId: String? = nil) {
+    public init(isOnline: Bool, timestamp: Int64, deviceId: String? = nil, protocolVersion: Int = 1) {
         self.isOnline = isOnline
         self.timestamp = timestamp
         self.deviceId = deviceId
+        self.protocolVersion = protocolVersion
     }
 }
 
+/// What reading one presence payload gave.
+public enum PresenceReading: Equatable, Sendable {
+    case status(PresenceStatus)
+    /// Sealed under a group key this phone doesn't hold yet (probably behind after a rotation).
+    /// Anyone can publish junk kids, so a refresh it prompts goes through a rate limiter.
+    case unknownKey
+    case invalid
+}
+
 /// Builds and reads the presence topic's payload (§6.1, §6.2): a signed `PresenceUpdate` in a
-/// padded envelope, sealed under the family's presence key when the family has one.
+/// padded envelope, sealed under the family's current presence key when the family has one.
 public enum PresenceCodec {
+    /// Seals under the group's current key (3.3), stamping its kid unless it is epoch 0. A group
+    /// without a shared key (or none at all) publishes plaintext.
     public static func encode(identity: FamilySafeIdentity, isOnline: Bool, timestamp: Int64,
-                              groupFileKeyHex: String?, deviceId: String? = nil) throws -> Data {
+                              group: GroupDefinition?, deviceId: String? = nil) throws -> Data {
         let presence = try PresenceUpdate.signed(memberId: identity.memberId, isOnline: isOnline, timestamp: timestamp,
                                                  ed25519SecretKey64: identity.ed25519SecretKey64, deviceId: deviceId)
         let inner = String(decoding: try JSONEncoder().encode(presence), as: UTF8.self)
         let envelope = try JSONEncoder().encode(try EnvelopePadding.build(type: .presenceUpdate, payload: inner))
-        guard let groupFileKeyHex else { return envelope }
-        return try JSONEncoder().encode(try PresenceSealing.seal(envelopeJSON: envelope, groupFileEncryptionKeyHex: groupFileKeyHex))
+        guard let group, let key = GroupKeys.current(group) else { return envelope }
+        return try JSONEncoder().encode(try PresenceSealing.seal(envelopeJSON: envelope, groupFileEncryptionKeyHex: key.key,
+                                                                 kid: GroupKeys.stamp(group)))
     }
 
-    /// The verified presence of `sender`, or nil. Accepts a sealed payload and a legacy bare
-    /// envelope; an unsigned or wrongly signed one is ignored.
-    public static func decode(_ payload: Data, sender: FamilyMember, groupFileKeyHex: String?) -> PresenceStatus? {
-        guard !payload.isEmpty else { return nil }
+    /// The verified presence of `sender`. Accepts a sealed payload (opened with the key its kid
+    /// names, never a fallback) and a legacy bare envelope; an unsigned or wrongly signed one is
+    /// invalid.
+    public static func read(_ payload: Data, sender: FamilyMember, group: GroupDefinition) -> PresenceReading {
+        guard !payload.isEmpty else { return .invalid }
         var envelopeJSON = payload
         if let sealed = try? JSONDecoder().decode(SealedPresence.self, from: payload) {
-            guard let groupFileKeyHex, let opened = try? PresenceSealing.open(sealed, groupFileEncryptionKeyHex: groupFileKeyHex) else { return nil }
+            guard let keyHex = GroupKeys.keyHex(group, kid: sealed.kid) else {
+                return sealed.kid == nil ? .invalid : .unknownKey
+            }
+            guard let opened = try? PresenceSealing.open(sealed, groupFileEncryptionKeyHex: keyHex) else { return .invalid }
             envelopeJSON = opened
         }
         guard let envelope = try? JSONDecoder().decode(MessageEnvelope.self, from: envelopeJSON), envelope.type == .presenceUpdate,
               let presence = try? JSONDecoder().decode(PresenceUpdate.self, from: Data(envelope.payload.utf8)),
               presence.memberId == sender.memberId,
-              let key = Hex.decode(sender.ed25519PublicKey), presence.verifySignature(publicKey: key) else { return nil }
-        return PresenceStatus(isOnline: presence.isOnline, timestamp: presence.timestamp, deviceId: presence.verifiedDeviceId(publicKey: key))
+              let key = Hex.decode(sender.ed25519PublicKey), presence.verifySignature(publicKey: key) else { return .invalid }
+        return .status(PresenceStatus(isOnline: presence.isOnline, timestamp: presence.timestamp,
+                                      deviceId: presence.verifiedDeviceId(publicKey: key),
+                                      protocolVersion: presence.protocolVersion))
     }
 }

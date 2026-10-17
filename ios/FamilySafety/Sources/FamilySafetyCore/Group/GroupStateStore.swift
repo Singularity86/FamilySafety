@@ -134,6 +134,17 @@ public actor GroupStateStore {
                                    removalProofs: group.removalProofs + [proof]))
     }
 
+    /// Adds a new group key as the next version if a removal has happened since the newest one
+    /// and `gateOpen` says every member who counts can read it (3.3, Android rotateGroupKeyIfDue).
+    /// Returns the new state, or nil when no rotation was due or allowed.
+    public func rotateKeyIfDue(gateOpen: (GroupDefinition) -> Bool) throws -> GroupDefinition? {
+        guard let group = current, group.containsMember(localMemberId),
+              GroupKeys.rotationDue(group), gateOpen(group) else { return nil }
+        let key = try GroupKeys.newKey(epoch: group.removedMemberIds.count)
+        return try save(group.with(version: group.version + 1, previousStateHash: .some(group.computeStateHash()),
+                                   groupKeys: group.groupKeys + [key]))
+    }
+
     /// Forgets the family on this phone (after leaving, or after an authorized removal).
     public func forget() throws {
         try persistence.delete()
