@@ -33,7 +33,8 @@ class UnifiedTransportManager @Inject constructor(
     private val inviteManagerProvider: Provider<InviteManager>,
     private val groupSyncManagerProvider: Provider<GroupSyncManager>,
     private val sharedFileRepositoryProvider: Provider<SharedFileRepository>,
-    private val vaultRepositoryProvider: Provider<com.example.familysafety.vault.VaultRepository>
+    private val vaultRepositoryProvider: Provider<com.example.familysafety.vault.VaultRepository>,
+    private val avatarRepositoryProvider: Provider<com.example.familysafety.avatar.AvatarRepository>
 ) : TransportProvider {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -49,16 +50,21 @@ class UnifiedTransportManager @Inject constructor(
         }
 
         // Hook up Local P2P incoming messages
-        localTransport.onMessageReceived = { topic, payloadString ->
-            // LocalTransport payloads preserve the same UTF-8 string shape as MQTT payloads.
-            handleIncomingMessage(topic, payloadString)
+        localTransport.onMessageReceived = { topic, payloadString, senderId ->
+            if (topic.contains("/avatar/")) {
+                // Photos travel only over an authenticated LAN session (4.1, F20), so their
+                // handler is told who sent them; nothing else on the broker carries them.
+                scope.launch { avatarRepositoryProvider.get().handleLanMessage(topic, payloadString, senderId) }
+            } else {
+                // LocalTransport payloads preserve the same UTF-8 string shape as MQTT payloads.
+                handleIncomingMessage(topic, payloadString)
+            }
         }
 
-        localTransport.onPeerReachabilityChanged = { peerPrefix, reachable, address ->
+        localTransport.onPeerReachabilityChanged = { memberId, reachable, address ->
             scope.launch {
                 val peer = groupStateManager.groupDefinition.value
-                    ?.members
-                    ?.firstOrNull { it.memberId.take(16) == peerPrefix }
+                    ?.findMemberById(memberId)
                     ?: return@launch
                 val state = if (reachable && address != null) {
                     Timber.i("$TAG: ${peer.memberId.take(8)} reachable on LAN at ${address.hostString}:${address.port}")

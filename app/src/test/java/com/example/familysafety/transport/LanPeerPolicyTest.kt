@@ -1,33 +1,10 @@
 package com.example.familysafety.transport
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LanPeerPolicyTest {
-
-    private val prefix = "55abf73c6fd7b670"
-
-    @Test
-    fun `reads the member prefix from our service name`() {
-        assertEquals(prefix, LanPeerPolicy.peerPrefixFromServiceName("familysafety-$prefix"))
-    }
-
-    @Test
-    fun `a name NSD renamed after a conflict still names the same member`() {
-        // Re-registering while neighbours still cache the old registration produces these.
-        assertEquals(prefix, LanPeerPolicy.peerPrefixFromServiceName("familysafety-$prefix (2)"))
-        assertEquals(prefix, LanPeerPolicy.peerPrefixFromServiceName("familysafety-$prefix (13)"))
-    }
-
-    @Test
-    fun `other services and malformed names are ignored`() {
-        assertNull(LanPeerPolicy.peerPrefixFromServiceName("printer-$prefix"))
-        assertNull(LanPeerPolicy.peerPrefixFromServiceName("familysafety-"))
-        assertNull(LanPeerPolicy.peerPrefixFromServiceName("familysafety-55abf73c"))
-        assertNull(LanPeerPolicy.peerPrefixFromServiceName("familysafety-NOT-HEX-AT-ALL!!"))
-    }
 
     @Test
     fun `retry delays double from 15 seconds and stop at 5 minutes`() {
