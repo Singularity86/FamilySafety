@@ -294,7 +294,7 @@ public actor FamilyNode {
         let (stream, continuation) = AsyncStream<(String, Data)>.makeStream(bufferingPolicy: .bufferingNewest(500))
         inbound = continuation
         let bridge = TransportBridge(continuation: continuation) { [weak self] state in
-            Task { await self?.connectionChanged(state) }
+            Task { [weak self] in await self?.connectionChanged(state) }
         }
         self.bridge = bridge
         transport.delegate = bridge
