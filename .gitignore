@@ -25,3 +25,6 @@ keystore/
 # Swift Package Manager build artifacts (iOS port)
 ios/FamilySafety/.build/
 ios/FamilySafety/.swiftpm/
+
+# Personal Claude Code permissions; each person keeps their own
+.claude/settings.local.json
