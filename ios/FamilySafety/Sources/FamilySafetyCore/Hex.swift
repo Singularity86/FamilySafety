@@ -4,10 +4,10 @@ import Foundation
 /// extension functions used throughout E2EEManager.kt, GroupSyncManager.kt, etc.
 /// Works on UTF-8 bytes rather than `String.Index` (grapheme clusters), so it is linear and a
 /// non-ASCII character can never be mistaken for a pair of hex digits.
-enum Hex {
+public enum Hex {
     private static let digits: [UInt8] = Array("0123456789abcdef".utf8)
 
-    static func encode(_ bytes: [UInt8]) -> String {
+    public static func encode(_ bytes: [UInt8]) -> String {
         var out = [UInt8]()
         out.reserveCapacity(bytes.count * 2)
         for byte in bytes {
@@ -19,7 +19,7 @@ enum Hex {
 
     /// Decodes a hex string of either case. Returns nil if the string has odd length
     /// or contains non-hex characters (callers should treat that as a protocol error).
-    static func decode(_ hex: String) -> [UInt8]? {
+    public static func decode(_ hex: String) -> [UInt8]? {
         let chars = Array(hex.utf8)
         guard chars.count % 2 == 0 else { return nil }
         var bytes = [UInt8]()

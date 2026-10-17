@@ -3,8 +3,13 @@ import Foundation
 /// Topic builders mirroring MqttConfig.kt exactly (§5). Kept dependency-free (no CocoaMQTT
 /// import) so topic-name logic is testable without a broker.
 public enum Topics {
-    public static func generateClientId(memberId: String) -> String {
-        "familysafe_\(memberId)"
+    /// `familysafe_{memberId}_{deviceId}` since 2.2b: one session per install, so two installs of
+    /// one identity both stay online (clone detection works) and, since the device ID is never
+    /// public, nobody can kick a member off by connecting under their ID. Without a device ID
+    /// (the harnesses) it's the legacy `familysafe_{memberId}`.
+    public static func generateClientId(memberId: String, deviceId: String? = nil) -> String {
+        guard let deviceId else { return "familysafe_\(memberId)" }
+        return "familysafe_\(memberId)_\(deviceId)"
     }
 
     /// Legacy sender-keyed location topic — subscribe only, never publish (§5).

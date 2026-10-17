@@ -18,7 +18,7 @@ public struct BrokerCredentials {
     }
 }
 
-public enum MqttConnectionState: Equatable {
+public enum MqttConnectionState: Equatable, Sendable {
     case disconnected
     case connecting
     case connected
@@ -88,10 +88,12 @@ public final class MqttTransport: NSObject {
     }
 
     public var isConnected: Bool { connectionState == .connected }
-    public var clientId: String { Topics.generateClientId(memberId: memberId) }
+    public let deviceId: String?
+    public var clientId: String { Topics.generateClientId(memberId: memberId, deviceId: deviceId) }
 
-    public init(memberId: String, credentials: BrokerCredentials) {
+    public init(memberId: String, credentials: BrokerCredentials, deviceId: String? = nil) {
         self.memberId = memberId
+        self.deviceId = deviceId
         self.credentials = credentials
     }
 
