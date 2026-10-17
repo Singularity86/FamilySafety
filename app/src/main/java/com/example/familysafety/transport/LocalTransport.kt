@@ -176,9 +176,8 @@ class LocalTransport @Inject constructor(
 
     private fun family(): GroupDefinition? = groupStateManager.groupDefinition.value
 
-    /** Every family key, newest first; empty for a family created before group keys existed. */
-    private fun familyKeys(def: GroupDefinition): List<String> =
-        GroupKeys.ring(def).sortedByDescending { it.epoch }.map { it.key }
+    /** Every family key, for recognising names; empty for a family created before group keys existed. */
+    private fun familyKeys(def: GroupDefinition): List<String> = GroupKeys.ring(def).map { it.key }
 
     private fun handshake(def: GroupDefinition, me: String) = LanHandshake(
         myMemberId = me,
@@ -396,7 +395,7 @@ class LocalTransport @Inject constructor(
     private fun registerNsdService() {
         val memberId = localMemberId ?: return
         // No family key (a family from before 1.12.0) means no name the family can recognise.
-        val key = family()?.let { familyKeys(it).firstOrNull() } ?: run {
+        val key = family()?.let { GroupKeys.current(it)?.key } ?: run {
             Timber.w("No family key — LAN advertising off")
             return
         }
