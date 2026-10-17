@@ -7,21 +7,26 @@ import Foundation
 /// padding, signatures, sealed presence and encrypted manifests turns a legible "peer
 /// needs to update" warning back into silent invisibility.
 public enum ProtocolVersion {
-    public static let current = 3
+    public static let current = 4
+    /// Below this a peer can't interoperate; the UI names them (§6.2 rule 3).
+    public static let minCompatible = 3
 }
 
 public struct LocationUpdate: Codable, Equatable {
     public let memberId: String
     public let latitude: Double
     public let longitude: Double
-    public let accuracy: Double
+    /// float32 on Android; kept as Float so the author signature (3.2) widens it the same way.
+    public let accuracy: Float
     public let timestamp: Int64
-    public let speed: Double?
-    public let bearing: Double?
+    public let speed: Float?
+    public let bearing: Float?
+    /// The author's Ed25519 over `AuthorSignatures.location` (3.2, F24). Optional for older senders.
+    public let authorSig: String?
 
     public init(
-        memberId: String, latitude: Double, longitude: Double, accuracy: Double,
-        timestamp: Int64, speed: Double? = nil, bearing: Double? = nil
+        memberId: String, latitude: Double, longitude: Double, accuracy: Float,
+        timestamp: Int64, speed: Float? = nil, bearing: Float? = nil, authorSig: String? = nil
     ) {
         self.memberId = memberId
         self.latitude = latitude
@@ -30,6 +35,7 @@ public struct LocationUpdate: Codable, Equatable {
         self.timestamp = timestamp
         self.speed = speed
         self.bearing = bearing
+        self.authorSig = authorSig
     }
 }
 
@@ -124,10 +130,23 @@ public struct SealedPresence: Codable, Equatable {
     public let v: Int
     /// Base64 of `nonce ‖ ciphertext ‖ tag` over the presence `MessageEnvelope`.
     public let data: String
+    /// The rotated group key it's sealed under (3.3). Absent for the epoch-0 file key, so an
+    /// unrotated family sends exactly the bytes older builds expect.
+    public let kid: String?
 
-    public init(v: Int = 2, data: String) {
+    public init(v: Int = 2, data: String, kid: String? = nil) {
         self.v = v
         self.data = data
+        self.kid = kid
+    }
+
+    private enum CodingKeys: String, CodingKey { case v, data, kid }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(v, forKey: .v)
+        try c.encode(data, forKey: .data)
+        if let kid { try c.encode(kid, forKey: .kid) }
     }
 }
 
@@ -149,13 +168,13 @@ public enum PresenceSealing {
     /// Seals at connect time, together with the presence signature — the last-will body
     /// must already be final when handed to the broker, since the device signs/seals it
     /// once and cannot do either after it's gone.
-    public static func seal(envelopeJSON: Data, groupFileEncryptionKeyHex: String) throws -> SealedPresence {
+    public static func seal(envelopeJSON: Data, groupFileEncryptionKeyHex: String, kid: String? = nil) throws -> SealedPresence {
         guard let key = presenceKey(groupFileEncryptionKeyHex: groupFileEncryptionKeyHex) else {
             throw PresenceSealingError.noGroupKey
         }
         let box = try AES.GCM.seal(envelopeJSON, using: key)
         guard let combined = box.combined else { throw PresenceSealingError.malformedContainer }
-        return SealedPresence(data: combined.base64EncodedString())
+        return SealedPresence(data: combined.base64EncodedString(), kid: kid)
     }
 
     public static func open(_ sealed: SealedPresence, groupFileEncryptionKeyHex: String) throws -> Data {

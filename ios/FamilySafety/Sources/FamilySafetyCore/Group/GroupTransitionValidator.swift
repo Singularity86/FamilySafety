@@ -18,6 +18,8 @@ public enum GroupTransitionRejection: Error, Equatable {
     case joinDetailsChanged
     /// A set file key was replaced (3.1, F25). Rotation (3.3) uses `groupKeys`, never this field.
     case fileKeyChanged
+    /// A keyring entry was altered, isn't genuine, or is newer than the removals (3.3).
+    case groupKeyInvalid
 }
 
 /// One already-collected vote toward a quorum removal (§7.5).
@@ -165,6 +167,12 @@ public enum GroupTransitionValidator {
         if let ours = current.fileEncryptionKey, !ours.isEmpty, let theirs = remote.fileEncryptionKey, !theirs.isEmpty,
            ours.lowercased() != theirs.lowercased() {
             throw GroupTransitionRejection.fileKeyChanged
+        }
+
+        // Rotated keys (3.3): existing entries are immutable, new ones must be genuine and no
+        // newer than the removals in the same state, so a member can't keep minting keys.
+        if GroupKeys.rejects(current: current, remote: remote) {
+            throw GroupTransitionRejection.groupKeyInvalid
         }
     }
 

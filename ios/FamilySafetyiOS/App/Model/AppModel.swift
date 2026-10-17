@@ -22,6 +22,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var connection: MqttConnectionState = .disconnected
     @Published private(set) var prompts: [JoinPrompt] = []
     @Published private(set) var presence: [String: PresenceStatus] = [:]
+    /// Members whose app is too old to follow the family (§6.2 rule 3).
+    @Published private(set) var needsUpdate: Set<String> = []
     @Published var lastError: String?
     /// "Signed in on another phone" (2.2). Shown as its own alert.
     @Published var identityNotice: String?
@@ -31,6 +33,7 @@ final class AppModel: ObservableObject {
     private let inviteSlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "invite-book")
     private let pendingJoinSlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "pending-join")
     private let deviceSlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "device-id")
+    private let ledgerSlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "protocol-ledger")
 
     var memberId: String? { try? profile?.identity().memberId }
 
@@ -115,7 +118,8 @@ final class AppModel: ObservableObject {
         let persistence = FileGroupStatePersistence(fileURL: directory.appendingPathComponent("group.state"),
                                                     keyProvider: KeychainGroupStateKeyProvider())
         let node = try FamilyNode(profile: profile, credentials: credentials, groupPersistence: persistence,
-                                  inviteSlot: inviteSlot, pendingJoinSlot: pendingJoinSlot, deviceSlot: deviceSlot) { [weak self] event in
+                                  inviteSlot: inviteSlot, pendingJoinSlot: pendingJoinSlot, deviceSlot: deviceSlot,
+                                  ledgerSlot: ledgerSlot) { [weak self] event in
             Task { @MainActor in self?.handle(event) }
         }
         self.node = node
@@ -142,6 +146,7 @@ final class AppModel: ObservableObject {
             TestDriver.observe(self, prompts: list)
             #endif
         case .presence(let map): presence = map
+        case .needsUpdate(let members): needsUpdate = members
         case .identityAlert(let text):
             identityNotice = text
             #if DEBUG

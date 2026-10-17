@@ -45,12 +45,15 @@ public struct ReplicatedMessage: Codable, Equatable {
     public let timestamp: Int64
     public let isOutgoing: Bool
     public let replyToMessageId: String?
+    /// The author's signature, passed on unchanged (3.2, F24).
+    public let authorSig: String?
 
     public init(
         messageId: String, conversationId: String, senderId: String, recipientId: String? = nil,
         content: String, messageType: ChatMessageType, status: DeliveryStatus, timestamp: Int64,
-        isOutgoing: Bool, replyToMessageId: String? = nil
+        isOutgoing: Bool, replyToMessageId: String? = nil, authorSig: String? = nil
     ) {
+        self.authorSig = authorSig
         self.messageId = messageId
         self.conversationId = conversationId
         self.senderId = senderId

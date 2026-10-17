@@ -24,10 +24,12 @@ public struct ChatMessagePayload: Codable, Equatable {
     public let timestamp: Int64
     public let conversationId: String?
     public let replyToMessageId: String?
+    /// The sender's Ed25519 over `AuthorSignatures.chatMessage` (3.2, F24). Optional for older senders.
+    public let authorSig: String?
 
     public init(
         messageId: String, content: String, messageType: ChatMessageType, timestamp: Int64,
-        conversationId: String? = nil, replyToMessageId: String? = nil
+        conversationId: String? = nil, replyToMessageId: String? = nil, authorSig: String? = nil
     ) {
         self.messageId = messageId
         self.content = content
@@ -35,6 +37,7 @@ public struct ChatMessagePayload: Codable, Equatable {
         self.timestamp = timestamp
         self.conversationId = conversationId
         self.replyToMessageId = replyToMessageId
+        self.authorSig = authorSig
     }
 }
 
