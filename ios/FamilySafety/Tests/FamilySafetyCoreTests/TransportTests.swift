@@ -11,6 +11,7 @@ final class TransportTests: XCTestCase {
 
     func test_topics_matchAndroidMqttConfigExactly() {
         XCTAssertEqual(Topics.generateClientId(memberId: "m1"), "familysafe_m1")
+        XCTAssertEqual(Topics.generateClientId(memberId: "m1", deviceId: String(repeating: "a", count: 32)), "familysafe_m1_" + String(repeating: "a", count: 32))
         XCTAssertEqual(Topics.location(memberId: "m1"), "familysafe/m1/location")
         XCTAssertEqual(Topics.locationInbox(memberId: "m1"), "familysafe/m1/location_inbox")
         XCTAssertEqual(Topics.presence(memberId: "m1"), "familysafe/m1/presence")

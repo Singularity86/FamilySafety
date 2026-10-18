@@ -14,6 +14,12 @@ public enum GroupTransitionRejection: Error, Equatable {
     case unauthorizedNewTombstone
     case unauthorizedCreatorChange
     case unauthorizedRename
+    /// When or by whom a member was added changed within one membership (3.1, F25).
+    case joinDetailsChanged
+    /// A set file key was replaced (3.1, F25). Rotation (3.3) uses `groupKeys`, never this field.
+    case fileKeyChanged
+    /// A keyring entry was altered, isn't genuine, or is newer than the removals (3.3).
+    case groupKeyInvalid
 }
 
 /// One already-collected vote toward a quorum removal (§7.5).
@@ -80,6 +86,12 @@ public enum GroupTransitionValidator {
                 guard member.ed25519PublicKey.lowercased() == existing.ed25519PublicKey.lowercased(),
                       member.x25519PublicKey.lowercased() == existing.x25519PublicKey.lowercased() else {
                     throw GroupTransitionRejection.memberKeyRotation
+                }
+                // When and by whom someone was added are facts fixed at the add; a new membership
+                // is a new add, so it's exempt.
+                if existing.joinEpoch == member.joinEpoch &&
+                    (existing.addedAtEpochMs != member.addedAtEpochMs || existing.addedByMemberId != member.addedByMemberId) {
+                    throw GroupTransitionRejection.joinDetailsChanged
                 }
             } else {
                 guard let derived = MemberIdDerivation.deriveMemberId(fromEd25519PublicKeyHex: member.ed25519PublicKey),
@@ -148,6 +160,19 @@ public enum GroupTransitionValidator {
 
         if remote.groupName != current.groupName && updaterMemberId != current.creatorMemberId {
             throw GroupTransitionRejection.unauthorizedRename
+        }
+
+        // Once set, the file key is never replaced. A state without one isn't a request to
+        // forget ours (the store keeps it); a phone without one may learn it from any member.
+        if let ours = current.fileEncryptionKey, !ours.isEmpty, let theirs = remote.fileEncryptionKey, !theirs.isEmpty,
+           ours.lowercased() != theirs.lowercased() {
+            throw GroupTransitionRejection.fileKeyChanged
+        }
+
+        // Rotated keys (3.3): existing entries are immutable, new ones must be genuine and no
+        // newer than the removals in the same state, so a member can't keep minting keys.
+        if GroupKeys.rejects(current: current, remote: remote) {
+            throw GroupTransitionRejection.groupKeyInvalid
         }
     }
 
