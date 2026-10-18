@@ -449,10 +449,16 @@ class MqttTransport @Inject constructor(
                         familyMemberKeys.keys.toList()
                     }
 
+                    val sessionKept = connectResult.getOrDefault(false)
                     restoreSubscriptions(
-                        sessionPresent = connectResult.getOrDefault(false),
+                        sessionPresent = sessionKept,
                         memberIds = memberIdsForSubscriptions
                     )
+                    // A new session means the broker dropped whatever was queued for us while
+                    // we were away (it keeps a session about 2 h), roster updates included.
+                    if (!sessionKept) {
+                        groupSyncManager?.requestCatchUp("broker didn't keep our session")
+                    }
                     processPendingMessages()
                     
                     // Announce online
@@ -1250,7 +1256,12 @@ class MqttTransport @Inject constructor(
     }
 
     private suspend fun handleEncryptedLocation(senderId: String, encryptedPayload: String) {
-        val senderKeys = familyMemberKeys[senderId] ?: return
+        val senderKeys = familyMemberKeys[senderId] ?: run {
+            // A member who joined while we were away shares their location long before we
+            // happen to hear a roster update; that's the cue to catch up.
+            groupSyncManager?.catchUpOnUnknownSender(senderId)
+            return
+        }
 
         val decryptResult = ErrorHandler.withRetry(maxAttempts = 2, initialDelayMs = 100) {
             e2eeManager.decryptMessage(

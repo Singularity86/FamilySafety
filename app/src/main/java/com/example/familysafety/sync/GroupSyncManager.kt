@@ -43,6 +43,10 @@ class GroupSyncManager @Inject constructor(
     /** Acks received per version, for [waitForAcknowledgments] to wait on. */
     private val ackCounts = MutableStateFlow<Map<Long, Int>>(emptyMap())
     private val lastAbsentRefreshAt = java.util.concurrent.atomic.AtomicLong(0L)
+    private val lastCatchUpAt = java.util.concurrent.atomic.AtomicLong(Long.MIN_VALUE / 2)
+
+    /** Replaceable for tests. */
+    internal var clock: () -> Long = System::currentTimeMillis
 
     /**
      * Caps roster broadcasts sent *in reply* to something received: refresh requests, and
@@ -230,6 +234,42 @@ class GroupSyncManager @Inject constructor(
     }
 
     /**
+     * Ask the family for the current roster because this phone may have missed updates.
+     *
+     * A phone away longer than the broker keeps its session loses the updates queued for it.
+     * If one of those added a member, every later update from that member is dropped as coming
+     * from a stranger — including the very update that would introduce them — so the phone
+     * stayed on an old roster until someone tapped "Refresh Family State". A member we already
+     * know answers the request with the current roster, which we can check.
+     *
+     * At most once per [CATCH_UP_COOLDOWN_MS]: the usual trigger is an unauthenticated sender
+     * ID, so without a bound anyone could make us send refresh requests at will (F16).
+     *
+     * @return true if a request was started.
+     */
+    fun requestCatchUp(reason: String): Boolean {
+        val now = clock()
+        val last = lastCatchUpAt.get()
+        if (now - last < CATCH_UP_COOLDOWN_MS || !lastCatchUpAt.compareAndSet(last, now)) return false
+        Timber.i("Asking the family for the current roster: $reason")
+        scope.launch { requestGroupStateRefresh(reason = reason) }
+        return true
+    }
+
+    /**
+     * [requestCatchUp] for a message from [senderMemberId], whom our roster doesn't have. Not
+     * for ourselves or someone removed: they are expected to be missing, and a removed member's
+     * phone would otherwise keep us asking.
+     */
+    fun catchUpOnUnknownSender(senderMemberId: String): Boolean {
+        if (senderMemberId == currentMemberId) return false
+        val group = groupStateManager?.groupDefinition?.value ?: return false
+        if (group.findMemberById(senderMemberId) != null) return false
+        if (group.removedMemberIds.any { it == senderMemberId || it.startsWith("$senderMemberId#") }) return false
+        return requestCatchUp("message from ${senderMemberId.take(8)}, who isn't in our roster")
+    }
+
+    /**
      * Called by MqttTransport when a message arrives on the group sync topic.
      */
     suspend fun handleSyncMessage(payload: String) {
@@ -326,6 +366,9 @@ class GroupSyncManager @Inject constructor(
         }
         val sender = currentGroup.findMemberById(senderMemberId) ?: run {
             Timber.w("Unknown sender ${senderMemberId.take(8)} for group sync — ignoring")
+            // Most likely someone who joined while we were away: their update is the one that
+            // would add them, and we can't check it until we know them. Ask someone we do know.
+            catchUpOnUnknownSender(senderMemberId)
             return
         }
         val decryptedJson = try {
@@ -921,6 +964,9 @@ class GroupSyncManager @Inject constructor(
     private fun String.hexToByteArray(): ByteArray =
         chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }
+
+/** At most one catch-up refresh (missed session, unknown sender) per this long. */
+private const val CATCH_UP_COOLDOWN_MS = 5 * 60_000L
 
 /** At most one "we're missing from your roster" refresh per this long. */
 private const val ABSENT_REFRESH_COOLDOWN_MS = 5 * 60_000L
