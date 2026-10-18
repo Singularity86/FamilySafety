@@ -5,8 +5,10 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ColorSpace
 import android.net.Uri
+import com.example.familysafety.group.ConnectionState
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.group.LocalMemberId
+import com.example.familysafety.transport.LocalTransport
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -20,36 +22,75 @@ import javax.inject.Singleton
 /**
  * Orchestrates local-network avatar sync:
  *
- *  1. HTTP server (NanoHTTPD) — serves this device's avatar on an ephemeral port.
- *  2. mDNS (NsdManager) — registers the device and discovers peers.
- *  3. Fetch — when a peer is found whose avatarHash differs from our cache, fetch via HTTP.
- *  4. In-memory cache — exposes [memberAvatars] StateFlow for the UI.
+ *  1. When a family member's phone is on the same network and their roster avatarHash differs
+ *     from our cache, ask them for it over the authenticated LAN session ([LocalTransport]).
+ *  2. Answer such requests with our own photo, to that member only.
+ *  3. In-memory cache — exposes [memberAvatars] StateFlow for the UI.
  *
- * Avatar bytes travel only over the local network (plain HTTP is acceptable for photos).
- * The avatarHash travels via MQTT with the GroupDefinition so remote members still see
- * whether a new avatar is available once they're on the same network.
+ * Avatar bytes travel only over the local network, inside the LAN session (4.1, F20). They used
+ * to come from a plain HTTP server whose access token was printed in its network advertisement,
+ * so anyone on the same Wi-Fi could download every member's photo. The avatarHash travels via
+ * MQTT with the GroupDefinition, so a member far away still learns a new photo exists and gets
+ * it next time they share a network.
  */
 @Singleton
 class AvatarRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     val store: AvatarStore,
     private val groupStateManager: GroupStateManager,
-    private val localMemberId: LocalMemberId
+    private val localMemberId: LocalMemberId,
+    private val localTransport: LocalTransport
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _memberAvatars = MutableStateFlow<Map<String, Bitmap?>>(emptyMap())
     val memberAvatars: StateFlow<Map<String, Bitmap?>> = _memberAvatars.asStateFlow()
 
-    private var httpServer: AvatarHttpServer? = null
-    private var discovery: AvatarDiscovery? = null
+    // When we last asked each member for which hash, so a slow or silent peer isn't re-asked
+    // on every roster or presence change.
+    private val lastRequest = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
 
     /** Call once after onboarding is complete and the group definition is loaded. */
     fun initialize() {
         loadCachedAvatars()
-        startHttpServer()
         observeGroupMembership()
-        startNsd()
+        requestStalePhotosOnLan()
+    }
+
+    /**
+     * A photo request or reply that arrived over an authenticated LAN session from [senderId].
+     * Topics: `familysafe/{me}/avatar/request` `{"hash"}` and `familysafe/{me}/avatar/data`
+     * `{"hash","jpeg"}` (base64).
+     */
+    suspend fun handleLanMessage(topic: String, payload: String, senderId: String) {
+        val me = localMemberId.value
+        val sender = groupStateManager.groupDefinition.value?.findMemberById(senderId) ?: return
+        when {
+            topic == "familysafe/$me/avatar/request" -> {
+                val bytes = store.load(me) ?: return
+                val reply = avatarJson.encodeToString(
+                    AvatarData.serializer(),
+                    AvatarData(AvatarStore.sha256Hex(bytes), java.util.Base64.getEncoder().encodeToString(bytes))
+                )
+                localTransport.send("familysafe/${sender.memberId}/avatar/data", reply, sender.memberId)
+            }
+            topic == "familysafe/$me/avatar/data" -> {
+                val data = runCatching { avatarJson.decodeFromString(AvatarData.serializer(), payload) }.getOrNull() ?: return
+                val bytes = runCatching { java.util.Base64.getDecoder().decode(data.jpeg) }.getOrNull() ?: return
+                if (bytes.size > MAX_AVATAR_BYTES) {
+                    Timber.w("AvatarRepository: avatar from ${senderId.take(8)} larger than $MAX_AVATAR_BYTES bytes — ignored")
+                    return
+                }
+                // Only the photo the roster says this member has, so no one can swap it.
+                if (AvatarStore.sha256Hex(bytes) != sender.avatarHash) {
+                    Timber.w("AvatarRepository: hash mismatch for ${senderId.take(8)}")
+                    return
+                }
+                store.save(sender.memberId, bytes)
+                updateCache(sender.memberId, BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+                Timber.i("AvatarRepository: cached avatar for ${senderId.take(8)}")
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -124,8 +165,6 @@ class AvatarRepository @Inject constructor(
     }
 
     fun cleanup() {
-        try { httpServer?.stop() } catch (_: Exception) {}
-        discovery?.stop()
         scope.cancel()
     }
 
@@ -140,17 +179,6 @@ class AvatarRepository @Inject constructor(
             member.memberId to bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
         }
         _memberAvatars.value = map
-    }
-
-    private fun startHttpServer() {
-        val server = AvatarHttpServer(store, localMemberId.value)
-        try {
-            server.start()
-            httpServer = server
-            Timber.d("AvatarRepository: HTTP server started on port ${server.listeningPort}")
-        } catch (e: Exception) {
-            Timber.e(e, "AvatarRepository: failed to start HTTP server")
-        }
     }
 
     /** Keep the in-memory avatar map in sync as members join/leave. */
@@ -176,80 +204,31 @@ class AvatarRepository @Inject constructor(
     }
 
     /**
-     * Start mDNS registration + discovery. Must run on a thread with a Looper (Main).
-     * Catches SecurityException gracefully if NEARBY_WIFI_DEVICES is not yet granted.
+     * Ask each member on the same network for their photo when the roster's hash for it isn't
+     * the one we hold. Re-checked whenever the roster or anyone's connection changes; a request
+     * for the same hash is repeated at most every [REQUEST_COOLDOWN_MS].
      */
-    private fun startNsd() {
-        val port = httpServer?.listeningPort?.takeIf { it > 0 } ?: return
-        val token = httpServer?.token ?: return
-
-        scope.launch(Dispatchers.Main) {
-            try {
-                val disc = AvatarDiscovery(context, scope) { memberId, host, fetchPort, fetchToken ->
-                    fetchAvatarIfNeeded(memberId, host, fetchPort, fetchToken)
+    private fun requestStalePhotosOnLan() {
+        scope.launch {
+            combine(groupStateManager.groupDefinition, groupStateManager.memberStates) { def, states -> def to states }
+                .collect { (def, states) ->
+                    def ?: return@collect
+                    val me = localMemberId.value
+                    val now = System.currentTimeMillis()
+                    for (member in def.members) {
+                        if (member.memberId == me) continue
+                        val wanted = member.avatarHash ?: continue
+                        if (store.cachedHash(member.memberId) == wanted) continue
+                        if (states[member.memberId]?.connectionState !is ConnectionState.Local) continue
+                        val last = lastRequest[member.memberId]
+                        if (last != null && last.first == wanted && now - last.second < REQUEST_COOLDOWN_MS) continue
+                        lastRequest[member.memberId] = wanted to now
+                        val request = avatarJson.encodeToString(AvatarRequest.serializer(), AvatarRequest(wanted))
+                        launch {
+                            localTransport.send("familysafe/${member.memberId}/avatar/request", request, member.memberId)
+                        }
+                    }
                 }
-                disc.start(localMemberId.value, port, token)
-                discovery = disc
-            } catch (e: SecurityException) {
-                Timber.w("AvatarRepository: NSD requires NEARBY_WIFI_DEVICES (not yet granted)")
-            } catch (e: Exception) {
-                Timber.e(e, "AvatarRepository: NSD start failed")
-            }
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Internal — avatar fetch
-    // -------------------------------------------------------------------------
-
-    private suspend fun fetchAvatarIfNeeded(memberId: String, host: String, port: Int, token: String) {
-        val myId = localMemberId.value
-        if (memberId == myId) return
-
-        val member = groupStateManager.groupDefinition.value?.findMemberById(memberId) ?: return
-        val expectedHash = member.avatarHash ?: return // member has no avatar set
-
-        if (store.cachedHash(memberId) == expectedHash) {
-            Timber.d("AvatarRepository: $memberId avatar already up to date")
-            return
-        }
-
-        Timber.d("AvatarRepository: fetching avatar for $memberId from $host:$port")
-        withContext(Dispatchers.IO) {
-            try {
-                val conn = URL("http://$host:$port/avatar?token=$token").openConnection() as HttpURLConnection
-                conn.connectTimeout = 5_000
-                conn.readTimeout = 10_000
-                conn.connect()
-
-                if (conn.responseCode != HttpURLConnection.HTTP_OK) {
-                    Timber.w("AvatarRepository: HTTP ${conn.responseCode} from $memberId")
-                    return@withContext
-                }
-
-                // Capped: this is any device on the same WiFi answering, and readBytes() on an
-                // endless response would run the phone out of memory. Avatars are a few KB.
-                val bytes = conn.inputStream.use { readCapped(it, MAX_AVATAR_BYTES) }
-                conn.disconnect()
-                if (bytes == null) {
-                    Timber.w("AvatarRepository: avatar from $memberId larger than $MAX_AVATAR_BYTES bytes — ignored")
-                    return@withContext
-                }
-
-                // Verify hash to ensure integrity
-                val actualHash = AvatarStore.sha256Hex(bytes)
-                if (actualHash != expectedHash) {
-                    Timber.w("AvatarRepository: hash mismatch for $memberId")
-                    return@withContext
-                }
-
-                store.save(memberId, bytes)
-                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                updateCache(memberId, bitmap)
-                Timber.i("AvatarRepository: cached avatar for $memberId")
-            } catch (e: Exception) {
-                Timber.e(e, "AvatarRepository: fetch failed for $memberId")
-            }
         }
     }
 
@@ -269,8 +248,16 @@ class AvatarRepository @Inject constructor(
         return Bitmap.createScaledBitmap(bitmap, (w * scale).toInt(), (h * scale).toInt(), true)
     }
 
+    @kotlinx.serialization.Serializable
+    private data class AvatarRequest(val hash: String)
+
+    @kotlinx.serialization.Serializable
+    private data class AvatarData(val hash: String, val jpeg: String)
+
     companion object {
         const val MAX_AVATAR_BYTES = 512 * 1024
+        private const val REQUEST_COOLDOWN_MS = 60_000L
+        private val avatarJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
         /** Up to [limit] bytes of [input], or null if there are more. */
         internal fun readCapped(input: java.io.InputStream, limit: Int): ByteArray? {

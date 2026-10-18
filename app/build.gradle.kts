@@ -259,8 +259,6 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:${cameraxVersion}")
     implementation("androidx.camera:camera-view:${cameraxVersion}")
     
-    // NanoHTTPD — lightweight embedded HTTP server for local avatar serving
-    implementation("org.nanohttpd:nanohttpd:2.3.1")
 
 
     // WorkManager — periodic watchdog to revive LocationService if killed by the OS

@@ -177,6 +177,13 @@ class E2EEManager @Inject constructor(
         return sharedSecret
     }
 
+    /**
+     * The X25519 shared secret with a member (§3's `crypto_box_beforenm`), which keys the LAN
+     * session handshake (4.1). Callers pass the key from the roster, never from a message.
+     */
+    fun sharedSecretWith(memberId: String, x25519PublicKey: ByteArray): ByteArray =
+        getOrComputeSharedSecret(memberId, x25519PublicKey).copyOf()
+
     /** This phone's Ed25519 signature over [message], hex. For author signatures (F24). */
     fun signAsSelf(message: ByteArray): String = cryptoProvider.signMessage(message).toHexString()
 

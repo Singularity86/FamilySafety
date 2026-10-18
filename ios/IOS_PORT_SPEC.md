@@ -41,6 +41,7 @@ Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the bi
 | next (remediation 2.2b) | behaviour | **Client ID per install:** `familysafe_{memberId}_{deviceId}`. Without it, two installs of one identity evicted each other on the broker and the 2.2 warning never fired. It also stops an outsider with the shipped broker credentials from knocking a member offline by connecting under their member ID. No payload changes; the old session expires on the broker (2 h). | §4, §6.2 |
 | next (remediation 3.1) | **wire** | **Authorship of non-hashed fields.** The sync envelope's sender must equal `updaterMemberId`. Members self-sign their profile (`profileUpdatedAtMs`, `profileSignature`) and the subscriber signs confirmations (`subscriptionSignature`); a changed profile or subscription is taken only from its author or with a valid, newer signature, otherwise receivers keep theirs. `addedAt`/`addedBy` are immutable, and a set file key can't be replaced. All new fields are optional and unhashed; `PROTOCOL_VERSION` stays 3. | §6.5, §7.3 |
 | next (remediation 2.2) | **wire** | **Signed device ID in presence.** Optional `deviceId` and `deviceSignature` (over `presence-device:v1:…`). Receivers notify when one member shows two devices within 10 min, or your own identity shows another device. Presence padding goes from 512 to **640**. The existing presence signature is unchanged and older peers ignore the new fields, so `PROTOCOL_VERSION` stays 3. | §6.1, §6.2, §12 |
+| next (remediation 4.1) | **wire (LAN)** | **Authenticated local-network channel, now specified for iOS.** Bonjour names are `fs-` + an HMAC of the day and member ID under the family key (no TXT); every TCP connection opens with a handshake keyed by the two members' X25519 shared secret, then AES-256-GCM frames with strict counters and an ack per message. Photos move inside the session (`avatar/request`, `avatar/data`); the HTTP photo server is gone. Doesn't touch the broker or `PROTOCOL_VERSION`; Android ≤ 1.15.5 phones aren't found, so a mixed pair uses the broker. iOS: implement it for offline families. | §4.1, §5, §11, §12 |
 | next (remediation 3.4) | **wire** | **Replay window; `PROTOCOL_VERSION` 4.** To a recipient advertising ≥ 4, the §3 plaintext is a sequenced body `{"seq","ts","body"}` with a per-sender clock-seeded `seq`; receivers keep a persisted 256-entry window per (sender, Ed25519 key) and refuse replays, bodies over 7 days old or over 24 h ahead, and unsequenced bodies after sequenced ones (surfaced as "needs to update"). Refresh requests and acks go inside the envelope to such peers; acks go to the updater's new `group_ack` inbox. Advertising 4 means 3.2 strict + 3.3 + 3.4; unsigned history by a ≥ 4 author is dropped. The "needs update" warning stays below 3 (`MIN_COMPATIBLE_VERSION`). | §3, §5, §6.2, §6.4, §6.6, §12 |
 | next (remediation 3.2) | **wire** | **Author-signed history.** `LocationUpdate`, `ChatMessagePayload` and `ReplicatedMessage` gain an optional `authorSig`: the author's Ed25519 over a fixed `LOC:v1:…` / `CHAT:v1:…` string with fixed-point coordinates. Replicated items that fail are dropped, live items that carry a bad signature are dropped, and unsigned history is accepted for one release (until 3.4, `PROTOCOL_VERSION` 4). Older peers ignore the field; `PROTOCOL_VERSION` stays 3. | §6.2, §6.3, §6.6, §12 |
 
@@ -396,6 +397,127 @@ intended.
 
 ---
 
+## 4.1 Local network channel (LAN; authenticated since remediation 4.1)
+
+Family members on the same Wi-Fi talk directly, phone to phone, with no internet. This is what
+keeps a family working when the internet or the broker is down (a power cut with a router on
+battery, a cabin, a campsite hotspot), and it is faster at home. Android has always had it; iOS
+should implement it as specified here so mixed families keep working offline.
+
+**What travels over it.** Any message the broker would carry, byte for byte: the same topic and
+the same UTF-8 payload (§5). Handlers are shared; the LAN is only another path.
+- A message for one member (`familysafe/{id}/…`): send over the LAN if that member's phone is
+  reachable and acknowledges it (below); otherwise publish to the broker.
+- A family-wide message (`familysafe/group/{groupId}/…`: manifests, chunks, vault, acks): publish to
+  the broker **and** send to every reachable member over the LAN.
+- Duplicates (LAN and broker both delivering) are expected; the replay window (§3.1) and existing
+  idempotence (file and vault ids, roster versions) absorb them.
+- Two LAN-only topics carry profile photos, which never go to the broker (below).
+
+Nothing here is gated on `PROTOCOL_VERSION`: two phones either complete the handshake or don't
+use the LAN. Android 1.15.5 and earlier advertised `familysafety-<16 hex of memberId>` and accepted
+unauthenticated frames; current builds ignore those names. Do not implement the old scheme.
+
+### Discovery (Bonjour / NSD)
+
+- Service type `_familysafety._tcp`, no TXT records.
+- Service name: `fs-` + the first 8 bytes, lowercase hex, of
+  `HMAC-SHA256(key = family key bytes, msg = UTF-8 "FSLAN-NAME:v1:{day}:{memberId}")`, where
+  `day = floor(unixMillis / 86 400 000)` (UTC day number, decimal) and the family key is the
+  current group key (§6.5 "Group-key rotation": highest epoch, lowest kid; `fileEncryptionKey`
+  before any rotation). A family with no group key doesn't advertise.
+- Re-register under the new name just after each UTC midnight (Android: 5 s after).
+- To identify a found service: strip the `fs-` prefix, take the next 16 characters (ignoring a
+  Bonjour rename suffix such as ` (2)`), and compare against the name of every *other* roster
+  member for yesterday, today and tomorrow under every key in the ring. No match: ignore it.
+- An outsider can't link a name to a person or follow it from one day to the next; a family
+  member can tell whose it is.
+
+### Connection and handshake
+
+TCP to the resolved address. Every frame, both directions, is a 4-byte big-endian length followed
+by that many bytes. A bad length (≤ 0 or over the cap) ends the connection. The dialling phone is
+the client; it sends, the server only acknowledges. Each phone keeps one outbound connection per
+peer and sends one frame at a time on it.
+
+Handshake frames are UTF-8 JSON, at most 4 096 bytes; the server allows 5 s for the whole
+handshake and closes on anything unexpected.
+
+```json
+// 1. client → server
+{"t":"hello","v":1,"from":"<clientId>","to":"<serverId>","n":"<64 hex: 32 random bytes>"}
+// 2. server → client
+{"t":"welcome","v":1,"from":"<serverId>","n":"<64 hex>","mac":"<64 hex>"}
+// 3. client → server
+{"t":"confirm","mac":"<64 hex>"}
+```
+
+```
+shared     = crypto_box_beforenm(peer X25519 public key from the ROSTER, my X25519 private key)
+             (the same 32 bytes §3 uses)
+transcript = "FSLAN:v1:{groupId}:{clientId}:{serverId}:{clientNonce}:{serverNonce}"   (nonces as sent)
+K          = HMAC-SHA256(key = shared, msg = transcript)                               (32 bytes)
+macServer  = hex(HMAC-SHA256(key = K, msg = "server:" + transcript))
+macClient  = hex(HMAC-SHA256(key = K, msg = "client:" + transcript))
+```
+
+- **Server** refuses (closes) unless `v` is 1, `to` is its own member ID, `from` is a roster member
+  other than itself, and `n` is 64 lowercase hex. It replies with its own nonce and `macServer`,
+  then checks `confirm.mac == macClient` (constant-time).
+- **Client** refuses unless `welcome.from` is the member it dialled and `welcome.mac == macServer`.
+  This is the defence against a device advertising someone else's name: it can't compute `K`.
+- Compare MACs in constant time. Keys always come from the local roster, never from a message.
+
+### Data frames
+
+After the handshake every frame is `nonce (12) ‖ AES-256-GCM ciphertext ‖ tag (16)` under `K`, no
+associated data. Nonce = one direction byte (`0x43` 'C' for client→server, `0x53` 'S' for
+server→client), three zero bytes, then an 8-byte big-endian counter starting at 0 for each direction.
+A receiver accepts only the exact next counter; anything else (a forged, altered, replayed or
+reordered frame) ends the connection.
+
+Plaintext is UTF-8 JSON:
+
+```json
+// client → server: a message; id counts up from 1 on each connection
+{"id":1,"topic":"familysafe/<serverId>/chat","payload":"<the broker payload, as a string>"}
+// server → client: the acknowledgement
+{"id":0,"ack":1}
+```
+Unused fields may be absent or `null` (Android sends `"topic":null,"payload":null` on an ack and
+`"ack":null` on a message); decode both. Ignore unknown fields.
+
+- The server delivers a message only if its topic starts with `familysafe/{serverId}/` or
+  `familysafe/group/{groupId}/`; otherwise it drops it **without** an ack. The sender of a delivered
+  message is the session's peer, whatever the payload says (the payload's own envelope is still
+  checked as usual).
+- It re-checks the peer is still in the roster at every frame and closes the session once it isn't.
+- Then it acks. The client treats a send as delivered **only** when the matching ack arrives within
+  5 s; otherwise it closes the connection, forgets the address (re-resolving later with backoff:
+  15 s doubling to 5 min) and publishes to the broker.
+- A message whose plaintext frame would exceed 1 MiB goes to the broker instead.
+- A server accepts at most 16 connections at once.
+
+### Profile photos (LAN only)
+
+Photos are only exchanged inside an authenticated LAN session (Android ≤ 1.15.5 served them from an
+open HTTP server). `FamilyMember.avatarHash` (§6.5) says which photo is current.
+
+```json
+// familysafe/{owner}/avatar/request — "send me your photo"
+{"hash":"<sha256 hex the requester wants>"}
+// familysafe/{requester}/avatar/data — the reply, to the requester only
+{"hash":"<sha256 hex>","jpeg":"<base64 JPEG, at most 524 288 bytes decoded>"}
+```
+
+- Ask a member when their phone is reachable on the LAN and their roster `avatarHash` differs from
+  the photo you hold; don't repeat a request for the same hash within 60 s.
+- Answer any roster member with your current photo.
+- Keep a received photo only if its SHA-256 equals the sender's roster `avatarHash` and it's within
+  the size cap.
+
+---
+
 ## 5. Topic & payload matrix
 
 `{id}` = recipient memberId unless noted. QoS 1 everywhere **except** `location_inbox` and
@@ -427,6 +549,8 @@ presence publishes, which are QoS 0 (§4). The presence last-will stays QoS 1.
 | `familysafe/group/{groupId}/vault/container` | `VaultContainerMessage` | container is already opaque; signed | **yes** |
 | `familysafe/group/{groupId}/vault/chunk/{fileId}/{chunkIndex}` | plaintext `VaultChunkMessage` (data field AES-GCM under the item's content key) | contents ✅ (per-item key, not the group key) | no |
 | `familysafe/{id}/vault/repair` | plaintext `VaultChunkRequest` | ❌ (names only an opaque id) | no |
+| `familysafe/{id}/avatar/request` | **LAN only** (§4.1): `{"hash"}` | inside the LAN session | — |
+| `familysafe/{id}/avatar/data` | **LAN only** (§4.1): `{"hash","jpeg"}` | inside the LAN session | — |
 
 Subscriptions on connect (since 1.15.2), **2 + one per peer**, which fits a family of nine
 inside the 10-subscription quota (§4):
@@ -1971,6 +2095,17 @@ Swift gotchas:
   encrypted channel and both must be disclosed. If iOS uses MapKit and MKDirections instead,
   that is a *different* disclosure (Apple), not none. Decide deliberately, and keep the privacy
   policy, the in-app Privacy screen and the store label in agreement with the code.
+- **The local network channel (§4.1).** The owner wants the family to keep working offline, so
+  build it rather than relying on the broker alone. Network.framework fits: `NWBrowser` and
+  `NWListener` for `_familysafety._tcp` (Bonjour), `NWConnection` for the TCP sessions, CryptoKit
+  for HMAC-SHA256 and AES-GCM, and the existing Sodium `box.beforenm` for the shared secret.
+  Info.plist needs `NSLocalNetworkUsageDescription` (explain it as "reach your family on the same
+  Wi-Fi without the internet") and `NSBonjourServices = ["_familysafety._tcp"]`; iOS asks the user
+  once. The listener only runs while the app runs: in the foreground, and in the background only
+  while location updates keep it alive. So an iPhone receives LAN messages when the app is open
+  (and may during background location wakes), and otherwise peers fall back to the broker after
+  the 5 s ack timeout. That is expected, not a fault; with no internet, delivery to a suspended
+  iPhone waits until it is opened.
 - **The family subscription** (§6.9, shipped in 1.14.0). Gates Chat, History and Files only — never
   location sharing, alerts, crash detection or the Vault. StoreKit replaces Play Billing for
   the purchase and the periodic re-confirmation, but the wire mechanism (a signed field on
@@ -2075,6 +2210,20 @@ fingerprint(ed25519 = 32 × 0x01, x25519 = 32 × 0x02)       = 367443   (shown "
 HMAC-SHA256(key = 32 × 0x07, msg = UTF-8 "JOIN:v2:test")  = d6855d7c0a3be87c363e0c5d5f3df3ac5ce67f4ad242ee224e932b34ae09efe4
 ```
 Asserted in Android's `JoinV2Test`.
+
+### Local network channel (§4.1)
+```
+alice = "a" × 32, bob = "b" × 32 (member IDs)
+service name: family key 32 × 0x11, member alice, day 20000
+  = fs-2c6f0117d77fd614
+transcript(groupId "g", client alice, server bob, clientNonce "01" × 32, serverNonce "02" × 32)
+  = "FSLAN:v1:g:<alice>:<bob>:<"01"×32>:<"02"×32>"
+K = HMAC-SHA256(key = 32 × 0x07, msg = that transcript)
+  = 3e85d124f9191602c8f35b0fef098250aa2bab3d94f68b9e6f7ef089166f59e5
+hello encoding: {"t":"hello","v":1,"from":"<alice>","to":"<bob>","n":"<"01"×32>"}
+data nonce, client→server, counter 0: 43 00 00 00 00 00 00 00 00 00 00 00
+```
+Asserted in Android's `LanProtocolTest` (K and the name cross-checked with .NET `HMACSHA256`).
 
 ### Sequenced body and replay window (§3.1)
 ```
