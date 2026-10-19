@@ -162,6 +162,17 @@ class LanProtocolTest {
             assertEquals(LAN_VECTOR_KEY, key.toHex())
             assertEquals(LAN_VECTOR_NAME, serviceName("11".repeat(32), alice, 20_000L))
         }
+        assertEquals(LAN_VECTOR_MAC_SERVER, LanProtocol.confirmation(key, "server", transcript))
+        assertEquals(LAN_VECTOR_MAC_CLIENT, LanProtocol.confirmation(key, "client", transcript))
+        // First client→server data frame of that session: nonce ‖ ciphertext ‖ tag.
+        val frameJson = Json { encodeDefaults = true }.encodeToString(LanFrame(id = 1, topic = "t", payload = "p"))
+        assertEquals("""{"id":1,"topic":"t","payload":"p","ack":null}""", frameJson)
+        with(LanProtocol) {
+            assertEquals(
+                LAN_VECTOR_FRAME,
+                LanCipher(key, DIR_CLIENT, DIR_SERVER).seal(frameJson.toByteArray()).toHex()
+            )
+        }
         // Encodings the iOS side must match.
         val json = Json { encodeDefaults = true }
         assertEquals(
@@ -174,5 +185,8 @@ class LanProtocolTest {
         // Cross-checked with .NET HMACSHA256; also in IOS_PORT_SPEC.md §12.
         const val LAN_VECTOR_KEY = "3e85d124f9191602c8f35b0fef098250aa2bab3d94f68b9e6f7ef089166f59e5"
         const val LAN_VECTOR_NAME = "fs-2c6f0117d77fd614"
+        const val LAN_VECTOR_MAC_SERVER = "d0479d400fdbc95ac7ed8da1812603ff647d9a049a8fe60530f809f8b36cbe6c"
+        const val LAN_VECTOR_MAC_CLIENT = "66c1c3724f6e4afdb62777bd822cc5324d2a39857958f74daf26196af0ac4112"
+        const val LAN_VECTOR_FRAME = "430000000000000000000000a6e74f814e78af42ec857bc19d99b85588548969880991b9fec78cb4ce4e00a71c185fad41626121f1037a3dd0455a428ad37befc13d373c1d723c06c6"
     }
 }

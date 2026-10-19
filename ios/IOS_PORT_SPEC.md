@@ -41,7 +41,7 @@ Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the bi
 | next (remediation 2.2b) | behaviour | **Client ID per install:** `familysafe_{memberId}_{deviceId}`. Without it, two installs of one identity evicted each other on the broker and the 2.2 warning never fired. It also stops an outsider with the shipped broker credentials from knocking a member offline by connecting under their member ID. No payload changes; the old session expires on the broker (2 h). | §4, §6.2 |
 | next (remediation 3.1) | **wire** | **Authorship of non-hashed fields.** The sync envelope's sender must equal `updaterMemberId`. Members self-sign their profile (`profileUpdatedAtMs`, `profileSignature`) and the subscriber signs confirmations (`subscriptionSignature`); a changed profile or subscription is taken only from its author or with a valid, newer signature, otherwise receivers keep theirs. `addedAt`/`addedBy` are immutable, and a set file key can't be replaced. All new fields are optional and unhashed; `PROTOCOL_VERSION` stays 3. | §6.5, §7.3 |
 | next (remediation 2.2) | **wire** | **Signed device ID in presence.** Optional `deviceId` and `deviceSignature` (over `presence-device:v1:…`). Receivers notify when one member shows two devices within 10 min, or your own identity shows another device. Presence padding goes from 512 to **640**. The existing presence signature is unchanged and older peers ignore the new fields, so `PROTOCOL_VERSION` stays 3. | §6.1, §6.2, §12 |
-| next (remediation 4.2) | **wire** | **Presence under the group topic; `PROTOCOL_VERSION` 5.** Presence also goes to `familysafe/group/{groupId}/presence/{memberId}` (covered by the family wildcard). Once every member who counts advertises ≥ 5 (30-day rule), each phone publishes there only, moves its last-will there, drops the per-peer presence filters (2 subscriptions for any family size) and clears its old retained presence. Until then: both topics, will on the old one. Read both always. Gated on **5**, not 4, because iOS builds at 4 don't read the group topic. Android also asks for a roster refresh on presence from an unknown member (#49). iOS: REQUIRED before advertising 5. | §5, §6.2 |
+| next (remediation 4.2) | **wire** | **Presence under the group topic; `PROTOCOL_VERSION` 5.** Presence also goes to `familysafe/group/{groupId}/presence/{memberId}` (covered by the family wildcard). Once every member who counts advertises ≥ 5 (30-day rule), each phone publishes there only, moves its last-will there, drops the per-peer presence filters (2 subscriptions for any family size) and clears its old retained presence. Until then: both topics (retained only on the old one, so the will overwrites it), will on the old one. Read both always. Gated on **5**, not 4, because iOS builds at 4 don't read the group topic. Android also asks for a roster refresh on presence from an unknown member (#49). iOS: REQUIRED before advertising 5. | §5, §6.2 |
 | next (remediation 4.1) | **wire (LAN)** | **Authenticated local-network channel, now specified for iOS.** Bonjour names are `fs-` + an HMAC of the day and member ID under the family key (no TXT); every TCP connection opens with a handshake keyed by the two members' X25519 shared secret, then AES-256-GCM frames with strict counters and an ack per message. Photos move inside the session (`avatar/request`, `avatar/data`); the HTTP photo server is gone. Doesn't touch the broker or `PROTOCOL_VERSION`; Android ≤ 1.15.5 phones aren't found, so a mixed pair uses the broker. iOS: implement it for offline families. | §4.1, §5, §11, §12 |
 | next (remediation 3.4) | **wire** | **Replay window; `PROTOCOL_VERSION` 4.** To a recipient advertising ≥ 4, the §3 plaintext is a sequenced body `{"seq","ts","body"}` with a per-sender clock-seeded `seq`; receivers keep a persisted 256-entry window per (sender, Ed25519 key) and refuse replays, bodies over 7 days old or over 24 h ahead, and unsequenced bodies after sequenced ones (surfaced as "needs to update"). Refresh requests and acks go inside the envelope to such peers; acks go to the updater's new `group_ack` inbox. Advertising 4 means 3.2 strict + 3.3 + 3.4; unsigned history by a ≥ 4 author is dropped. The "needs update" warning stays below 3 (`MIN_COMPATIBLE_VERSION`). | §3, §5, §6.2, §6.4, §6.6, §12 |
 | next (remediation 3.2) | **wire** | **Author-signed history.** `LocationUpdate`, `ChatMessagePayload` and `ReplicatedMessage` gain an optional `authorSig`: the author's Ed25519 over a fixed `LOC:v1:…` / `CHAT:v1:…` string with fixed-point coordinates. Replicated items that fail are dropped, live items that carry a bad signature are dropped, and unsigned history is accepted for one release (until 3.4, `PROTOCOL_VERSION` 4). Older peers ignore the field; `PROTOCOL_VERSION` stays 3. | §6.2, §6.3, §6.6, §12 |
@@ -496,8 +496,13 @@ Unused fields may be absent or `null` (Android sends `"topic":null,"payload":nul
 - Then it acks. The client treats a send as delivered **only** when the matching ack arrives within
   5 s; otherwise it closes the connection, forgets the address (re-resolving later with backoff:
   15 s doubling to 5 min) and publishes to the broker.
-- A message whose plaintext frame would exceed 1 MiB goes to the broker instead.
+- A message whose plaintext frame would exceed 1 MiB (1 048 576 bytes) goes to the broker
+  instead. Frame length caps: data frames are read up to 1 MiB + 64 bytes (nonce and tag);
+  handshake frames and acks are at most 4 096 bytes.
 - A server accepts at most 16 connections at once.
+- **Reachability.** Android marks a member reachable when their service resolves to an address,
+  and unreachable when a handshake fails or a send isn't acknowledged in time (then re-resolves
+  with the backoff above). Only reachable members are sent to over the LAN.
 
 ### Profile photos (LAN only)
 
@@ -516,6 +521,9 @@ open HTTP server). `FamilyMember.avatarHash` (§6.5) says which photo is current
 - Answer any roster member with your current photo.
 - Keep a received photo only if its SHA-256 equals the sender's roster `avatarHash` and it's within
   the size cap.
+- The sender of a photo is the LAN session's peer. `avatar/…` topics arriving from the **broker**
+  must be ignored: they never travel there, so anything that does is not from a family phone's
+  session.
 
 ---
 
@@ -529,7 +537,7 @@ presence publishes, which are QoS 0 (§4). The presence last-will stays QoS 1.
 | `familysafe/{id}/location_inbox` | Envelope(§3) of `MessageEnvelope{type:"location_update"}` | ✅ per-recipient | no |
 | `familysafe/{sender}/location` | legacy — never publish; **no longer subscribed** (since 1.15.2). Arrives through your own wildcard for your own id; ignore it | ✅ | no |
 | `familysafe/{sender}/presence` | sealed presence, `{"v":2,"data":...}` (§6.2), encrypted under a group subkey because the last-will is published by the broker after the device is gone. **Old topic:** used until the family switches to the group topic (below) | ✅ group key | **yes** |
-| `familysafe/group/{groupId}/presence/{sender}` | the same sealed presence, byte for byte (since 4.2, protocol 5). Covered by the family wildcard | ✅ group key | **yes** |
+| `familysafe/group/{groupId}/presence/{sender}` | the same sealed presence, byte for byte (since 4.2, protocol 5). Covered by the family wildcard | ✅ group key | **after the switch only** (before it: not retained; see below) |
 | `familysafe/{id}/chat` | Envelope of `ChatMessagePayload` | ✅ | no |
 | `familysafe/{id}/chat/receipt` | Envelope of `DeliveryReceipt` (DELIVERED) | ✅ | no |
 | `familysafe/{id}/chat/read` | Envelope of `DeliveryReceipt` (READ) | ✅ | no |
@@ -580,11 +588,18 @@ don't know the group topic still listen on the old one, so the move is family-wi
 - **The gate:** switched once every other member who counts advertises `protocolVersion` ≥ **5**,
   using the same 30-day rule as key rotation (a member silent 30 days doesn't count; one never seen
   blocks until you've been observing 30 days). Each phone decides for itself; they converge.
-- **Before the switch:** publish live presence (retained) to **both** topics; put the last-will on
-  the **old** topic; subscribe each peer's old topic as above.
-- **After the switch:** publish to the group topic only; put the last-will on the group topic;
-  subscribe only the two wildcards (unsubscribe the per-peer filters); clear your retained copy on
-  the old topic once (publish an empty retained message).
+- **The retained copy always sits on the last-will's topic**, so an abrupt death overwrites it. A
+  retained "online" on the other topic would outlive the will's "offline", and a fresh subscriber
+  reading both would keep the newer "online" for good.
+- **Before the switch:** publish live presence to **both** topics: **retained on the old topic,
+  not retained on the group topic**. Put the last-will on the **old** topic; subscribe each peer's
+  old topic as above.
+- **After the switch:** publish to the group topic only, retained; put the last-will on the group
+  topic; subscribe only the two wildcards (unsubscribe the per-peer filters).
+- **Clear the stale copy:** whenever your state (group, switched or not) differs from the last one
+  you cleared for, publish an empty retained message once to the topic the will is **not** on: the
+  old topic after the switch, the group topic before it (this covers a gate that closes again).
+  Android keeps the cleared state in a preference.
 - The gate can close again (a member on an older build joins or reappears): go back to "before".
   A change in either direction needs a reconnect, since the last-will is fixed at connect.
 - **Gated on 5, not 4:** iOS builds advertising 4 don't read the group topic, so 4 can't open it.
@@ -2252,9 +2267,17 @@ transcript(groupId "g", client alice, server bob, clientNonce "01" × 32, server
 K = HMAC-SHA256(key = 32 × 0x07, msg = that transcript)
   = 3e85d124f9191602c8f35b0fef098250aa2bab3d94f68b9e6f7ef089166f59e5
 hello encoding: {"t":"hello","v":1,"from":"<alice>","to":"<bob>","n":"<"01"×32>"}
+macServer = HMAC-SHA256(key = K, msg = "server:" + transcript)
+  = d0479d400fdbc95ac7ed8da1812603ff647d9a049a8fe60530f809f8b36cbe6c
+macClient = HMAC-SHA256(key = K, msg = "client:" + transcript)
+  = 66c1c3724f6e4afdb62777bd822cc5324d2a39857958f74daf26196af0ac4112
 data nonce, client→server, counter 0: 43 00 00 00 00 00 00 00 00 00 00 00
+first client→server frame under K, plaintext {"id":1,"topic":"t","payload":"p","ack":null}
+  (nonce ‖ ciphertext ‖ tag)
+  = 430000000000000000000000a6e74f814e78af42ec857bc19d99b85588548969880991b9fec78cb4ce4e00a71c185fad41626121f1037a3dd0455a428ad37befc13d373c1d723c06c6
 ```
-Asserted in Android's `LanProtocolTest` (K and the name cross-checked with .NET `HMACSHA256`).
+Asserted in Android's `LanProtocolTest` (K, the name and both MACs cross-checked with .NET
+`HMACSHA256`; the frame with Python `cryptography` AESGCM).
 
 ### Sequenced body and replay window (§3.1)
 ```
