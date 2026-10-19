@@ -41,6 +41,7 @@ Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the bi
 | next (remediation 2.2b) | behaviour | **Client ID per install:** `familysafe_{memberId}_{deviceId}`. Without it, two installs of one identity evicted each other on the broker and the 2.2 warning never fired. It also stops an outsider with the shipped broker credentials from knocking a member offline by connecting under their member ID. No payload changes; the old session expires on the broker (2 h). | §4, §6.2 |
 | next (remediation 3.1) | **wire** | **Authorship of non-hashed fields.** The sync envelope's sender must equal `updaterMemberId`. Members self-sign their profile (`profileUpdatedAtMs`, `profileSignature`) and the subscriber signs confirmations (`subscriptionSignature`); a changed profile or subscription is taken only from its author or with a valid, newer signature, otherwise receivers keep theirs. `addedAt`/`addedBy` are immutable, and a set file key can't be replaced. All new fields are optional and unhashed; `PROTOCOL_VERSION` stays 3. | §6.5, §7.3 |
 | next (remediation 2.2) | **wire** | **Signed device ID in presence.** Optional `deviceId` and `deviceSignature` (over `presence-device:v1:…`). Receivers notify when one member shows two devices within 10 min, or your own identity shows another device. Presence padding goes from 512 to **640**. The existing presence signature is unchanged and older peers ignore the new fields, so `PROTOCOL_VERSION` stays 3. | §6.1, §6.2, §12 |
+| next (remediation 4.2) | **wire** | **Presence under the group topic; `PROTOCOL_VERSION` 5.** Presence also goes to `familysafe/group/{groupId}/presence/{memberId}` (covered by the family wildcard). Once every member who counts advertises ≥ 5 (30-day rule), each phone publishes there only, moves its last-will there, drops the per-peer presence filters (2 subscriptions for any family size) and clears its old retained presence. Until then: both topics, will on the old one. Read both always. Gated on **5**, not 4, because iOS builds at 4 don't read the group topic. Android also asks for a roster refresh on presence from an unknown member (#49). iOS: REQUIRED before advertising 5. | §5, §6.2 |
 | next (remediation 4.1) | **wire (LAN)** | **Authenticated local-network channel, now specified for iOS.** Bonjour names are `fs-` + an HMAC of the day and member ID under the family key (no TXT); every TCP connection opens with a handshake keyed by the two members' X25519 shared secret, then AES-256-GCM frames with strict counters and an ack per message. Photos move inside the session (`avatar/request`, `avatar/data`); the HTTP photo server is gone. Doesn't touch the broker or `PROTOCOL_VERSION`; Android ≤ 1.15.5 phones aren't found, so a mixed pair uses the broker. iOS: implement it for offline families. | §4.1, §5, §11, §12 |
 | next (remediation 3.4) | **wire** | **Replay window; `PROTOCOL_VERSION` 4.** To a recipient advertising ≥ 4, the §3 plaintext is a sequenced body `{"seq","ts","body"}` with a per-sender clock-seeded `seq`; receivers keep a persisted 256-entry window per (sender, Ed25519 key) and refuse replays, bodies over 7 days old or over 24 h ahead, and unsequenced bodies after sequenced ones (surfaced as "needs to update"). Refresh requests and acks go inside the envelope to such peers; acks go to the updater's new `group_ack` inbox. Advertising 4 means 3.2 strict + 3.3 + 3.4; unsigned history by a ≥ 4 author is dropped. The "needs update" warning stays below 3 (`MIN_COMPATIBLE_VERSION`). | §3, §5, §6.2, §6.4, §6.6, §12 |
 | next (remediation 3.2) | **wire** | **Author-signed history.** `LocationUpdate`, `ChatMessagePayload` and `ReplicatedMessage` gain an optional `authorSig`: the author's Ed25519 over a fixed `LOC:v1:…` / `CHAT:v1:…` string with fixed-point coordinates. Replicated items that fail are dropped, live items that carry a bad signature are dropped, and unsigned history is accepted for one release (until 3.4, `PROTOCOL_VERSION` 4). Older peers ignore the field; `PROTOCOL_VERSION` stays 3. | §6.2, §6.3, §6.6, §12 |
@@ -527,7 +528,8 @@ presence publishes, which are QoS 0 (§4). The presence last-will stays QoS 1.
 |---|---|---|---|
 | `familysafe/{id}/location_inbox` | Envelope(§3) of `MessageEnvelope{type:"location_update"}` | ✅ per-recipient | no |
 | `familysafe/{sender}/location` | legacy — never publish; **no longer subscribed** (since 1.15.2). Arrives through your own wildcard for your own id; ignore it | ✅ | no |
-| `familysafe/{sender}/presence` | sealed presence, `{"v":2,"data":...}` (§6.2), encrypted under a group subkey because the last-will is published by the broker after the device is gone | ✅ group key | **yes** |
+| `familysafe/{sender}/presence` | sealed presence, `{"v":2,"data":...}` (§6.2), encrypted under a group subkey because the last-will is published by the broker after the device is gone. **Old topic:** used until the family switches to the group topic (below) | ✅ group key | **yes** |
+| `familysafe/group/{groupId}/presence/{sender}` | the same sealed presence, byte for byte (since 4.2, protocol 5). Covered by the family wildcard | ✅ group key | **yes** |
 | `familysafe/{id}/chat` | Envelope of `ChatMessagePayload` | ✅ | no |
 | `familysafe/{id}/chat/receipt` | Envelope of `DeliveryReceipt` (DELIVERED) | ✅ | no |
 | `familysafe/{id}/chat/read` | Envelope of `DeliveryReceipt` (READ) | ✅ | no |
@@ -561,7 +563,32 @@ inside the 10-subscription quota (§4):
   whose sender is yourself (Android already did).
 - `familysafe/group/{groupId}/#` — group `ack`, files `manifest`, files `chunk/…`,
   `vault/container`, `vault/chunk/…`.
-- Per peer: `familysafe/{peer}/presence`. On a member's removal, unsubscribe theirs.
+- Per peer: `familysafe/{peer}/presence`, **only until the presence switch** below. On a member's
+  removal, unsubscribe theirs.
+
+**Presence switch (remediation 4.2, protocol 5).** With one presence filter per member, a family of
+ten or more exceeds the quota and the members past the tenth silently never appear. Presence
+therefore moves under the family's topic, `familysafe/group/{groupId}/presence/{memberId}`, which
+the family wildcard already covers: **two subscriptions, whatever the family's size.** Phones that
+don't know the group topic still listen on the old one, so the move is family-wide:
+
+- **Always:** read presence from both topics. The sender is the topic's last segment on the group
+  topic (only for your own `groupId`), the second on the old one. The payload must still name the
+  same member, and the usual signature, replay and downgrade checks apply. The same update arriving
+  on both is expected; the timestamp check drops the second. Ignore an empty payload (a cleared
+  retained copy).
+- **The gate:** switched once every other member who counts advertises `protocolVersion` ≥ **5**,
+  using the same 30-day rule as key rotation (a member silent 30 days doesn't count; one never seen
+  blocks until you've been observing 30 days). Each phone decides for itself; they converge.
+- **Before the switch:** publish live presence (retained) to **both** topics; put the last-will on
+  the **old** topic; subscribe each peer's old topic as above.
+- **After the switch:** publish to the group topic only; put the last-will on the group topic;
+  subscribe only the two wildcards (unsubscribe the per-peer filters); clear your retained copy on
+  the old topic once (publish an empty retained message).
+- The gate can close again (a member on an older build joins or reappears): go back to "before".
+  A change in either direction needs a reconnect, since the last-will is fixed at connect.
+- **Gated on 5, not 4:** iOS builds advertising 4 don't read the group topic, so 4 can't open it.
+  Advertise 5 only once you read and publish presence as above.
 
 Route incoming messages by topic **suffix**, as before: the wildcards change which filters
 match, not the topic names messages arrive on.
@@ -719,8 +746,12 @@ restored on a new phone"*.
 PROTOCOL_VERSION = 2      // 1 = pre-1.12.x; 2 = padded + signed + sealed + encrypted manifests
                           // 3 = tombstones + reconciliation (state hash changed)
                           // 4 = signs all history (3.2), keyring (3.3), sequenced envelopes (3.4)
+                          // 5 = reads and publishes presence under the group topic (4.2, §5)
 MIN_COMPATIBLE_VERSION = 3
 ```
+
+Android advertises **5** from remediation 4.2. Everything gated on 4 still is (≥ 4): a 5 does
+all a 4 does, plus the presence switch in §5.
 
 Android advertises **4** from remediation 3.4. A 3 still interoperates fully; it only keeps the
 family-wide switches (key rotation, dropping unsigned history) off. So rule 3 below compares

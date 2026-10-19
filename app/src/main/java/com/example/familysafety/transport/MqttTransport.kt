@@ -103,6 +103,9 @@ class MqttTransport @Inject constructor(
 
     /** Which group key sealed the last-will at connect; a rotation needs a reconnect to re-seal it. */
     @Volatile private var willKid: String? = null
+
+    /** Whether this connection uses the group presence topic only (4.2); fixed at connect, like the will. */
+    @Volatile private var presenceSwitched = false
     private var keyWatchStarted = false
 
     /** "Unknown key, ask for a refresh" is triggerable by anyone publishing junk kids (F16). */
@@ -151,6 +154,7 @@ class MqttTransport @Inject constructor(
         private const val SESSION_PREFS = "mqtt_session"
         private const val PREF_SUBSCRIBED_FINGERPRINT = "subscribed_fingerprint"
         private const val PREF_RESET_SESSION = "reset_session"
+        private const val PREF_LEGACY_PRESENCE_CLEARED = "legacy_presence_cleared"
 
         /** EMQX Serverless: subscriptions granted per connection; the rest are refused. */
         const val BROKER_SUBSCRIPTION_QUOTA = 10
@@ -165,9 +169,14 @@ class MqttTransport @Inject constructor(
          * the vault and every peer's presence. As wildcards they cost 2, which leaves room
          * for a family of nine.
          */
-        fun subscriptionFilters(memberId: String, groupId: String, otherMemberIds: List<String>): List<String> =
+        fun subscriptionFilters(
+            memberId: String,
+            groupId: String,
+            otherMemberIds: List<String>,
+            presenceSwitched: Boolean = false
+        ): List<String> =
             listOf(MqttConfig.getOwnWildcardTopic(memberId), MqttConfig.getGroupWildcardTopic(groupId)) +
-                otherMemberIds.flatMap { memberTopicFilters(it) }
+                PresenceTopics.peerFilters(otherMemberIds, presenceSwitched)
 
         /**
          * The filters builds before the wildcards subscribed one by one. A kept session still
@@ -377,8 +386,10 @@ class MqttTransport @Inject constructor(
                         deviceId = DeviceIdentity.get(context)
                     )
                     willKid = groupStateManager.groupDefinition.value?.let { GroupKeys.stampFor(it) }
+                    presenceSwitched = presenceGateOpen()
                     setWill(
-                        MqttConfig.getPresenceTopic(memberIdParam),
+                        groupId?.let { PresenceTopics.willTopic(memberIdParam, it, presenceSwitched) }
+                            ?: PresenceTopics.legacy(memberIdParam),
                         sealPresence(willJson),
                         MqttConfig.DEFAULT_QOS,
                         true
@@ -504,7 +515,7 @@ class MqttTransport @Inject constructor(
                         // Location and presence are handled here — e2eeManager + familyMemberKeys live here
                         when {
                             topicStr.endsWith("/location_inbox") -> handleLocationInbox(payloadStr)
-                            topicStr.endsWith("/location") || topicStr.endsWith("/presence") ->
+                            topicStr.endsWith("/location") || PresenceTopics.isPresenceTopic(topicStr) ->
                                 handleLocationOrPresence(topicStr, payloadStr)
                             else -> onMessageReceived?.invoke(topicStr, payloadStr)
                         }
@@ -539,7 +550,7 @@ class MqttTransport @Inject constructor(
         val id = memberId ?: return
         val gId = groupId ?: return
         val peers = memberIds.filter { it != id }
-        val topics = subscriptionFilters(id, gId, peers)
+        val topics = subscriptionFilters(id, gId, peers, presenceSwitched)
         val fingerprint = subscriptionFingerprint(MqttConfig.BROKER_URL, topics)
         val prefs = context.getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE)
 
@@ -753,18 +764,65 @@ class MqttTransport @Inject constructor(
 
     private suspend fun publishPresence(isOnline: Boolean) {
         val id = memberId ?: return
-        val topic = MqttConfig.getPresenceTopic(id)
+        val gId = groupId
+        val topics = if (gId != null) PresenceTopics.publishTopics(id, gId, presenceSwitched)
+            else listOf(PresenceTopics.legacy(id))
         val presenceJson = MessageProtocol.encodePresenceUpdate(
             id,
             isOnline,
             sign = { cryptoProvider.signMessage(it) },
             deviceId = DeviceIdentity.get(context)
         )
+        val sealed = sealPresence(presenceJson)
         // At-most-once, because retained does the work here. The broker keeps the last
         // presence message whatever its QoS and hands it to every new subscriber, and the
         // next update supersedes this one entirely — so an acknowledged redelivery buys
         // nothing and costs an in-flight slot on every publish.
-        publishRaw(topic, sealPresence(presenceJson), MqttConfig.QOS_AT_MOST_ONCE, true)
+        topics.forEach { publishRaw(it, sealed, MqttConfig.QOS_AT_MOST_ONCE, true) }
+        // After the switch nothing listens on the old topic; clear its retained copy once
+        // so the broker doesn't keep handing out a stale "online" for us.
+        if (presenceSwitched && gId != null) clearLegacyPresenceOnce(id)
+    }
+
+    /** Whether every member who counts reads presence from the group topic (4.2). */
+    private fun presenceGateOpen(): Boolean {
+        val me = memberId ?: return false
+        val def = groupStateManager.groupDefinition.value ?: return false
+        return GroupKeys.everyoneAtLeast(
+            memberIds = def.members.map { it.memberId },
+            selfId = me,
+            sightings = peerSightings.snapshot(),
+            observingSinceMs = peerSightings.observingSinceMs,
+            nowMs = System.currentTimeMillis(),
+            required = PresenceTopics.PROTOCOL_VERSION
+        )
+    }
+
+    /**
+     * Re-check the presence gate after a sighting or roster change. Either direction needs a
+     * reconnect: the last-will's topic is fixed at connect, and the subscription set changes.
+     */
+    private fun checkPresenceSwitch() {
+        val open = presenceGateOpen()
+        if (open == presenceSwitched || _connectionState.value != ConnectionState.Connected) return
+        Timber.i("$TAG: presence ${if (open) "moving to" else "back to dual with"} the group topic — reconnecting")
+        if (!open) {
+            context.getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE).edit()
+                .remove(PREF_LEGACY_PRESENCE_CLEARED).apply()
+        }
+        scope.launch {
+            try { mqttClient?.disconnect()?.waitForCompletion(5_000) } catch (_: Exception) { }
+            _connectionState.value = ConnectionState.Disconnected
+            scheduleReconnect()
+        }
+    }
+
+    private suspend fun clearLegacyPresenceOnce(id: String) {
+        val prefs = context.getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(PREF_LEGACY_PRESENCE_CLEARED, false)) return
+        if (publishRaw(PresenceTopics.legacy(id), ByteArray(0), MqttConfig.DEFAULT_QOS, true)) {
+            prefs.edit().putBoolean(PREF_LEGACY_PRESENCE_CLEARED, true).apply()
+        }
     }
 
     /**
@@ -805,6 +863,8 @@ class MqttTransport @Inject constructor(
             groupStateManager.groupDefinition.collect { def ->
                 def ?: return@collect
                 if (GroupKeys.rotationDue(def)) rotateGroupKeyIfDue()
+                // A member joining or leaving can open or close the presence gate (4.2).
+                checkPresenceSwitch()
                 val stamp = GroupKeys.stampFor(def)
                 if (stamp != willKid && _connectionState.value == ConnectionState.Connected) {
                     Timber.i("$TAG: group key changed — reconnecting to re-seal the last-will")
@@ -1029,7 +1089,7 @@ class MqttTransport @Inject constructor(
         handleLocationOrPresence(topic, encryptedPayload)
 
     private suspend fun handleLocationOrPresence(topic: String, payload: String) {
-        if (topic.endsWith("/presence")) {
+        if (PresenceTopics.isPresenceTopic(topic)) {
             handlePresence(topic, payload)
             return
         }
@@ -1155,12 +1215,19 @@ class MqttTransport @Inject constructor(
     }
 
     private suspend fun handlePresence(topic: String, payload: String) {
-        val senderId = topic.split("/").getOrNull(1) ?: return
+        // The old topic or the group one (4.2); the same update may come on both while a
+        // family is mid-switch, and the timestamp check below drops the second copy.
+        val senderId = PresenceTopics.senderOf(topic, groupId) ?: return
+        if (payload.isEmpty()) return // a cleared retained copy
         if (senderId == memberId) {
             checkOwnPresence(payload)
             return
         }
-        if (!familyMemberKeys.containsKey(senderId)) return
+        if (!familyMemberKeys.containsKey(senderId)) {
+            // Usually someone who joined while we were away; their presence is the first sign.
+            groupSyncManager?.catchUpOnUnknownSender(senderId)
+            return
+        }
 
         val opened = openPresence(payload) ?: return
         val presenceUpdate = try {
@@ -1194,6 +1261,7 @@ class MqttTransport @Inject constructor(
         // Kept across restarts for the protocol-4 gate (3.3); a changed version may open it.
         if (peerSightings.record(senderId, presenceUpdate.protocolVersion, System.currentTimeMillis())) {
             scope.launch { rotateGroupKeyIfDue() }
+            checkPresenceSwitch()
         }
 
         // Recorded after authentication so a rejected message cannot mark a peer stale.
