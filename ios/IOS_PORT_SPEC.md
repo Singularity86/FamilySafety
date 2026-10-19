@@ -413,7 +413,14 @@ the same UTF-8 payload (§5). Handlers are shared; the LAN is only another path.
   the broker **and** send to every reachable member over the LAN.
 - Duplicates (LAN and broker both delivering) are expected; the replay window (§3.1) and existing
   idempotence (file and vault ids, roster versions) absorb them.
-- Two LAN-only topics carry profile photos, which never go to the broker (below).
+- Two LAN-only topics carry profile photos, which never go to the broker (below). They are the
+  one exception to "otherwise publish to the broker": if the LAN send fails, the photo isn't sent.
+- Presence doesn't cross the LAN: `familysafe/{sender}/presence` and the group presence topic fail
+  the server's topic rule below. **Reachable** is the LAN's own online signal, and offline it is
+  the only one. A member is reachable once a discovered name resolves to them (Discovery, below);
+  they stop being reachable when a send to them fails or times out, their service disappears, or
+  this phone's network changes. Android shows a reachable member as on the local network
+  (`ConnectionState.Local`) and never downgrades that because broker presence says online.
 
 Nothing here is gated on `PROTOCOL_VERSION`: two phones either complete the handshake or don't
 use the LAN. Android 1.15.5 and earlier advertised `familysafety-<16 hex of memberId>` and accepted
@@ -437,7 +444,10 @@ unauthenticated frames; current builds ignore those names. Do not implement the 
 ### Connection and handshake
 
 TCP to the resolved address. Every frame, both directions, is a 4-byte big-endian length followed
-by that many bytes. A bad length (≤ 0 or over the cap) ends the connection. The dialling phone is
+by that many bytes. A bad length (≤ 0 or over the cap) ends the connection. The caps: 4 096 bytes
+for every handshake frame and for an ack frame (server → client), and 1 MiB + 64 bytes for a data
+frame (client → server; a 1 MiB plaintext plus the 12-byte nonce and 16-byte tag, with room to
+spare). The dialling phone is
 the client; it sends, the server only acknowledges. Each phone keeps one outbound connection per
 peer and sends one frame at a time on it.
 
@@ -516,6 +526,8 @@ open HTTP server). `FamilyMember.avatarHash` (§6.5) says which photo is current
 - Answer any roster member with your current photo.
 - Keep a received photo only if its SHA-256 equals the sender's roster `avatarHash` and it's within
   the size cap.
+- Take `avatar/request` and `avatar/data` **only from a LAN session**, with the session's peer as
+  the sender. If either arrives from the broker (anyone can publish to your inbox), drop it.
 
 ---
 
@@ -2253,8 +2265,21 @@ K = HMAC-SHA256(key = 32 × 0x07, msg = that transcript)
   = 3e85d124f9191602c8f35b0fef098250aa2bab3d94f68b9e6f7ef089166f59e5
 hello encoding: {"t":"hello","v":1,"from":"<alice>","to":"<bob>","n":"<"01"×32>"}
 data nonce, client→server, counter 0: 43 00 00 00 00 00 00 00 00 00 00 00
+macServer = hex(HMAC-SHA256(key = K, msg = "server:" + that transcript))
+  = d0479d400fdbc95ac7ed8da1812603ff647d9a049a8fe60530f809f8b36cbe6c
+macClient = hex(HMAC-SHA256(key = K, msg = "client:" + that transcript))
+  = 66c1c3724f6e4afdb62777bd822cc5324d2a39857958f74daf26196af0ac4112
+data frame, client→server, counter 0, under K, plaintext (UTF-8, no spaces)
+  {"id":1,"topic":"familysafe/<bob>/chat","payload":"hi"}
+  = nonce ‖ ciphertext ‖ tag =
+  430000000000000000000000a6e74f814e78af42ec857bc19d99b8558846ca28c31589b3f3ce88ff8e1640b5
+  5c561fae406b2179fd147433cfbd353b9ad961db68089d7e5e5502ee12aa0b611f911b6e987bcab9ecd1c2bb
+  c8cd54d1dd3f18e991cfb6c2d351a3fc6f445b2ac626
 ```
 Asserted in Android's `LanProtocolTest` (K and the name cross-checked with .NET `HMACSHA256`).
+`macServer`, `macClient` and the data frame were added from the Mac's review (2026-10-19): the MACs
+computed with Python `hmac`, the frame with Apple CryptoKit `AES.GCM` and the fixed nonce.
+Android: please assert them in `LanProtocolTest` too.
 
 ### Sequenced body and replay window (§3.1)
 ```
