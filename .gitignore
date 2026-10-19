@@ -32,3 +32,9 @@ ios/FamilySafety/.swiftpm/
 # iOS app: broker credentials generated from the Mac Keychain - NEVER commit
 ios/FamilySafetyiOS/Config/Secrets.xcconfig
 ios/FamilySafetyiOS/build/
+
+# Code reviews and remediation plans are kept local only
+/app/REMEDIATION_PLAN.md
+/ios/REMEDIATION_PLAN.md
+/app/CODE_REVIEW_*.md
+/ios/CODE_REVIEW_*.md
