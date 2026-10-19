@@ -110,6 +110,11 @@ object MqttConfig {
         return "familysafe/$memberId/presence"
     }
 
+    /** Presence under the family's topic, covered by [getGroupWildcardTopic] (4.2). See [PresenceTopics]. */
+    fun getGroupPresenceTopic(groupId: String, memberId: String): String {
+        return "familysafe/group/$groupId/presence/$memberId"
+    }
+
     /**
      * Every topic under one member's id: their inboxes, plus their own presence and legacy
      * location, which the handlers already ignore when the sender is us. Subscribed as one

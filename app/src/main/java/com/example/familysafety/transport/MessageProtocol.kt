@@ -38,10 +38,14 @@ object MessageProtocol {
      * writes, holds a keyring, and sequences envelopes, so the family switches to key rotation and
      * strict history only once everyone advertises it.
      *
+     * Version 5 (remediation 4.2) reads presence from the group topic. Phones publish to both
+     * topics until every member advertises 5, then move presence (and the last-will) under the
+     * group topic and drop the per-member subscriptions. A 4 still interoperates.
+     *
      * Bump this only when a change breaks interoperability or a family-wide switch needs to
      * know who supports it. Additive fields do not warrant it.
      */
-    const val PROTOCOL_VERSION = 4
+    const val PROTOCOL_VERSION = 5
 
     /** Oldest version that still interoperates; below it, the UI says the member must update. */
     const val MIN_COMPATIBLE_VERSION = 3
