@@ -71,7 +71,7 @@ public actor FamilyNode {
     private let presenceSlot: SecretSlot
     private let security: SecurityRecorder
     private var lastNeedsUpdate: Set<String> = []
-    private var inbound: AsyncStream<(String, Data)>.Continuation?
+    private var inbound: AsyncStream<(String, Data, Bool)>.Continuation?
     private var bridge: TransportBridge?
     public private(set) var state: NodeState = .noFamily
 
@@ -325,7 +325,7 @@ public actor FamilyNode {
 
     private func startInbound() {
         guard inbound == nil else { return }
-        let (stream, continuation) = AsyncStream<(String, Data)>.makeStream(bufferingPolicy: .bufferingNewest(500))
+        let (stream, continuation) = AsyncStream<(String, Data, Bool)>.makeStream(bufferingPolicy: .bufferingNewest(500))
         inbound = continuation
         let bridge = TransportBridge(continuation: continuation) { [weak self] state in
             Task { [weak self] in await self?.connectionChanged(state) }
@@ -333,11 +333,11 @@ public actor FamilyNode {
         self.bridge = bridge
         transport.delegate = bridge
         Task { [weak self] in
-            for await (topic, payload) in stream { await self?.route(topic: topic, payload: payload) }
+            for await (topic, payload, retained) in stream { await self?.route(topic: topic, payload: payload, retained: retained) }
         }
     }
 
-    private func route(topic: String, payload: Data) async {
+    private func route(topic: String, payload: Data, retained: Bool = false) async {
         let me = identity.memberId
         switch topic {
         case Topics.joinApproval(joinerMemberId: me):
@@ -387,8 +387,9 @@ public actor FamilyNode {
                 // Either presence topic (4.2); the same update may come on both mid-switch.
                 guard !payload.isEmpty else { return } // a cleared retained copy
                 guard let member = group.findMember(byId: sender) else {
-                    // Usually someone who joined while we were away (Android #49).
-                    engine.recordStranger(sender, roster: group, detail: "presence")
+                    // Usually someone who joined while we were away (Android #49). A retained copy
+                    // is a leftover handed over on subscribe, not new activity: not logged.
+                    if !retained { engine.recordStranger(sender, roster: group, detail: "presence") }
                     await engine.catchUpOnUnknownSender(sender)
                     return
                 }
@@ -526,16 +527,20 @@ final class TransportOutbox: GroupSyncOutbox, JoinPublisher, @unchecked Sendable
 
 /// Hands every inbound message to one ordered stream, so they're handled in arrival order.
 final class TransportBridge: MqttTransportDelegate, @unchecked Sendable {
-    private let continuation: AsyncStream<(String, Data)>.Continuation
+    private let continuation: AsyncStream<(String, Data, Bool)>.Continuation
     private let onState: @Sendable (MqttConnectionState) -> Void
 
-    init(continuation: AsyncStream<(String, Data)>.Continuation, onState: @escaping @Sendable (MqttConnectionState) -> Void) {
+    init(continuation: AsyncStream<(String, Data, Bool)>.Continuation, onState: @escaping @Sendable (MqttConnectionState) -> Void) {
         self.continuation = continuation
         self.onState = onState
     }
 
     func transport(_ transport: MqttTransport, didReceiveMessage payload: Data, onTopic topic: String) {
-        continuation.yield((topic, payload))
+        continuation.yield((topic, payload, false))
+    }
+
+    func transport(_ transport: MqttTransport, didReceiveMessage payload: Data, onTopic topic: String, retained: Bool) {
+        continuation.yield((topic, payload, retained))
     }
 
     func transport(_ transport: MqttTransport, didChangeConnectionState state: MqttConnectionState) {

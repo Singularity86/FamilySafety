@@ -32,7 +32,16 @@ public enum MqttTransportError: Error, Equatable {
 
 public protocol MqttTransportDelegate: AnyObject {
     func transport(_ transport: MqttTransport, didReceiveMessage payload: Data, onTopic topic: String)
+    /// The same, with MQTT's retained flag: true only for a stored copy handed over on a new
+    /// subscription, never for live traffic. Defaults to the call above.
+    func transport(_ transport: MqttTransport, didReceiveMessage payload: Data, onTopic topic: String, retained: Bool)
     func transport(_ transport: MqttTransport, didChangeConnectionState state: MqttConnectionState)
+}
+
+public extension MqttTransportDelegate {
+    func transport(_ transport: MqttTransport, didReceiveMessage payload: Data, onTopic topic: String, retained: Bool) {
+        self.transport(transport, didReceiveMessage: payload, onTopic: topic)
+    }
 }
 
 /// Wraps CocoaMQTT with the session contract in §4: a stable client id + `cleanSession =
@@ -343,7 +352,7 @@ extension MqttTransport: CocoaMQTTDelegate {
     }
 
     public func mqtt(_ mqtt: CocoaMQTT, didReceiveMessage message: CocoaMQTTMessage, id: UInt16) {
-        delegate?.transport(self, didReceiveMessage: Data(message.payload), onTopic: message.topic)
+        delegate?.transport(self, didReceiveMessage: Data(message.payload), onTopic: message.topic, retained: message.retained)
     }
 
     public func mqttDidDisconnect(_ mqtt: CocoaMQTT, withError err: Error?) {

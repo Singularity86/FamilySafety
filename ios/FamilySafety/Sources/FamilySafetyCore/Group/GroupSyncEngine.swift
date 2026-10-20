@@ -72,6 +72,11 @@ public actor GroupSyncEngine {
     /// Unknown senders a member's roster answered without: not asked about again for a day.
     private var gaveUpOn: [String: Int64] = [:]
     static let catchUpGiveUpMs: Int64 = 24 * 60 * 60 * 1000
+    /// Sequence numbers accepted in the last 10 minutes, per window key, with when. A second copy
+    /// of one of these (LAN and broker both delivering, QoS 1 redelivery) is refused as usual
+    /// but not logged: it's the network, not an attacker. Memory only.
+    private var recentlyAccepted: [String: [Int64: Int64]] = [:]
+    static let duplicateGraceMs: Int64 = 10 * 60 * 1000
     public private(set) var acks: [Int64: Set<String>] = [:]
     public private(set) var ledger: ProtocolLedger
     private let ledgerSlot: SecretSlot?
@@ -400,17 +405,23 @@ public actor GroupSyncEngine {
             return .refused(.ignored("undecryptable"))
         }
         let sequenced = SequencedBody.parse(plaintext)
-        let verdict = ledger.window.check(sender: ProtocolLedger.windowKey(sender), body: sequenced, nowMs: now())
+        let key = ProtocolLedger.windowKey(sender), t = now()
+        let verdict = ledger.window.check(sender: key, body: sequenced, nowMs: t)
+        recentlyAccepted = recentlyAccepted.compactMapValues { seqs in
+            let kept = seqs.filter { t - $0.value < Self.duplicateGraceMs }
+            return kept.isEmpty ? nil : kept
+        }
         guard verdict == .accept else {
             if verdict == .unsequencedAfterSequenced {
                 downgraded.insert(senderId)
                 security?.record(.downgrade, memberId: senderId)
-            } else {
+            } else if !(verdict == .replay && sequenced.map { recentlyAccepted[key]?[$0.seq] != nil } == true) {
                 security?.record(.replayRefused, memberId: senderId, detail: "\(verdict)")
             }
             return .refused(.refused(verdict))
         }
         if let sequenced {
+            recentlyAccepted[key, default: [:]][sequenced.seq] = t
             downgraded.remove(senderId)
             saveLedger()
             return .opened(sender: sender, body: sequenced.body)

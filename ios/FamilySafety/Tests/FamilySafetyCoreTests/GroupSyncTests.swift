@@ -477,13 +477,17 @@ final class GroupSyncTests: XCTestCase {
     func test_engine_recordsReplaysForgeriesAndStrangersInTheSecurityLog() async throws {
         let p = try await pair()
         let recorder = SecurityRecorder(slot: nil)
-        let bob = GroupSyncEngine(identity: p.bob, store: p.bobStore, outbox: p.bobOut, security: recorder, now: { 1_800_000_000_000 })
+        let clock = Clock()
+        let bob = GroupSyncEngine(identity: p.bob, store: p.bobStore, outbox: p.bobOut, security: recorder, now: { clock.now })
         await p.aliceEngine.recordSighting(memberId: p.bob.memberId, protocolVersion: 4)
         let v3 = p.base.with(groupName: "R", version: 3, previousStateHash: .some(p.base.computeStateHash()))
         await p.aliceEngine.broadcast(v3, changeType: .nameChanged)
         let sealed = await p.aliceOut.to(Topics.groupSyncInbox(memberId: p.bob.memberId))
         _ = await bob.handleGroupSync(payload: sealed[0])
-        _ = await bob.handleGroupSync(payload: sealed[0])            // replay
+        _ = await bob.handleGroupSync(payload: sealed[0])            // LAN + broker duplicate: refused, not logged
+        XCTAssertTrue(recorder.snapshot.events.isEmpty, "a copy of something accepted minutes ago is the network")
+        clock.now += 11 * 60_000
+        _ = await bob.handleGroupSync(payload: sealed[0])            // the same, replayed later: logged
         let forged = try JSONEncoder().encode(GroupUpdateAck(groupId: "g-1", version: 3, memberId: p.alice.memberId, timestamp: 1))
         await bob.handleAck(payload: forged)                         // plaintext in Alice's name after she sealed
         let stranger = try identity("stranger")
