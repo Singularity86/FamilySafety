@@ -1,6 +1,8 @@
 package com.example.familysafety.invite
 
 import com.example.familysafety.core.toHex
+import com.example.familysafety.security.SecurityEventKind
+import com.example.familysafety.security.SecurityRecorder
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -144,6 +146,13 @@ class InviteManager @Inject constructor(
             when (verdict) {
                 is RejoinPolicy.Verdict.Refuse -> {
                     Timber.w("Refusing join request ${joinRequest.requestId}: ${verdict.reason}")
+                    // A member's ID with someone else's keys is an impersonation attempt; the rest
+                    // are failed checks. Same detail as iOS for the former.
+                    if (RejoinPolicy.keyConflict(joinRequest, currentGroup) != null) {
+                        SecurityRecorder.record(SecurityEventKind.IMPERSONATED_JOIN, null, "member ID with different keys")
+                    } else {
+                        SecurityRecorder.record(SecurityEventKind.JOIN_REQUEST_REJECTED, null, verdict.reason)
+                    }
                     return
                 }
                 RejoinPolicy.Verdict.AutoApprove -> {
@@ -220,6 +229,7 @@ class InviteManager @Inject constructor(
             is JoinV2Verifier.Result.Verified -> result.request
             is JoinV2Verifier.Result.Rejected -> {
                 Timber.w("Refusing a v2 join request: ${result.reason}")
+                SecurityRecorder.record(SecurityEventKind.JOIN_REQUEST_REJECTED, null, result.reason)
                 null
             }
         }

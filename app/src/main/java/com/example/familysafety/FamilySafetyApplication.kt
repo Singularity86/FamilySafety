@@ -1,16 +1,24 @@
 package com.example.familysafety
 
 import android.app.Application
+import com.example.familysafety.group.GroupStateManager
+import com.example.familysafety.security.SecurityRecorder
+import dagger.Lazy
 import dagger.hilt.android.HiltAndroidApp
 import org.osmdroid.config.Configuration
 import timber.log.Timber
 import java.io.File
+import javax.inject.Inject
 
 /**
  * Application class for FamilySafety
  */
 @HiltAndroidApp
 class FamilySafetyApplication : Application() {
+
+    // Lazy: the security log asks for the roster only when it records something, so start-up
+    // doesn't build the group state (and read its encrypted store) any earlier than before.
+    @Inject lateinit var groupStateManager: Lazy<GroupStateManager>
 
     override fun onCreate() {
         super.onCreate()
@@ -21,6 +29,12 @@ class FamilySafetyApplication : Application() {
         if (BuildConfig.DEBUG) {
             Timber.plant(Timber.DebugTree())
         }
+
+        SecurityRecorder.install(
+            this,
+            roster = { runCatching { groupStateManager.get().groupDefinition.value }.getOrNull() },
+            myMemberId = { runCatching { groupStateManager.get().localMember.value?.memberId }.getOrNull() }
+        )
 
         // Configure osmdroid (OpenStreetMap tile library).
         // userAgentValue is required by OSM tile servers to identify the app.

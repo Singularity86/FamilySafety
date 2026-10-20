@@ -78,6 +78,7 @@ fun SettingsScreen(
     onReplayTutorial: () -> Unit = {},
     onNavigateToPrivacy: () -> Unit = {},
     onNavigateToSecurity: () -> Unit = {},
+    onNavigateToSecurityLog: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -1018,6 +1019,19 @@ fun SettingsScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("Security Dashboard")
+                        Icon(imageVector = Icons.Default.KeyboardArrowRight, contentDescription = null)
+                    }
+                }
+                TextButton(
+                    onClick = onNavigateToSecurityLog,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Security log")
                         Icon(imageVector = Icons.Default.KeyboardArrowRight, contentDescription = null)
                     }
                 }

@@ -3,6 +3,8 @@ package com.example.familysafety.crypto
 import com.example.familysafety.core.hexToBytes
 import com.example.familysafety.core.toHex
 import com.example.familysafety.group.LazysodiumCryptoProvider
+import com.example.familysafety.security.SecurityEventKind
+import com.example.familysafety.security.SecurityRecorder
 import com.goterl.lazysodium.LazySodiumAndroid
 import com.goterl.lazysodium.interfaces.Box
 import com.goterl.lazysodium.interfaces.SecretBox
@@ -118,6 +120,11 @@ class E2EEManager @Inject constructor(
         )
         
         if (!isValidSignature) {
+            // Only a roster member can be impersonated; a stranger's junk is logged where it's
+            // first seen as a stranger.
+            if (SecurityRecorder.isMember(encryptedMessage.senderMemberId)) {
+                SecurityRecorder.record(SecurityEventKind.FORGED_SIGNATURE, encryptedMessage.senderMemberId, "envelope")
+            }
             throw EncryptionException("Invalid message signature")
         }
         
