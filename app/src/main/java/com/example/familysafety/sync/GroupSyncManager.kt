@@ -1,6 +1,8 @@
 package com.example.familysafety.sync
 
 import com.example.familysafety.core.hexToBytes
+import com.example.familysafety.security.SecurityEventKind
+import com.example.familysafety.security.SecurityRecorder
 import com.example.familysafety.core.toHex
 import com.example.familysafety.core.ErrorHandler
 import com.example.familysafety.core.RateLimiter
@@ -368,6 +370,7 @@ class GroupSyncManager @Inject constructor(
         }
         val sender = currentGroup.findMemberById(senderMemberId) ?: run {
             Timber.w("Unknown sender ${senderMemberId.take(8)} for group sync — ignoring")
+            SecurityRecorder.recordStranger(senderMemberId, "encrypted message")
             // Most likely someone who joined while we were away: their update is the one that
             // would add them, and we can't check it until we know them. Ask someone we do know.
             catchUpOnUnknownSender(senderMemberId)
@@ -406,6 +409,7 @@ class GroupSyncManager @Inject constructor(
         val isValidSignature = verifyGroupSyncSignature(syncMessage)
         if (!isValidSignature) {
             Timber.e("Invalid signature on group sync message")
+            SecurityRecorder.record(SecurityEventKind.FORGED_SIGNATURE, senderMemberId, "roster update")
             return
         }
 
@@ -925,6 +929,7 @@ class GroupSyncManager @Inject constructor(
         if (envelopeSender != null) {
             val sender = group.findMemberById(envelopeSender) ?: run {
                 Timber.w("Sealed $what from non-member ${envelopeSender.take(8)} — ignoring")
+                SecurityRecorder.recordStranger(envelopeSender, "encrypted message")
                 return null
             }
             val plaintext = try {
@@ -948,6 +953,7 @@ class GroupSyncManager @Inject constructor(
         val named = group.findMemberById(claimedSender(message)) ?: return null
         if (e2eeManager.hasSequenced(named.memberId, named.ed25519PublicKey)) {
             Timber.w("Plaintext $what naming ${named.memberId.take(8)}, who seals theirs — ignoring")
+            SecurityRecorder.record(SecurityEventKind.FORGED_CONTROL_MESSAGE, named.memberId, T::class.simpleName)
             return null
         }
         return message

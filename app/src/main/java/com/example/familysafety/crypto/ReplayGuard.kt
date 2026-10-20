@@ -1,6 +1,8 @@
 package com.example.familysafety.crypto
 
 import android.content.Context
+import com.example.familysafety.security.SecurityEventKind
+import com.example.familysafety.security.SecurityRecorder
 import com.example.familysafety.transport.PeerSightings
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -82,9 +84,23 @@ class ReplayGuard @Inject constructor(
             replay.open(senderId, senderEd25519Hex, plaintext, System.currentTimeMillis())
                 .also { if (senderId in _downgradedMembers.value) _downgradedMembers.update { it - senderId } }
         } catch (e: ReplayedEnvelopeException) {
-            if (e.verdict == ReplayVerdict.UNSEQUENCED_AFTER_SEQUENCED) _downgradedMembers.update { it + senderId }
+            if (e.verdict == ReplayVerdict.UNSEQUENCED_AFTER_SEQUENCED) {
+                _downgradedMembers.update { it + senderId }
+                SecurityRecorder.record(SecurityEventKind.DOWNGRADE, senderId)
+            } else {
+                SecurityRecorder.record(SecurityEventKind.REPLAY_REFUSED, senderId, e.verdict.securityLogName())
+            }
             throw e
         }
+
+    /** The verdict as iOS writes it in the security log, so both apps' reports read the same. */
+    private fun ReplayVerdict.securityLogName(): String = when (this) {
+        ReplayVerdict.TOO_OLD -> "tooOld"
+        ReplayVerdict.FROM_THE_FUTURE -> "fromTheFuture"
+        ReplayVerdict.REPLAY -> "replay"
+        ReplayVerdict.UNSEQUENCED_AFTER_SEQUENCED -> "unsequencedAfterSequenced"
+        ReplayVerdict.ACCEPT -> "accept"
+    }
 
     private fun scheduleFlush() {
         if (!flushScheduled.compareAndSet(false, true)) return

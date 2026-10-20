@@ -496,7 +496,8 @@ fun MainScreen(
                             onNavigateToCrop = { navController.navigate("avatar_crop") },
                             onReplayTutorial = onReplayTutorial,
                             onNavigateToPrivacy = { navController.navigate("privacy") },
-                            onNavigateToSecurity = { navController.navigate("security") }
+                            onNavigateToSecurity = { navController.navigate("security") },
+                            onNavigateToSecurityLog = { navController.navigate("security_log") }
                         )
                         else -> {}
                     }
@@ -628,6 +629,13 @@ fun MainScreen(
 
         composable("security") {
             SecurityScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable("security_log") {
+            SecurityLogScreen(
                 viewModel = viewModel,
                 onBack = { navController.popBackStack() }
             )

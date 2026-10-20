@@ -6,6 +6,8 @@ import android.content.Context
 import com.example.familysafety.core.*
 import com.example.familysafety.core.NetworkMonitor
 import com.example.familysafety.core.SecurityEventRepository
+import com.example.familysafety.security.SecurityEventKind
+import com.example.familysafety.security.SecurityRecorder
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.crypto.GroupCipher
 import com.example.familysafety.crypto.RecipientKeys
@@ -912,7 +914,7 @@ class MqttTransport @Inject constructor(
      * plaintext, and a retained plaintext presence from before the upgrade outlives it.
      * Returns null when sealed under a key this device does not hold.
      */
-    private fun openPresence(payload: String): String? {
+    private fun openPresence(payload: String, from: String? = null): String? {
         val sealed = MessageProtocol.decodeSealedPresenceOrNull(payload) ?: return payload
         val key = presenceKey(sealed.kid) ?: run {
             if (sealed.kid != null) {
@@ -920,6 +922,7 @@ class MqttTransport @Inject constructor(
                 // the same limiter as every other reply an outsider can trigger (F16): anyone
                 // can publish junk kids.
                 Timber.w("$TAG: sealed presence under unknown key ${sealed.kid.take(8)}")
+                SecurityRecorder.record(SecurityEventKind.UNKNOWN_GROUP_KEY, from)
                 onUnknownGroupKey()
             } else {
                 Timber.w("$TAG: sealed presence received but this group has no shared key")
@@ -1221,6 +1224,8 @@ class MqttTransport @Inject constructor(
         if (update.memberId != myId) return
         val deviceId = verifiedDeviceId(update, cryptoProvider.getLocalEd25519PublicKey()) ?: return
         if (!CloneDetector.ownPresenceIsAnotherDevice(update.isOnline, deviceId, DeviceIdentity.get(context))) return
+        // Every sighting goes in the log; only the notification is limited.
+        SecurityRecorder.record(SecurityEventKind.IDENTITY_IN_USE_ELSEWHERE, myId, "device ${deviceId.take(8)}")
 
         val now = System.currentTimeMillis()
         val last = lastSelfCloneAlertAt.get()
@@ -1240,12 +1245,13 @@ class MqttTransport @Inject constructor(
             return
         }
         if (!familyMemberKeys.containsKey(senderId)) {
+            SecurityRecorder.recordStranger(senderId, "presence")
             // Usually someone who joined while we were away; their presence is the first sign.
             groupSyncManager?.catchUpOnUnknownSender(senderId)
             return
         }
 
-        val opened = openPresence(payload) ?: return
+        val opened = openPresence(payload, from = senderId) ?: return
         val presenceUpdate = try {
             val envelope = MessageProtocol.decodeEnvelope(opened)
             if (envelope.type != "presence_update") return
@@ -1266,6 +1272,7 @@ class MqttTransport @Inject constructor(
         familyMemberKeys[senderId]?.ed25519PublicKey?.let { key ->
             verifiedDeviceId(presenceUpdate, key)?.let { deviceId ->
                 if (cloneDetector.observe(senderId, deviceId, presenceUpdate.isOnline, System.currentTimeMillis())) {
+                    SecurityRecorder.record(SecurityEventKind.MEMBER_ON_TWO_PHONES, senderId, "device ${deviceId.take(8)}")
                     val name = groupStateManager.groupDefinition.value
                         ?.findMemberById(senderId)?.displayName ?: senderId.take(8)
                     Timber.w("$TAG: ${senderId.take(8)} is publishing from two devices")
@@ -1341,6 +1348,7 @@ class MqttTransport @Inject constructor(
 
     private suspend fun handleEncryptedLocation(senderId: String, encryptedPayload: String) {
         val senderKeys = familyMemberKeys[senderId] ?: run {
+            SecurityRecorder.recordStranger(senderId, "encrypted message")
             // A member who joined while we were away shares their location long before we
             // happen to hear a roster update; that's the cue to catch up.
             groupSyncManager?.catchUpOnUnknownSender(senderId)

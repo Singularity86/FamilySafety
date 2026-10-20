@@ -1,6 +1,8 @@
 package com.example.familysafety.group
 
 import com.example.familysafety.core.hexToBytes
+import com.example.familysafety.security.SecurityEventKind
+import com.example.familysafety.security.SecurityRecorder
 import com.example.familysafety.core.toHex
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -938,7 +940,7 @@ class GroupStateManager(
                         verifiedQuorumVoterIds, verifiedRemovalAuthorizers
                     )
                 }
-                return GroupOperationResult.Failure(GroupError.UnauthorizedChange(rejection))
+                return rosterRejected(updaterMemberId, rejection)
             }
         }
 
@@ -947,6 +949,12 @@ class GroupStateManager(
         // which is exactly why this used to be enforced by rejecting the whole update. Union
         // instead: we accept their roster changes and lose none of our removals.
         return commitStateLocked(withPreservedTombstones(currentGroup, remoteDefinition), updaterMemberId)
+    }
+
+    /** A roster update that broke the rules: refused, and noted in the security log. */
+    private fun rosterRejected(updaterMemberId: String, reason: String): GroupOperationResult<GroupDefinition> {
+        SecurityRecorder.record(SecurityEventKind.ROSTER_UPDATE_REJECTED, updaterMemberId, reason)
+        return GroupOperationResult.Failure(GroupError.UnauthorizedChange(reason))
     }
 
     /**
@@ -1022,7 +1030,7 @@ class GroupStateManager(
             verifiedRemovalAuthorizers = verifiedRemovalAuthorizers
         )
         if (rejection != null) {
-            return GroupOperationResult.Failure(GroupError.UnauthorizedChange(rejection))
+            return rosterRejected(updaterMemberId, rejection)
         }
 
         val merged = GroupStateMerge.merge(winner = remoteDefinition, ours = currentGroup)
@@ -1058,7 +1066,7 @@ class GroupStateManager(
             verifiedRemovalAuthorizers = verifiedRemovalAuthorizers
         )
         if (rejection != null) {
-            return GroupOperationResult.Failure(GroupError.UnauthorizedChange(rejection))
+            return rosterRejected(updaterMemberId, rejection)
         }
 
         _events.emit(
