@@ -24,6 +24,8 @@ public enum NodeEvent: Sendable {
     /// Members whose app is too old to follow the family, or who went back to an older one
     /// (§6.2 rule 3). Name them in the UI.
     case needsUpdate(Set<String>)
+    /// The security log changed (intrusion detection, phase 1).
+    case securityLog(SecurityLog)
 }
 
 public enum NodeError: Error, Equatable {
@@ -67,14 +69,19 @@ public actor FamilyNode {
     private var sessionStart: Int64?
     private var presenceBook: PresenceBook
     private let presenceSlot: SecretSlot
+    private let security: SecurityRecorder
     private var lastNeedsUpdate: Set<String> = []
-    private var inbound: AsyncStream<(String, Data)>.Continuation?
+    private var inbound: AsyncStream<(String, Data, Bool)>.Continuation?
     private var bridge: TransportBridge?
     public private(set) var state: NodeState = .noFamily
 
     public init(profile: LocalProfile, credentials: BrokerCredentials, groupPersistence: GroupStatePersistence,
                 inviteSlot: SecretSlot, pendingJoinSlot: SecretSlot, deviceSlot: SecretSlot, ledgerSlot: SecretSlot,
-                presenceSlot: SecretSlot, onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
+                presenceSlot: SecretSlot, securitySlot: SecretSlot,
+                onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
+        let security = SecurityRecorder(slot: securitySlot)
+        security.onChange = { onEvent(.securityLog($0)) }
+        self.security = security
         self.presenceSlot = presenceSlot
         let book = (try? presenceSlot.readJSON(PresenceBook.self)) ?? PresenceBook()
         self.presenceBook = book
@@ -95,7 +102,7 @@ public actor FamilyNode {
         }
         self.transport = MqttTransport(memberId: identity.memberId, credentials: credentials, deviceId: deviceId)
         self.outbox = TransportOutbox(transport: transport)
-        self.engine = GroupSyncEngine(identity: identity, store: store, outbox: outbox, ledgerSlot: ledgerSlot)
+        self.engine = GroupSyncEngine(identity: identity, store: store, outbox: outbox, ledgerSlot: ledgerSlot, security: security)
         self.desk = try InviterDesk(identity: identity, store: store, engine: engine, outbox: outbox, bookSlot: inviteSlot)
         self.onEvent = onEvent
     }
@@ -318,7 +325,7 @@ public actor FamilyNode {
 
     private func startInbound() {
         guard inbound == nil else { return }
-        let (stream, continuation) = AsyncStream<(String, Data)>.makeStream(bufferingPolicy: .bufferingNewest(500))
+        let (stream, continuation) = AsyncStream<(String, Data, Bool)>.makeStream(bufferingPolicy: .bufferingNewest(500))
         inbound = continuation
         let bridge = TransportBridge(continuation: continuation) { [weak self] state in
             Task { [weak self] in await self?.connectionChanged(state) }
@@ -326,11 +333,11 @@ public actor FamilyNode {
         self.bridge = bridge
         transport.delegate = bridge
         Task { [weak self] in
-            for await (topic, payload) in stream { await self?.route(topic: topic, payload: payload) }
+            for await (topic, payload, retained) in stream { await self?.route(topic: topic, payload: payload, retained: retained) }
         }
     }
 
-    private func route(topic: String, payload: Data) async {
+    private func route(topic: String, payload: Data, retained: Bool = false) async {
         let me = identity.memberId
         switch topic {
         case Topics.joinApproval(joinerMemberId: me):
@@ -350,7 +357,15 @@ public actor FamilyNode {
                 break
             }
         case Topics.joinRequest(inviterMemberId: me):
-            if case .prompted = await desk.handle(payload: payload) { await publishPrompts() }
+            switch await desk.handle(payload: payload) {
+            case .prompted: await publishPrompts()
+            case .dropped(let reason):
+                // A member's ID with someone else's keys is an impersonation attempt; the rest
+                // are failed checks (a spent, expired or forged invite).
+                security.record(reason == "member ID with different keys" ? .impersonatedJoin : .joinRequestRejected,
+                                memberId: nil, detail: reason)
+            default: break
+            }
             if let group = await store.current, case .member = state { setState(.member(group)) }
         case Topics.groupSyncInbox(memberId: me):
             let before = await store.current?.members.map(\.memberId)
@@ -372,14 +387,16 @@ public actor FamilyNode {
                 // Either presence topic (4.2); the same update may come on both mid-switch.
                 guard !payload.isEmpty else { return } // a cleared retained copy
                 guard let member = group.findMember(byId: sender) else {
-                    // Usually someone who joined while we were away (Android #49).
+                    // Usually someone who joined while we were away (Android #49). A retained copy
+                    // is a leftover handed over on subscribe, not new activity: not logged.
+                    if !retained { engine.recordStranger(sender, roster: group, detail: "presence") }
                     await engine.catchUpOnUnknownSender(sender)
                     return
                 }
                 let status: PresenceStatus
                 switch PresenceCodec.read(payload, sender: member, group: group) {
                 case .status(let read): status = read
-                case .unknownKey: await engine.unknownGroupKeySeen(); return
+                case .unknownKey: await engine.unknownGroupKeySeen(from: sender); return
                 case .invalid: return
                 }
                 if sender != me {
@@ -392,6 +409,8 @@ public actor FamilyNode {
                     // our phrase is in use elsewhere (§6.2 rule 4).
                     guard let other = status.deviceId,
                           CloneDetector.ownPresenceIsAnotherDevice(isOnline: status.isOnline, deviceId: other, myDeviceId: deviceId) else { return }
+                    // Logged every time; the notification below is capped to once per 6 hours.
+                    security.record(.identityInUseElsewhere, memberId: me, detail: "device \(other.prefix(8))")
                     let t = now()
                     if let last = lastSelfCloneAlert, t - last < CloneDetector.cooldown { return }
                     lastSelfCloneAlert = t
@@ -400,6 +419,7 @@ public actor FamilyNode {
                 }
                 if let device = status.deviceId,
                    cloneDetector.observe(memberId: sender, deviceId: device, isOnline: status.isOnline, now: now()) {
+                    security.record(.memberOnTwoPhones, memberId: sender, detail: "device \(device.prefix(8))")
                     onEvent(.identityAlert("\(member.displayName) is signed in on another phone. If that wasn't them, they should check their phones."))
                 }
                 // Replay check, with the sudden-disconnect exception for the current session's will.
@@ -409,6 +429,17 @@ public actor FamilyNode {
                 onEvent(.presence(presence))
             }
         }
+    }
+
+    // MARK: - Security log
+
+    public nonisolated var securityLog: SecurityLog { security.snapshot }
+
+    /// A plain-text report for the user to send wherever they choose (Mail, Messages, a
+    /// monitoring app). Nothing is sent from here.
+    public func securityReport(appVersion: String) async -> String {
+        security.flush()
+        return security.snapshot.report(group: await store.current, myMemberId: identity.memberId, appVersion: appVersion, now: now())
     }
 
     // MARK: - Helpers
@@ -496,16 +527,20 @@ final class TransportOutbox: GroupSyncOutbox, JoinPublisher, @unchecked Sendable
 
 /// Hands every inbound message to one ordered stream, so they're handled in arrival order.
 final class TransportBridge: MqttTransportDelegate, @unchecked Sendable {
-    private let continuation: AsyncStream<(String, Data)>.Continuation
+    private let continuation: AsyncStream<(String, Data, Bool)>.Continuation
     private let onState: @Sendable (MqttConnectionState) -> Void
 
-    init(continuation: AsyncStream<(String, Data)>.Continuation, onState: @escaping @Sendable (MqttConnectionState) -> Void) {
+    init(continuation: AsyncStream<(String, Data, Bool)>.Continuation, onState: @escaping @Sendable (MqttConnectionState) -> Void) {
         self.continuation = continuation
         self.onState = onState
     }
 
     func transport(_ transport: MqttTransport, didReceiveMessage payload: Data, onTopic topic: String) {
-        continuation.yield((topic, payload))
+        continuation.yield((topic, payload, false))
+    }
+
+    func transport(_ transport: MqttTransport, didReceiveMessage payload: Data, onTopic topic: String, retained: Bool) {
+        continuation.yield((topic, payload, retained))
     }
 
     func transport(_ transport: MqttTransport, didChangeConnectionState state: MqttConnectionState) {

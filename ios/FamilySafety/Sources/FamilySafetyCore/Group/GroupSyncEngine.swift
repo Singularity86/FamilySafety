@@ -72,9 +72,16 @@ public actor GroupSyncEngine {
     /// Unknown senders a member's roster answered without: not asked about again for a day.
     private var gaveUpOn: [String: Int64] = [:]
     static let catchUpGiveUpMs: Int64 = 24 * 60 * 60 * 1000
+    /// Sequence numbers accepted in the last 10 minutes, per window key, with when. A second copy
+    /// of one of these (LAN and broker both delivering, QoS 1 redelivery) is refused as usual
+    /// but not logged: it's the network, not an attacker. Memory only.
+    private var recentlyAccepted: [String: [Int64: Int64]] = [:]
+    static let duplicateGraceMs: Int64 = 10 * 60 * 1000
     public private(set) var acks: [Int64: Set<String>] = [:]
     public private(set) var ledger: ProtocolLedger
     private let ledgerSlot: SecretSlot?
+    /// Where refusals that may be an outsider at work are recorded (intrusion detection, phase 1).
+    private let security: SecurityRecorder?
     /// Members whose envelopes were refused as a downgrade (§3.1); shown as "needs to update".
     public private(set) var downgraded: Set<String> = []
 
@@ -84,9 +91,11 @@ public actor GroupSyncEngine {
         store: GroupStateStore,
         outbox: GroupSyncOutbox,
         ledgerSlot: SecretSlot? = nil,
+        security: SecurityRecorder? = nil,
         now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }
     ) {
         self.ledgerSlot = ledgerSlot
+        self.security = security
         self.ledger = (try? ledgerSlot?.readJSON(ProtocolLedger.self)) ?? ProtocolLedger(observingSinceMs: now())
         self.identity = identity
         self.crypto = E2EECrypto(
@@ -122,7 +131,10 @@ public actor GroupSyncEngine {
         }
         guard message.updaterMemberId != identity.memberId else { return .ignored("our own update") }
         guard message.groupId == current.groupId else { return .ignored("different group") }
-        guard verifySignature(message, roster: current) else { return .ignored("bad update signature") }
+        guard verifySignature(message, roster: current) else {
+            security?.record(.forgedSignature, memberId: senderId, detail: "roster update")
+            return .ignored("bad update signature")
+        }
         noteRosterAnswer(message.groupDefinition)
 
         if message.version < current.version {
@@ -219,13 +231,23 @@ public actor GroupSyncEngine {
         askedAbout = []
     }
 
+    /// Someone outside the roster: a removed member is worth more attention than a stranger.
+    nonisolated func recordStranger(_ memberId: String, roster: GroupDefinition, detail: String) {
+        if roster.removedMemberIds.contains(where: { Tombstones.memberId(of: $0) == memberId }) {
+            security?.record(.removedMemberActivity, memberId: memberId, detail: detail)
+        } else if memberId != identity.memberId {
+            security?.record(.unknownSender, memberId: memberId, detail: detail)
+        }
+    }
+
     /// Members to show as "needs to update" (§6.2 rule 3).
     public func outdatedMembers(_ group: GroupDefinition) -> Set<String> {
         ledger.outdated(group, downgraded: downgraded).subtracting([identity.memberId])
     }
 
     /// Presence sealed under a key we don't hold: ask for the current state, rate-limited.
-    public func unknownGroupKeySeen() async {
+    public func unknownGroupKeySeen(from memberId: String? = nil) async {
+        security?.record(.unknownGroupKey, memberId: memberId)
         guard unknownKeyRefresh.allow("*", now: now()) else { return }
         await requestRefresh(reason: "unknown group key")
     }
@@ -303,7 +325,9 @@ public actor GroupSyncEngine {
             await broadcast(ours, changeType: .fullSync)
         case .refusedMissingSelf:
             await requestRefresh(reason: "missing_self")
-        case .stale, .rejected, .removed, .storageFailed:
+        case .rejected(let reason):
+            security?.record(.rosterUpdateRejected, memberId: message.updaterMemberId, detail: "\(reason)")
+        case .stale, .removed, .storageFailed:
             break
         }
         return .outcome(outcome)
@@ -367,19 +391,37 @@ public actor GroupSyncEngine {
         guard let sender = roster.findMember(byId: senderId),
               let senderX = Hex.decode(sender.x25519PublicKey),
               let senderEd = Hex.decode(sender.ed25519PublicKey) else {
+            recordStranger(senderId, roster: roster, detail: "encrypted message")
             return .refused(.ignored("sender not in our roster"))
         }
-        guard let plaintext = try? crypto.decrypt(envelopeJSON: payload, senderMemberId: senderId,
-                                                  senderX25519PublicKey: senderX, senderEd25519PublicKey: senderEd) else {
+        let plaintext: String
+        do {
+            plaintext = try crypto.decrypt(envelopeJSON: payload, senderMemberId: senderId,
+                                           senderX25519PublicKey: senderX, senderEd25519PublicKey: senderEd)
+        } catch E2EEError.invalidSignature {
+            security?.record(.forgedSignature, memberId: senderId, detail: "envelope")
+            return .refused(.ignored("undecryptable"))
+        } catch {
             return .refused(.ignored("undecryptable"))
         }
         let sequenced = SequencedBody.parse(plaintext)
-        let verdict = ledger.window.check(sender: ProtocolLedger.windowKey(sender), body: sequenced, nowMs: now())
+        let key = ProtocolLedger.windowKey(sender), t = now()
+        let verdict = ledger.window.check(sender: key, body: sequenced, nowMs: t)
+        recentlyAccepted = recentlyAccepted.compactMapValues { seqs in
+            let kept = seqs.filter { t - $0.value < Self.duplicateGraceMs }
+            return kept.isEmpty ? nil : kept
+        }
         guard verdict == .accept else {
-            if verdict == .unsequencedAfterSequenced { downgraded.insert(senderId) }
+            if verdict == .unsequencedAfterSequenced {
+                downgraded.insert(senderId)
+                security?.record(.downgrade, memberId: senderId)
+            } else if !(verdict == .replay && sequenced.map { recentlyAccepted[key]?[$0.seq] != nil } == true) {
+                security?.record(.replayRefused, memberId: senderId, detail: "\(verdict)")
+            }
             return .refused(.refused(verdict))
         }
         if let sequenced {
+            recentlyAccepted[key, default: [:]][sequenced.seq] = t
             downgraded.remove(senderId)
             saveLedger()
             return .opened(sender: sender, body: sequenced.body)
@@ -406,8 +448,11 @@ public actor GroupSyncEngine {
             return message
         }
         guard let message = try? JSONDecoder().decode(T.self, from: payload),
-              let named = roster.findMember(byId: claimedSender(message)),
-              !ledger.window.hasSequenced(ProtocolLedger.windowKey(named)) else { return nil }
+              let named = roster.findMember(byId: claimedSender(message)) else { return nil }
+        guard !ledger.window.hasSequenced(ProtocolLedger.windowKey(named)) else {
+            security?.record(.forgedControlMessage, memberId: named.memberId, detail: "\(T.self)")
+            return nil
+        }
         return message
     }
 
