@@ -526,7 +526,7 @@ class MqttTransport @Inject constructor(
                         when {
                             topicStr.endsWith("/location_inbox") -> handleLocationInbox(payloadStr)
                             topicStr.endsWith("/location") || PresenceTopics.isPresenceTopic(topicStr) ->
-                                handleLocationOrPresence(topicStr, payloadStr)
+                                handleLocationOrPresence(topicStr, payloadStr, retained = it.isRetained)
                             else -> onMessageReceived?.invoke(topicStr, payloadStr)
                         }
                     }
@@ -1087,9 +1087,9 @@ class MqttTransport @Inject constructor(
     suspend fun handleLocationOrPresencePublic(topic: String, encryptedPayload: String) =
         handleLocationOrPresence(topic, encryptedPayload)
 
-    private suspend fun handleLocationOrPresence(topic: String, payload: String) {
+    private suspend fun handleLocationOrPresence(topic: String, payload: String, retained: Boolean = false) {
         if (PresenceTopics.isPresenceTopic(topic)) {
-            handlePresence(topic, payload)
+            handlePresence(topic, payload, retained)
             return
         }
         // Legacy shared location topic: the sender is named in the topic path.
@@ -1235,7 +1235,8 @@ class MqttTransport @Inject constructor(
         }
     }
 
-    private suspend fun handlePresence(topic: String, payload: String) {
+    /** [retained]: the broker's saved copy, delivered on (re)subscribe rather than sent just now. */
+    private suspend fun handlePresence(topic: String, payload: String, retained: Boolean = false) {
         // The old topic or the group one (4.2); the same update may come on both while a
         // family is mid-switch, and the timestamp check below drops the second copy.
         val senderId = PresenceTopics.senderOf(topic, groupId) ?: return
@@ -1245,7 +1246,9 @@ class MqttTransport @Inject constructor(
             return
         }
         if (!familyMemberKeys.containsKey(senderId)) {
-            SecurityRecorder.recordStranger(senderId, "presence")
+            // A saved copy can long outlive its sender's membership; only live presence
+            // says someone outside the family is active now (agreed with iOS).
+            if (!retained) SecurityRecorder.recordStranger(senderId, "presence")
             // Usually someone who joined while we were away; their presence is the first sign.
             groupSyncManager?.catchUpOnUnknownSender(senderId)
             return

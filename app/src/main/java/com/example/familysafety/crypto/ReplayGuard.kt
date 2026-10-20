@@ -2,6 +2,7 @@ package com.example.familysafety.crypto
 
 import android.content.Context
 import com.example.familysafety.security.SecurityEventKind
+import com.example.familysafety.security.RecentSequences
 import com.example.familysafety.security.SecurityRecorder
 import com.example.familysafety.transport.PeerSightings
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -79,19 +80,35 @@ class ReplayGuard @Inject constructor(
     fun advertisesSequenced(memberId: String): Boolean =
         (sightings.snapshot()[memberId]?.protocolVersion ?: 0) >= EnvelopeReplay.SEQUENCED_PROTOCOL_VERSION
 
-    fun open(senderId: String, senderEd25519Hex: String, plaintext: String): String =
-        try {
-            replay.open(senderId, senderEd25519Hex, plaintext, System.currentTimeMillis())
-                .also { if (senderId in _downgradedMembers.value) _downgradedMembers.update { it - senderId } }
+    /** For the security log only: a LAN + broker duplicate isn't worth an entry. */
+    private val recentlyAccepted = RecentSequences()
+
+    fun open(senderId: String, senderEd25519Hex: String, plaintext: String): String {
+        val now = System.currentTimeMillis()
+        val key = EnvelopeReplay.senderKey(senderId, senderEd25519Hex)
+        return try {
+            replay.open(senderId, senderEd25519Hex, plaintext, now)
+                .also {
+                    if (senderId in _downgradedMembers.value) _downgradedMembers.update { it - senderId }
+                    SequencedBody.parse(plaintext)?.let { recentlyAccepted.accepted(key, it.seq, now) }
+                }
         } catch (e: ReplayedEnvelopeException) {
-            if (e.verdict == ReplayVerdict.UNSEQUENCED_AFTER_SEQUENCED) {
-                _downgradedMembers.update { it + senderId }
-                SecurityRecorder.record(SecurityEventKind.DOWNGRADE, senderId)
-            } else {
-                SecurityRecorder.record(SecurityEventKind.REPLAY_REFUSED, senderId, e.verdict.securityLogName())
+            when (e.verdict) {
+                ReplayVerdict.UNSEQUENCED_AFTER_SEQUENCED -> {
+                    _downgradedMembers.update { it + senderId }
+                    SecurityRecorder.record(SecurityEventKind.DOWNGRADE, senderId)
+                }
+                ReplayVerdict.REPLAY -> {
+                    val seq = SequencedBody.parse(plaintext)?.seq
+                    if (seq == null || !recentlyAccepted.isRecentDuplicate(key, seq, now)) {
+                        SecurityRecorder.record(SecurityEventKind.REPLAY_REFUSED, senderId, e.verdict.securityLogName())
+                    }
+                }
+                else -> SecurityRecorder.record(SecurityEventKind.REPLAY_REFUSED, senderId, e.verdict.securityLogName())
             }
             throw e
         }
+    }
 
     /** The verdict as iOS writes it in the security log, so both apps' reports read the same. */
     private fun ReplayVerdict.securityLogName(): String = when (this) {
