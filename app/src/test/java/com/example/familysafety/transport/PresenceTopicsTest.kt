@@ -16,16 +16,28 @@ class PresenceTopicsTest {
     @Test
     fun `before the switch presence goes to both topics and the will stays on the old one`() {
         assertEquals(
-            listOf("familysafe/group/$group/presence/$me", "familysafe/$me/presence"),
-            PresenceTopics.publishTopics(me, group, switched = false)
+            listOf("familysafe/group/$group/presence/$me" to false, "familysafe/$me/presence" to true),
+            PresenceTopics.publishTargets(me, group, switched = false)
         )
         assertEquals("familysafe/$me/presence", PresenceTopics.willTopic(me, group, switched = false))
         assertEquals(2 + peers.size, MqttTransport.subscriptionFilters(me, group, peers, presenceSwitched = false).size)
     }
 
     @Test
+    fun `the retained copy is always on the will's topic, so an abrupt death overwrites it`() {
+        for (switched in listOf(false, true)) {
+            val will = PresenceTopics.willTopic(me, group, switched)
+            val retained = PresenceTopics.publishTargets(me, group, switched).filter { it.second }.map { it.first }
+            assertEquals(listOf(will), retained)
+            // The other topic gets its retained copy cleared, so it can't outlive the will.
+            val other = setOf(PresenceTopics.legacy(me), PresenceTopics.group(group, me)) - will
+            assertEquals(other.single(), PresenceTopics.staleRetainedTopic(me, group, switched))
+        }
+    }
+
+    @Test
     fun `after the switch a family of twelve uses two subscriptions`() {
-        assertEquals(listOf("familysafe/group/$group/presence/$me"), PresenceTopics.publishTopics(me, group, switched = true))
+        assertEquals(listOf("familysafe/group/$group/presence/$me" to true), PresenceTopics.publishTargets(me, group, switched = true))
         assertEquals("familysafe/group/$group/presence/$me", PresenceTopics.willTopic(me, group, switched = true))
         val filters = MqttTransport.subscriptionFilters(me, group, peers, presenceSwitched = true)
         assertEquals(listOf("familysafe/$me/#", "familysafe/group/$group/#"), filters)

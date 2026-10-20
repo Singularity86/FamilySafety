@@ -154,7 +154,7 @@ class MqttTransport @Inject constructor(
         private const val SESSION_PREFS = "mqtt_session"
         private const val PREF_SUBSCRIBED_FINGERPRINT = "subscribed_fingerprint"
         private const val PREF_RESET_SESSION = "reset_session"
-        private const val PREF_LEGACY_PRESENCE_CLEARED = "legacy_presence_cleared"
+        private const val PREF_STALE_PRESENCE_CLEARED = "stale_presence_cleared"
 
         /** EMQX Serverless: subscriptions granted per connection; the rest are refused. */
         const val BROKER_SUBSCRIPTION_QUOTA = 10
@@ -765,8 +765,8 @@ class MqttTransport @Inject constructor(
     private suspend fun publishPresence(isOnline: Boolean) {
         val id = memberId ?: return
         val gId = groupId
-        val topics = if (gId != null) PresenceTopics.publishTopics(id, gId, presenceSwitched)
-            else listOf(PresenceTopics.legacy(id))
+        val targets = if (gId != null) PresenceTopics.publishTargets(id, gId, presenceSwitched)
+            else listOf(PresenceTopics.legacy(id) to true)
         val presenceJson = MessageProtocol.encodePresenceUpdate(
             id,
             isOnline,
@@ -778,10 +778,11 @@ class MqttTransport @Inject constructor(
         // presence message whatever its QoS and hands it to every new subscriber, and the
         // next update supersedes this one entirely — so an acknowledged redelivery buys
         // nothing and costs an in-flight slot on every publish.
-        topics.forEach { publishRaw(it, sealed, MqttConfig.QOS_AT_MOST_ONCE, true) }
-        // After the switch nothing listens on the old topic; clear its retained copy once
-        // so the broker doesn't keep handing out a stale "online" for us.
-        if (presenceSwitched && gId != null) clearLegacyPresenceOnce(id)
+        targets.forEach { (topic, retained) -> publishRaw(topic, sealed, MqttConfig.QOS_AT_MOST_ONCE, retained) }
+        // The topic the will isn't on must not hold a retained "online": after an abrupt death
+        // it would outlive the will. Cleared once per state; this also cleans up the retained
+        // group copy the first 4.2 build left during the dual phase.
+        if (gId != null) clearStaleRetainedPresenceOnce(id, gId)
     }
 
     /** Whether every member who counts reads presence from the group topic (4.2). */
@@ -806,10 +807,6 @@ class MqttTransport @Inject constructor(
         val open = presenceGateOpen()
         if (open == presenceSwitched || _connectionState.value != ConnectionState.Connected) return
         Timber.i("$TAG: presence ${if (open) "moving to" else "back to dual with"} the group topic — reconnecting")
-        if (!open) {
-            context.getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE).edit()
-                .remove(PREF_LEGACY_PRESENCE_CLEARED).apply()
-        }
         scope.launch {
             try { mqttClient?.disconnect()?.waitForCompletion(5_000) } catch (_: Exception) { }
             _connectionState.value = ConnectionState.Disconnected
@@ -817,11 +814,14 @@ class MqttTransport @Inject constructor(
         }
     }
 
-    private suspend fun clearLegacyPresenceOnce(id: String) {
+    /** Clear the retained presence on whichever topic the will isn't on, once for each state. */
+    private suspend fun clearStaleRetainedPresenceOnce(id: String, gId: String) {
         val prefs = context.getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE)
-        if (prefs.getBoolean(PREF_LEGACY_PRESENCE_CLEARED, false)) return
-        if (publishRaw(PresenceTopics.legacy(id), ByteArray(0), MqttConfig.DEFAULT_QOS, true)) {
-            prefs.edit().putBoolean(PREF_LEGACY_PRESENCE_CLEARED, true).apply()
+        val state = "$gId:$presenceSwitched"
+        if (prefs.getString(PREF_STALE_PRESENCE_CLEARED, null) == state) return
+        val topic = PresenceTopics.staleRetainedTopic(id, gId, presenceSwitched)
+        if (publishRaw(topic, ByteArray(0), MqttConfig.DEFAULT_QOS, true)) {
+            prefs.edit().putString(PREF_STALE_PRESENCE_CLEARED, state).apply()
         }
     }
 

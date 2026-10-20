@@ -11,8 +11,9 @@ package com.example.familysafety.transport
  *
  * Phones that don't know the group topic still listen on the old one, so the move is
  * family-wide and waits until every member who counts advertises [PROTOCOL_VERSION] (the same
- * 30-day rule as key rotation). Until then presence goes to both topics, the last-will stays on
- * the old one, and each member's old topic stays subscribed.
+ * 30-day rule as key rotation). Until then presence goes to both topics (retained only on the
+ * old one, see [publishTargets]), the last-will stays on the old one, and each member's old
+ * topic stays subscribed.
  *
  * Pure, so the rules can be tested without a broker.
  */
@@ -25,9 +26,23 @@ object PresenceTopics {
 
     fun group(groupId: String, memberId: String): String = MqttConfig.getGroupPresenceTopic(groupId, memberId)
 
-    /** Topics a live presence update goes to: the group topic always, the old one until the switch. */
-    fun publishTopics(memberId: String, groupId: String, switched: Boolean): List<String> =
-        if (switched) listOf(group(groupId, memberId)) else listOf(group(groupId, memberId), legacy(memberId))
+    /**
+     * Where a live presence update goes, and whether the broker keeps it (retained).
+     *
+     * The retained copy must sit on the same topic as the last-will, so that an abrupt death
+     * overwrites it. Before the switch the will is on the old topic, so the group copy goes out
+     * live only: retained there, it would keep the last "online" after the will had said
+     * "offline" on the old topic, and a fresh subscriber reading both would keep the newer
+     * "online" for good. After the switch, both the will and the retained copy are on the group
+     * topic and the old one is no longer used.
+     */
+    fun publishTargets(memberId: String, groupId: String, switched: Boolean): List<Pair<String, Boolean>> =
+        if (switched) listOf(group(groupId, memberId) to true)
+        else listOf(group(groupId, memberId) to false, legacy(memberId) to true)
+
+    /** The topic whose retained copy must be cleared once, because the will is no longer there. */
+    fun staleRetainedTopic(memberId: String, groupId: String, switched: Boolean): String =
+        if (switched) legacy(memberId) else group(groupId, memberId)
 
     /**
      * The last-will's topic. A connection has one will, so it goes where every member still
