@@ -506,7 +506,7 @@ Unused fields may be absent or `null` (Android sends `"topic":null,"payload":nul
   and unreachable when a handshake fails, a send isn't acknowledged in time (then re-resolves
   with the backoff above), their service disappears, or this phone's Wi-Fi network is lost. Only
   reachable members are sent to over the LAN. Offline, reachability is the only sign a member is
-  around: presence fails the topic rule above, so it never travels over the LAN.
+  around: presence is published to the broker only, never over the LAN.
 
 ### Profile photos (LAN only)
 
