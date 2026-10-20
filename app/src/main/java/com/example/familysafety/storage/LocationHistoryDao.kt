@@ -202,7 +202,22 @@ interface LocationHistoryDao {
      */
     @Query("SELECT DISTINCT memberId FROM location_history")
     suspend fun getMemberIdsWithData(): List<String>
+
+    /** Oldest, newest and count per member in one pass, for the availability announcement (E4). */
+    @Query(
+        "SELECT memberId, MIN(timestamp) AS oldestTimestamp, MAX(timestamp) AS newestTimestamp, " +
+            "COUNT(*) AS count FROM location_history GROUP BY memberId"
+    )
+    suspend fun getSummaryPerMember(): List<MemberLocationSummary>
 }
+
+/** One row of [LocationHistoryDao.getSummaryPerMember]. */
+data class MemberLocationSummary(
+    val memberId: String,
+    val oldestTimestamp: Long,
+    val newestTimestamp: Long,
+    val count: Int
+)
 
 /**
  * Helper class for count per member query.

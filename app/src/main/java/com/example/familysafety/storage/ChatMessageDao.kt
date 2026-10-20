@@ -301,7 +301,25 @@ interface ChatMessageDao {
      */
     @Query("SELECT conversationId, COUNT(*) as count FROM chat_messages GROUP BY conversationId")
     suspend fun getCountPerConversation(): List<ConversationMessageCount>
+
+    /**
+     * Oldest, newest and count per conversation in one pass, for the availability
+     * announcement (E4). It used to load every message of every conversation to count them.
+     */
+    @Query(
+        "SELECT conversationId, MIN(timestamp) AS oldestTimestamp, MAX(timestamp) AS newestTimestamp, " +
+            "COUNT(*) AS count FROM chat_messages GROUP BY conversationId"
+    )
+    suspend fun getSummaryPerConversation(): List<ConversationDataRange>
 }
+
+/** One row of [ChatMessageDao.getSummaryPerConversation]. */
+data class ConversationDataRange(
+    val conversationId: String,
+    val oldestTimestamp: Long,
+    val newestTimestamp: Long,
+    val count: Int
+)
 
 /**
  * Helper class for count per conversation query.
