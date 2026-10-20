@@ -67,6 +67,11 @@ public actor GroupSyncEngine {
     private var unknownKeyRefresh = WindowRateLimiter(limit: 2, windowMs: 10 * 60_000)
     /// Catch-up when someone not in our roster speaks: at most once per 5 minutes (Android #49).
     private var unknownSenderRefresh = WindowRateLimiter(limit: 1, windowMs: 5 * 60_000)
+    /// Unknown senders we've asked about, until a member's roster answers.
+    private var askedAbout: Set<String> = []
+    /// Unknown senders a member's roster answered without: not asked about again for a day.
+    private var gaveUpOn: [String: Int64] = [:]
+    static let catchUpGiveUpMs: Int64 = 24 * 60 * 60 * 1000
     public private(set) var acks: [Int64: Set<String>] = [:]
     public private(set) var ledger: ProtocolLedger
     private let ledgerSlot: SecretSlot?
@@ -118,6 +123,7 @@ public actor GroupSyncEngine {
         guard message.updaterMemberId != identity.memberId else { return .ignored("our own update") }
         guard message.groupId == current.groupId else { return .ignored("different group") }
         guard verifySignature(message, roster: current) else { return .ignored("bad update signature") }
+        noteRosterAnswer(message.groupDefinition)
 
         if message.version < current.version {
             if staleRebroadcast.allow(senderId, now: now()) {
@@ -193,11 +199,24 @@ public actor GroupSyncEngine {
     /// while this phone was away, so ask for the current roster (Android #49). Not for ourselves
     /// or a removed member, and at most once per 5 minutes, since anyone can name an unknown ID.
     public func catchUpOnUnknownSender(_ memberId: String) async {
-        guard memberId != identity.memberId, let current = await store.current,
+        let t = now()
+        gaveUpOn = gaveUpOn.filter { t - $0.value < Self.catchUpGiveUpMs }
+        guard memberId != identity.memberId, gaveUpOn[memberId] == nil, let current = await store.current,
               !current.containsMember(memberId),
               !current.removedMemberIds.contains(where: { Tombstones.memberId(of: $0) == memberId }),
-              unknownSenderRefresh.allow("*", now: now()) else { return }
+              unknownSenderRefresh.allow("*", now: t) else { return }
+        askedAbout.insert(memberId)
         await requestRefresh(reason: "unknown sender")
+    }
+
+    /// A member's authenticated roster arrived. Anyone we asked about who isn't in it is
+    /// probably not a member at all (a stranger, a turned-down joiner): stop asking about them
+    /// for a day. A real new member is in the roster that answers, so they're never given up on.
+    private func noteRosterAnswer(_ roster: GroupDefinition) {
+        guard !askedAbout.isEmpty else { return }
+        let t = now()
+        for id in askedAbout where !roster.containsMember(id) { gaveUpOn[id] = t }
+        askedAbout = []
     }
 
     /// Members to show as "needs to update" (§6.2 rule 3).

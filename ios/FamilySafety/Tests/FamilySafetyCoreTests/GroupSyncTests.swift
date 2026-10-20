@@ -33,6 +33,8 @@ final class GroupSyncTests: XCTestCase {
     }
 
     /// Captures what the engine would publish.
+    final class Clock: @unchecked Sendable { var now: Int64 = 1_800_000_000_000 }
+
     actor CapturingOutbox: GroupSyncOutbox {
         struct Sent { let topic: String; let payload: Data }
         private(set) var sent: [Sent] = []
@@ -444,6 +446,32 @@ final class GroupSyncTests: XCTestCase {
         await p.bobEngine.catchUpOnUnknownSender(p.bob.memberId)
         let after = await p.bobOut.to(Topics.syncRequest(memberId: p.alice.memberId))
         XCTAssertEqual(after.count, 1)
+    }
+
+    func test_engine_unknownSenderGivenUpOnceARosterAnswersWithoutThem() async throws {
+        let alice = try identity("alice"), bob = try identity("bob"), stranger = try identity("stranger")
+        let base = group([member(alice, "A"), member(bob, "B")], creator: alice, version: 2)
+        let bobStore = GroupStateStore(localMemberId: bob.memberId, persistence: InMemoryGroupStatePersistence(initial: base))
+        try await bobStore.load()
+        let aliceStore = GroupStateStore(localMemberId: alice.memberId, persistence: InMemoryGroupStatePersistence(initial: base))
+        try await aliceStore.load()
+        let clock = Clock()
+        let bobOut = CapturingOutbox(), aliceOut = CapturingOutbox()
+        let bobEngine = GroupSyncEngine(identity: bob, store: bobStore, outbox: bobOut, now: { clock.now })
+        let aliceEngine = GroupSyncEngine(identity: alice, store: aliceStore, outbox: aliceOut, now: { clock.now })
+        await bobEngine.catchUpOnUnknownSender(stranger.memberId)
+        // Alice answers with her roster, which doesn't have the stranger.
+        await aliceEngine.broadcast(base, changeType: .fullSync)
+        let reply = await aliceOut.to(Topics.groupSyncInbox(memberId: bob.memberId))
+        _ = await bobEngine.handleGroupSync(payload: reply[0])
+        clock.now += 6 * 60_000
+        await bobEngine.catchUpOnUnknownSender(stranger.memberId)
+        var asked = await bobOut.to(Topics.syncRequest(memberId: alice.memberId)).count
+        XCTAssertEqual(asked, 1, "given up on for a day, though the 5-minute window has passed")
+        clock.now += 24 * 60 * 60_000
+        await bobEngine.catchUpOnUnknownSender(stranger.memberId)
+        asked = await bobOut.to(Topics.syncRequest(memberId: alice.memberId)).count
+        XCTAssertEqual(asked, 2, "asked again after a day")
     }
 
     func test_engine_refreshRequests_membersOnly_andRateLimited_F16() async throws {
