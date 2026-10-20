@@ -7,7 +7,7 @@ import Foundation
 /// padding, signatures, sealed presence and encrypted manifests turns a legible "peer
 /// needs to update" warning back into silent invisibility.
 public enum ProtocolVersion {
-    public static let current = 4
+    public static let current = 5
     /// Below this a peer can't interoperate; the UI names them (§6.2 rule 3).
     public static let minCompatible = 3
 }
@@ -52,9 +52,14 @@ public struct PresenceUpdate: Codable, Equatable {
     public let deviceId: String?
     /// Ed25519 by the member over `presence-device:v1:{memberId}:{timestamp}:{deviceId}`.
     public let deviceSignature: String?
+    /// Online only: the exact timestamp this connection's last-will was signed with (§6.2
+    /// "Sudden disconnect"), so a receiver can accept that will although it's older.
+    public let sessionStart: Int64?
+    /// Ed25519 by the member over `presence-session:v1:{memberId}:{timestamp}:{sessionStart}`.
+    public let sessionSignature: String?
 
     public init(memberId: String, isOnline: Bool, timestamp: Int64, signature: String? = nil, protocolVersion: Int = ProtocolVersion.current,
-                deviceId: String? = nil, deviceSignature: String? = nil) {
+                deviceId: String? = nil, deviceSignature: String? = nil, sessionStart: Int64? = nil, sessionSignature: String? = nil) {
         self.memberId = memberId
         self.isOnline = isOnline
         self.timestamp = timestamp
@@ -62,9 +67,26 @@ public struct PresenceUpdate: Codable, Equatable {
         self.protocolVersion = protocolVersion
         self.deviceId = deviceId
         self.deviceSignature = deviceSignature
+        self.sessionStart = sessionStart
+        self.sessionSignature = sessionSignature
     }
 
-    private enum CodingKeys: String, CodingKey { case memberId, isOnline, timestamp, signature, protocolVersion, deviceId, deviceSignature }
+    private enum CodingKeys: String, CodingKey {
+        case memberId, isOnline, timestamp, signature, protocolVersion, deviceId, deviceSignature, sessionStart, sessionSignature
+    }
+
+    public static func sessionSigningPayload(memberId: String, timestamp: Int64, sessionStart: Int64) -> String {
+        "presence-session:v1:\(memberId):\(timestamp):\(sessionStart)"
+    }
+
+    /// The session start, only on an online update whose session signature verifies and whose
+    /// start isn't after the update itself; nil otherwise.
+    public func verifiedSessionStart(publicKey: [UInt8]) -> Int64? {
+        guard isOnline, let sessionStart, sessionStart <= timestamp,
+              let sessionSignature, let sig = Hex.decode(sessionSignature) else { return nil }
+        let payload = Self.sessionSigningPayload(memberId: memberId, timestamp: timestamp, sessionStart: sessionStart)
+        return SodiumRaw.signVerifyDetached(signature: sig, message: Array(payload.utf8), publicKey: publicKey) ? sessionStart : nil
+    }
 
     public static func deviceSigningPayload(memberId: String, timestamp: Int64, deviceId: String) -> String {
         "presence-device:v1:\(memberId):\(timestamp):\(deviceId)"
@@ -87,6 +109,8 @@ public struct PresenceUpdate: Codable, Equatable {
         protocolVersion = try c.decodeIfPresent(Int.self, forKey: .protocolVersion) ?? 1
         deviceId = try c.decodeIfPresent(String.self, forKey: .deviceId)
         deviceSignature = try c.decodeIfPresent(String.self, forKey: .deviceSignature)
+        sessionStart = try c.decodeIfPresent(Int64.self, forKey: .sessionStart)
+        sessionSignature = try c.decodeIfPresent(String.self, forKey: .sessionSignature)
     }
 
     /// The exact UTF-8 string that gets Ed25519-signed (§6.2) — built from the fields
@@ -100,7 +124,8 @@ public struct PresenceUpdate: Codable, Equatable {
     /// signature scheme `verifySignature` checks on receive.
     public static func signed(
         memberId: String, isOnline: Bool, timestamp: Int64,
-        ed25519SecretKey64: [UInt8], protocolVersion: Int = ProtocolVersion.current, deviceId: String? = nil
+        ed25519SecretKey64: [UInt8], protocolVersion: Int = ProtocolVersion.current, deviceId: String? = nil,
+        sessionStart: Int64? = nil
     ) throws -> PresenceUpdate {
         let payload = signingPayload(memberId: memberId, isOnline: isOnline, timestamp: timestamp)
         let signature = try SodiumRaw.signDetached(message: Array(payload.utf8), secretKey: ed25519SecretKey64)
@@ -109,8 +134,15 @@ public struct PresenceUpdate: Codable, Equatable {
             let devicePayload = deviceSigningPayload(memberId: memberId, timestamp: timestamp, deviceId: deviceId)
             deviceSignature = Hex.encode(try SodiumRaw.signDetached(message: Array(devicePayload.utf8), secretKey: ed25519SecretKey64))
         }
+        // The session start rides on online presence only; the will and offline carry none.
+        var session: (Int64, String)?
+        if isOnline, let sessionStart {
+            let sessionPayload = sessionSigningPayload(memberId: memberId, timestamp: timestamp, sessionStart: sessionStart)
+            session = (sessionStart, Hex.encode(try SodiumRaw.signDetached(message: Array(sessionPayload.utf8), secretKey: ed25519SecretKey64)))
+        }
         return PresenceUpdate(memberId: memberId, isOnline: isOnline, timestamp: timestamp, signature: Hex.encode(signature),
-                              protocolVersion: protocolVersion, deviceId: deviceId, deviceSignature: deviceSignature)
+                              protocolVersion: protocolVersion, deviceId: deviceId, deviceSignature: deviceSignature,
+                              sessionStart: session?.0, sessionSignature: session?.1)
     }
 
     /// Verifies `signature` against the sender's roster `ed25519PublicKey` (§6.2). False

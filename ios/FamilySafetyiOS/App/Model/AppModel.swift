@@ -34,6 +34,7 @@ final class AppModel: ObservableObject {
     private let pendingJoinSlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "pending-join")
     private let deviceSlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "device-id")
     private let ledgerSlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "protocol-ledger")
+    private let presenceSlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "presence-book")
 
     var memberId: String? { try? profile?.identity().memberId }
 
@@ -119,7 +120,7 @@ final class AppModel: ObservableObject {
                                                     keyProvider: KeychainGroupStateKeyProvider())
         let node = try FamilyNode(profile: profile, credentials: credentials, groupPersistence: persistence,
                                   inviteSlot: inviteSlot, pendingJoinSlot: pendingJoinSlot, deviceSlot: deviceSlot,
-                                  ledgerSlot: ledgerSlot) { [weak self] event in
+                                  ledgerSlot: ledgerSlot, presenceSlot: presenceSlot) { [weak self] event in
             Task { @MainActor in self?.handle(event) }
         }
         self.node = node

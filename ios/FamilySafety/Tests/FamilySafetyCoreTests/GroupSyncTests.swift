@@ -428,6 +428,24 @@ final class GroupSyncTests: XCTestCase {
         XCTAssertGreaterThan(seqBefore, 0)
     }
 
+    func test_engine_unknownSenderAsksForTheRosterOncePer5Minutes_49() async throws {
+        let p = try await pair()
+        let carol = try identity("carol")
+        // Carol joined while Bob was away: Bob's roster doesn't have her yet.
+        let carolCrypto = E2EECrypto(localMemberId: carol.memberId, localEd25519SecretKey: carol.ed25519SecretKey64,
+                                     localX25519SecretKey: carol.x25519PrivateKey)
+        let envelope = try carolCrypto.encrypt(plaintext: "{}", recipientMemberId: p.bob.memberId, recipientX25519PublicKey: p.bob.x25519PublicKey)
+        let first = await p.bobEngine.handleGroupSync(payload: envelope)
+        XCTAssertEqual(first, .ignored("sender not in our roster"))
+        _ = await p.bobEngine.handleGroupSync(payload: envelope)
+        let requests = await p.bobOut.to(Topics.syncRequest(memberId: p.alice.memberId))
+        XCTAssertEqual(requests.count, 1, "a known member answers; once per 5 minutes")
+        // A removed member, or ourselves, never triggers it.
+        await p.bobEngine.catchUpOnUnknownSender(p.bob.memberId)
+        let after = await p.bobOut.to(Topics.syncRequest(memberId: p.alice.memberId))
+        XCTAssertEqual(after.count, 1)
+    }
+
     func test_engine_refreshRequests_membersOnly_andRateLimited_F16() async throws {
         let p = try await pair()
         let stranger = try identity("stranger")
