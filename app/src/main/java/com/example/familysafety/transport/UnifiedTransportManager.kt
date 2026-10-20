@@ -43,22 +43,14 @@ class UnifiedTransportManager @Inject constructor(
         const val TAG = "UnifiedTransport"
     }
 
-    init {
-        // Hook up MQTT incoming messages
-        mqttTransport.onMessageReceived = { topic, payload ->
-            handleIncomingMessage(topic, payload)
-        }
+    /** Both transports' incoming messages, ordered and bounded per kind of traffic (E5, F16). */
+    private val inbound = InboundQueues(scope, ::route)
 
-        // Hook up Local P2P incoming messages
+    init {
+        mqttTransport.onInbound = { inbound.offer(it) }
+        // LocalTransport payloads keep the same UTF-8 string shape as MQTT payloads.
         localTransport.onMessageReceived = { topic, payloadString, senderId ->
-            if (topic.contains("/avatar/")) {
-                // Photos travel only over an authenticated LAN session (4.1, F20), so their
-                // handler is told who sent them; nothing else on the broker carries them.
-                scope.launch { avatarRepositoryProvider.get().handleLanMessage(topic, payloadString, senderId) }
-            } else {
-                // LocalTransport payloads preserve the same UTF-8 string shape as MQTT payloads.
-                handleIncomingMessage(topic, payloadString)
-            }
+            inbound.offer(InboundMessage(topic, payloadString, lanSender = senderId))
         }
 
         localTransport.onPeerReachabilityChanged = { memberId, reachable, address ->
@@ -147,146 +139,161 @@ class UnifiedTransportManager @Inject constructor(
         return@withContext anySucceeded
     }
 
-    private fun handleIncomingMessage(topic: String, payload: String) {
-        scope.launch {
-            try {
-                // Clearing a retained message is published as an empty payload, so every
-                // retained topic delivers one to every subscriber as part of normal
-                // cleanup. None of the handlers below have anything to do with it, and
-                // several throw on it — dropping it here keeps that from being every
-                // handler's problem.
-                if (payload.isEmpty()) {
-                    Timber.d("Empty payload on $topic (retained clear) — ignoring")
-                    return@launch
-                }
-
-                // Route based on topic structure (Extracted from legacy MqttTransport)
-                when {
-                    topic.endsWith("/chat") -> {
-                        // The chat topic names the RECIPIENT (our own inbox), so the sender
-                        // can only come from the encrypted envelope metadata.
-                        val senderId = extractSenderFromEncryptedEnvelope(payload)
-                        if (senderId != null) {
-                            chatRepositoryProvider.get().handleIncomingMessage(payload, senderId)
-                        }
-                    }
-
-                    topic.endsWith("/chat/receipt") || topic.endsWith("/chat/read") -> {
-                        val senderId = extractSenderFromEncryptedEnvelope(payload)
-                        if (senderId != null) {
-                            chatRepositoryProvider.get().handleDeliveryReceipt(payload, senderId)
-                        }
-                    }
-
-                    topic.endsWith("/replication/request") -> {
-                        val senderId = extractSenderFromEncryptedEnvelope(payload)
-                        if (senderId != null) {
-                            replicationManagerProvider.get().handleReplicationRequest(payload, senderId)
-                        }
-                    }
-
-                    topic.endsWith("/replication/data") -> {
-                        val senderId = extractSenderFromEncryptedEnvelope(payload)
-                        if (senderId != null) {
-                            replicationManagerProvider.get().handleReplicationResponse(payload, senderId)
-                        }
-                    }
-
-                    topic.endsWith("/replication/announce") -> {
-                        val senderId = extractSenderFromEncryptedEnvelope(payload) ?: extractSenderFromAnnounceTopic(payload)
-                        if (senderId != null) {
-                            replicationManagerProvider.get().handleDataAvailabilityAnnouncement(payload, senderId)
-                        }
-                    }
-
-                    topic.endsWith("/group_sync") -> {
-                        groupSyncManagerProvider.get().handleSyncMessage(payload)
-                    }
-
-                    topic.contains("/group/") && topic.endsWith("/ack") -> {
-                        groupSyncManagerProvider.get().handleAckMessage(payload)
-                    }
-
-                    topic.endsWith("/group_ack") -> {
-                        groupSyncManagerProvider.get().handleAckMessage(payload)
-                    }
-
-                    topic.endsWith("/join_request") -> {
-                        inviteManagerProvider.get().handleIncomingJoinRequest(payload)
-                    }
-
-                    topic.endsWith("/sync_request") -> {
-                        groupSyncManagerProvider.get().handleSyncRequestMessage(payload)
-                    }
-
-                    topic.endsWith("/removal_vote") -> {
-                        groupSyncManagerProvider.get().handleRemovalVoteMessage(payload)
-                    }
-
-                    topic.endsWith("/location_inbox") -> {
-                        mqttTransport.handleLocationInbox(payload)
-                    }
-
-                    topic.endsWith("/location") -> {
-                        // Legacy sender-keyed topic (older peers). Forward to specialized handler.
-                        handleEncryptedLocation(topic, payload)
-                    }
-
-                    topic.contains("/files/manifest") -> {
-                        sharedFileRepositoryProvider.get().handleIncomingManifest(payload.toByteArray())
-                    }
-
-                    topic.contains("/files/chunk/") -> {
-                        val parts = topic.split("/files/chunk/", limit = 2)
-                        if (parts.size == 2) {
-                            val chunkParts = parts[1].split("/")
-                            if (chunkParts.size >= 2) {
-                                val fileId = chunkParts[0]
-                                val chunkIndex = chunkParts[1].toIntOrNull() ?: 0
-                                sharedFileRepositoryProvider.get().handleIncomingChunk(fileId, chunkIndex, payload.toByteArray())
-                            }
-                        }
-                    }
-
-                    topic.endsWith("/files/request") -> {
-                        sharedFileRepositoryProvider.get().handleFileRequest(payload.toByteArray())
-                    }
-
-                    topic.endsWith("/files/availability") -> {
-                        sharedFileRepositoryProvider.get()
-                            .handleHoldingsAnnouncement(payload.toByteArray())
-                    }
-
-                    topic.endsWith("/files/repair") -> {
-                        sharedFileRepositoryProvider.get()
-                            .handleChunkRepairRequest(payload.toByteArray())
-                    }
-
-                    topic.contains("/vault/container") -> {
-                        vaultRepositoryProvider.get().handleIncomingContainer(payload.toByteArray())
-                    }
-
-                    topic.contains("/vault/chunk/") -> {
-                        val parts = topic.split("/vault/chunk/", limit = 2)
-                        if (parts.size == 2) {
-                            val chunkParts = parts[1].split("/")
-                            if (chunkParts.size >= 2) {
-                                vaultRepositoryProvider.get().handleIncomingChunk(
-                                    fileId = chunkParts[0],
-                                    chunkIndex = chunkParts[1].toIntOrNull() ?: 0,
-                                    payload = payload.toByteArray()
-                                )
-                            }
-                        }
-                    }
-
-                    topic.endsWith("/vault/repair") -> {
-                        vaultRepositoryProvider.get().handleChunkRequest(payload.toByteArray())
-                    }
-                }
-            } catch (e: Exception) {
-                Timber.e(e, "$TAG: Error routing incoming message on $topic")
+    /** One message from its lane's queue, handled before the next one on that lane starts. */
+    private suspend fun route(message: InboundMessage) {
+        val topic = message.topic
+        when {
+            topic.contains("/avatar/") -> {
+                // Photos travel only over an authenticated LAN session (4.1, F20), so their
+                // handler is told who sent them. From the broker they're ignored.
+                message.lanSender?.let { avatarRepositoryProvider.get().handleLanMessage(topic, message.payload, it) }
             }
+            // Presence comes only from the broker; MqttTransport keeps its state. Empty
+            // payloads (cleared retained copies) are its to ignore.
+            message.lanSender == null && PresenceTopics.isPresenceTopic(topic) ->
+                mqttTransport.handleLocationOrPresencePublic(topic, message.payload, message.retained)
+            else -> handleIncomingMessage(topic, message.payload)
+        }
+    }
+
+    private suspend fun handleIncomingMessage(topic: String, payload: String) {
+        try {
+            // Clearing a retained message is published as an empty payload, so every
+            // retained topic delivers one to every subscriber as part of normal
+            // cleanup. None of the handlers below have anything to do with it, and
+            // several throw on it — dropping it here keeps that from being every
+            // handler's problem.
+            if (payload.isEmpty()) {
+                Timber.d("Empty payload on $topic (retained clear) — ignoring")
+                return
+            }
+
+            // Route based on topic structure (Extracted from legacy MqttTransport)
+            when {
+                topic.endsWith("/chat") -> {
+                    // The chat topic names the RECIPIENT (our own inbox), so the sender
+                    // can only come from the encrypted envelope metadata.
+                    val senderId = extractSenderFromEncryptedEnvelope(payload)
+                    if (senderId != null) {
+                        chatRepositoryProvider.get().handleIncomingMessage(payload, senderId)
+                    }
+                }
+
+                topic.endsWith("/chat/receipt") || topic.endsWith("/chat/read") -> {
+                    val senderId = extractSenderFromEncryptedEnvelope(payload)
+                    if (senderId != null) {
+                        chatRepositoryProvider.get().handleDeliveryReceipt(payload, senderId)
+                    }
+                }
+
+                topic.endsWith("/replication/request") -> {
+                    val senderId = extractSenderFromEncryptedEnvelope(payload)
+                    if (senderId != null) {
+                        replicationManagerProvider.get().handleReplicationRequest(payload, senderId)
+                    }
+                }
+
+                topic.endsWith("/replication/data") -> {
+                    val senderId = extractSenderFromEncryptedEnvelope(payload)
+                    if (senderId != null) {
+                        replicationManagerProvider.get().handleReplicationResponse(payload, senderId)
+                    }
+                }
+
+                topic.endsWith("/replication/announce") -> {
+                    val senderId = extractSenderFromEncryptedEnvelope(payload) ?: extractSenderFromAnnounceTopic(payload)
+                    if (senderId != null) {
+                        replicationManagerProvider.get().handleDataAvailabilityAnnouncement(payload, senderId)
+                    }
+                }
+
+                topic.endsWith("/group_sync") -> {
+                    groupSyncManagerProvider.get().handleSyncMessage(payload)
+                }
+
+                topic.contains("/group/") && topic.endsWith("/ack") -> {
+                    groupSyncManagerProvider.get().handleAckMessage(payload)
+                }
+
+                topic.endsWith("/group_ack") -> {
+                    groupSyncManagerProvider.get().handleAckMessage(payload)
+                }
+
+                topic.endsWith("/join_request") -> {
+                    inviteManagerProvider.get().handleIncomingJoinRequest(payload)
+                }
+
+                topic.endsWith("/sync_request") -> {
+                    groupSyncManagerProvider.get().handleSyncRequestMessage(payload)
+                }
+
+                topic.endsWith("/removal_vote") -> {
+                    groupSyncManagerProvider.get().handleRemovalVoteMessage(payload)
+                }
+
+                topic.endsWith("/location_inbox") -> {
+                    mqttTransport.handleLocationInbox(payload)
+                }
+
+                topic.endsWith("/location") -> {
+                    // Legacy sender-keyed topic (older peers). Forward to specialized handler.
+                    handleEncryptedLocation(topic, payload)
+                }
+
+                topic.contains("/files/manifest") -> {
+                    sharedFileRepositoryProvider.get().handleIncomingManifest(payload.toByteArray())
+                }
+
+                topic.contains("/files/chunk/") -> {
+                    val parts = topic.split("/files/chunk/", limit = 2)
+                    if (parts.size == 2) {
+                        val chunkParts = parts[1].split("/")
+                        if (chunkParts.size >= 2) {
+                            val fileId = chunkParts[0]
+                            val chunkIndex = chunkParts[1].toIntOrNull() ?: 0
+                            sharedFileRepositoryProvider.get().handleIncomingChunk(fileId, chunkIndex, payload.toByteArray())
+                        }
+                    }
+                }
+
+                topic.endsWith("/files/request") -> {
+                    sharedFileRepositoryProvider.get().handleFileRequest(payload.toByteArray())
+                }
+
+                topic.endsWith("/files/availability") -> {
+                    sharedFileRepositoryProvider.get()
+                        .handleHoldingsAnnouncement(payload.toByteArray())
+                }
+
+                topic.endsWith("/files/repair") -> {
+                    sharedFileRepositoryProvider.get()
+                        .handleChunkRepairRequest(payload.toByteArray())
+                }
+
+                topic.contains("/vault/container") -> {
+                    vaultRepositoryProvider.get().handleIncomingContainer(payload.toByteArray())
+                }
+
+                topic.contains("/vault/chunk/") -> {
+                    val parts = topic.split("/vault/chunk/", limit = 2)
+                    if (parts.size == 2) {
+                        val chunkParts = parts[1].split("/")
+                        if (chunkParts.size >= 2) {
+                            vaultRepositoryProvider.get().handleIncomingChunk(
+                                fileId = chunkParts[0],
+                                chunkIndex = chunkParts[1].toIntOrNull() ?: 0,
+                                payload = payload.toByteArray()
+                            )
+                        }
+                    }
+                }
+
+                topic.endsWith("/vault/repair") -> {
+                    vaultRepositoryProvider.get().handleChunkRequest(payload.toByteArray())
+                }
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "$TAG: Error routing incoming message on $topic")
         }
     }
 

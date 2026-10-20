@@ -353,7 +353,10 @@ class GroupSyncManager @Inject constructor(
                 "Responding to group refresh request from ${request.requesterMemberId.take(8)} " +
                     "for v${request.minimumVersion}"
             )
-            broadcastGroupUpdate(currentGroup, ChangeType.FULL_SYNC, request.changedMemberId)
+            // Launched, not awaited: a broadcast waits up to 30 s for acks, and this handler runs
+            // on the ordered sync queue, which must not stall behind it. Same at every broadcast
+            // started from an incoming message.
+            scope.launch { broadcastGroupUpdate(currentGroup, ChangeType.FULL_SYNC, request.changedMemberId) }
         } catch (e: Exception) {
             Timber.w(e, "Failed to handle group sync request")
         }
@@ -424,7 +427,7 @@ class GroupSyncManager @Inject constructor(
                 // Signed, but replayable until envelopes carry a replay window (3.4): one
                 // captured old update, replayed, would trigger a full broadcast each time.
                 if (responseLimiter.allowRequest(RESPONSE_LIMIT_KEY)) {
-                    broadcastGroupUpdate(currentGroup, ChangeType.VERSION_SYNC)
+                    scope.launch { broadcastGroupUpdate(currentGroup, ChangeType.VERSION_SYNC) }
                 } else {
                     Timber.w("Not answering outdated version: rate limited")
                 }
@@ -509,7 +512,7 @@ class GroupSyncManager @Inject constructor(
                         "Reconciled to v${resolved.version} with ${resolved.members.size} " +
                             "members — publishing back to the family"
                     )
-                    broadcastGroupUpdate(resolved, ChangeType.FULL_SYNC)
+                    scope.launch { broadcastGroupUpdate(resolved, ChangeType.FULL_SYNC) }
                 }
 
                 _syncState.value = SyncState.Synced(syncMessage.version)
@@ -839,12 +842,14 @@ class GroupSyncManager @Inject constructor(
         if (result is GroupOperationResult.Success) {
             pendingVotes.remove(key)
             clearRetainedVotes()
-            broadcastGroupUpdate(
-                result.value,
-                ChangeType.MEMBER_REMOVED,
-                changedMemberId = targetMemberId,
-                quorumSignatures = signatures
-            )
+            scope.launch {
+                broadcastGroupUpdate(
+                    result.value,
+                    ChangeType.MEMBER_REMOVED,
+                    changedMemberId = targetMemberId,
+                    quorumSignatures = signatures
+                )
+            }
         } else if (result is GroupOperationResult.Failure) {
             Timber.w("Quorum tally reached threshold locally but removeMemberByQuorum rejected it: ${result.error}")
         }
