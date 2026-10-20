@@ -64,7 +64,7 @@ object MessageProtocol {
     //
     // 640 since presence also carries a device ID and its signature (F15), about 525 bytes in
     // all: past 512, and rounding up to 1024 would double presence traffic for nothing.
-    internal const val PRESENCE_PADDED_BYTES = 640
+    internal const val PRESENCE_PADDED_BYTES = 768
     private const val LOCATION_PADDED_BYTES = 512
 
     /** Filler character. Must not need JSON escaping, or padding would not be 1:1. */
@@ -161,7 +161,15 @@ object MessageProtocol {
          * from [signature] so the shipped presence signing string stays unchanged, and so one
          * member can't forge another's device ID to raise a false alarm.
          */
-        val deviceSignature: String? = null
+        val deviceSignature: String? = null,
+        /**
+         * On online presence: the timestamp this connection's last-will was signed with, so a
+         * receiver can accept that will although it is older than this update (see
+         * [PresenceSessions]). Optional: older senders omit it, older receivers ignore it.
+         */
+        val sessionStart: Long? = null,
+        /** Ed25519 (hex) by the identity key over [sessionSigningPayload]; separate, like [deviceSignature]. */
+        val sessionSignature: String? = null
     )
 
     /**
@@ -170,6 +178,10 @@ object MessageProtocol {
      */
     fun deviceSigningPayload(memberId: String, timestamp: Long, deviceId: String): ByteArray =
         "presence-device:v1:$memberId:$timestamp:$deviceId".toByteArray(Charsets.UTF_8)
+
+    /** Canonical bytes covered by [PresenceUpdate.sessionSignature]. Cross-platform implementations must match. */
+    fun sessionSigningPayload(memberId: String, timestamp: Long, sessionStart: Long): ByteArray =
+        "presence-session:v1:$memberId:$timestamp:$sessionStart".toByteArray(Charsets.UTF_8)
 
     /**
      * Presence sealed under the group key, as published on the presence topic since
@@ -239,9 +251,10 @@ object MessageProtocol {
         memberId: String,
         isOnline: Boolean,
         sign: ((ByteArray) -> ByteArray)? = null,
-        deviceId: String? = null
+        deviceId: String? = null,
+        timestamp: Long = System.currentTimeMillis(),
+        sessionStart: Long? = null
     ): String {
-        val timestamp = System.currentTimeMillis()
         fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
         val presenceUpdate = PresenceUpdate(
             memberId = memberId,
@@ -252,6 +265,10 @@ object MessageProtocol {
             deviceId = deviceId,
             deviceSignature = if (deviceId != null) {
                 sign?.invoke(deviceSigningPayload(memberId, timestamp, deviceId))?.hex()
+            } else null,
+            sessionStart = sessionStart,
+            sessionSignature = if (sessionStart != null) {
+                sign?.invoke(sessionSigningPayload(memberId, timestamp, sessionStart))?.hex()
             } else null
         )
         

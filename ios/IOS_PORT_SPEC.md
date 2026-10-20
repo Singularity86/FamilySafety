@@ -41,6 +41,7 @@ Android commits `fdf5083`, `ec52069`, `1310776`, `a0d648d`, `142f9a4` and the bi
 | next (remediation 2.2b) | behaviour | **Client ID per install:** `familysafe_{memberId}_{deviceId}`. Without it, two installs of one identity evicted each other on the broker and the 2.2 warning never fired. It also stops an outsider with the shipped broker credentials from knocking a member offline by connecting under their member ID. No payload changes; the old session expires on the broker (2 h). | §4, §6.2 |
 | next (remediation 3.1) | **wire** | **Authorship of non-hashed fields.** The sync envelope's sender must equal `updaterMemberId`. Members self-sign their profile (`profileUpdatedAtMs`, `profileSignature`) and the subscriber signs confirmations (`subscriptionSignature`); a changed profile or subscription is taken only from its author or with a valid, newer signature, otherwise receivers keep theirs. `addedAt`/`addedBy` are immutable, and a set file key can't be replaced. All new fields are optional and unhashed; `PROTOCOL_VERSION` stays 3. | §6.5, §7.3 |
 | next (remediation 2.2) | **wire** | **Signed device ID in presence.** Optional `deviceId` and `deviceSignature` (over `presence-device:v1:…`). Receivers notify when one member shows two devices within 10 min, or your own identity shows another device. Presence padding goes from 512 to **640**. The existing presence signature is unchanged and older peers ignore the new fields, so `PROTOCOL_VERSION` stays 3. | §6.1, §6.2, §12 |
+| next (sudden disconnect) | **wire** | **Session start in online presence.** Optional `sessionStart` (the will's timestamp) and `sessionSignature` (over `presence-session:v1:…`). A receiver accepts an older offline when it is the will of the member's current session, so an abrupt death shows as offline on phones already listening, not only as "seen X ago". Presence padding goes from 640 to **768**. Older peers ignore the fields; `PROTOCOL_VERSION` unchanged. iOS: build both halves. | §6.1, §6.2, §12 |
 | next (remediation 4.2) | **wire** | **Presence under the group topic; `PROTOCOL_VERSION` 5.** Presence also goes to `familysafe/group/{groupId}/presence/{memberId}` (covered by the family wildcard). Once every member who counts advertises ≥ 5 (30-day rule), each phone publishes there only, moves its last-will there, drops the per-peer presence filters (2 subscriptions for any family size) and clears its old retained presence. Until then: both topics (retained only on the old one, so the will overwrites it), will on the old one. Read both always. Gated on **5**, not 4, because iOS builds at 4 don't read the group topic. Android also asks for a roster refresh on presence from an unknown member (#49). iOS: REQUIRED before advertising 5. | §5, §6.2 |
 | next (remediation 4.1) | **wire (LAN)** | **Authenticated local-network channel, now specified for iOS.** Bonjour names are `fs-` + an HMAC of the day and member ID under the family key (no TXT); every TCP connection opens with a handshake keyed by the two members' X25519 shared secret, then AES-256-GCM frames with strict counters and an ack per message. Photos move inside the session (`avatar/request`, `avatar/data`); the HTTP photo server is gone. Doesn't touch the broker or `PROTOCOL_VERSION`; Android ≤ 1.15.5 phones aren't found, so a mixed pair uses the broker. iOS: implement it for offline families. | §4.1, §5, §11, §12 |
 | next (remediation 3.4) | **wire** | **Replay window; `PROTOCOL_VERSION` 4.** To a recipient advertising ≥ 4, the §3 plaintext is a sequenced body `{"seq","ts","body"}` with a per-sender clock-seeded `seq`; receivers keep a persisted 256-entry window per (sender, Ed25519 key) and refuse replays, bodies over 7 days old or over 24 h ahead, and unsequenced bodies after sequenced ones (surfaced as "needs to update"). Refresh requests and acks go inside the envelope to such peers; acks go to the updater's new `group_ack` inbox. Advertising 4 means 3.2 strict + 3.3 + 3.4; unsigned history by a ≥ 4 author is dropped. The "needs update" warning stays below 3 (`MIN_COMPATIBLE_VERSION`). | §3, §5, §6.2, §6.4, §6.6, §12 |
@@ -638,12 +639,14 @@ a device as moving. Coordinate precision leaked the same way.
 Algorithm, which must match byte-for-byte to be useful:
 
 1. Serialize the envelope with `pad` set to `""`; measure its length in **UTF-8 bytes**.
-2. Round that up to the next multiple of the target for the message type — **640** for
+2. Round that up to the next multiple of the target for the message type — **768** for
    `presence_update` and **512** for `location_update`. (Presence was 256 before 1.12.3; the
    Ed25519 signature added in §6.2 does not fit in 256, and leaving it there would split
    presence across two buckets, making signed and unsigned senders distinguishable. It went
    from 512 to 640 with the signed device ID (§6.2, remediation 2.2), which takes a presence
-   update to about 525 bytes; 1024 would have doubled presence traffic.)
+   update to about 525 bytes; 1024 would have doubled presence traffic. It went to 768 with the
+   signed session start on online presence (§6.2, sudden disconnect), about 700 bytes; the will
+   pads to 768 too, so online and offline stay one size.)
 3. Re-serialize with `pad` set to `.` repeated (target − unpadded) times.
 
 `.` needs no JSON escaping, so N characters add exactly N bytes. Rounding up to a
@@ -664,7 +667,8 @@ padding is a bandwidth trade rather than a free win).
   "authorSig": "<hex128chars>" }                             // LocationUpdate
 { "memberId": "...", "isOnline": true, "timestamp": 0,
   "signature": "<hex128chars>", "protocolVersion": 2,
-  "deviceId": "<32 hex>", "deviceSignature": "<hex128chars>" }   // PresenceUpdate
+  "deviceId": "<32 hex>", "deviceSignature": "<hex128chars>",
+  "sessionStart": 0, "sessionSignature": "<hex128chars>" }       // PresenceUpdate (session: online only)
 ```
 
 **Receivers drop a `LocationUpdate` whose `memberId` ≠ the authenticated sender** (the
@@ -754,6 +758,31 @@ Receivers, after the existing presence checks pass:
 
 An inviter that auto-approves a restored member (§8.4.1) also notifies locally, *"{name} was
 restored on a new phone"*.
+
+#### Sudden disconnect (session start)
+
+The last-will is signed at connect (T0), so it is older than every online the same connection
+publishes afterwards (T1). The replay check below therefore dropped it on every phone already
+listening: an abrupt death only ever showed as "seen X ago". Online presence now names its
+connection's start:
+
+- `sessionStart`: on **online** presence only, the exact `timestamp` this connection's last-will
+  was signed with (keep it when you build the will). Absent on offline presence and the will.
+- `sessionSignature`: Ed25519 by the identity key, lowercase hex, over
+  `presence-session:v1:{memberId}:{timestamp}:{sessionStart}` (UTF-8, `timestamp` = this
+  update's). Separate from `signature`, like `deviceSignature`.
+
+Receivers keep, per member, the session start of the newest accepted online whose session
+signature verifies and whose `sessionStart` ≤ its `timestamp`; any other accepted update
+(online without a valid session, or offline) clears it. An update older than the newest accepted
+one is still a replay **unless** it is offline, signed, and its `timestamp` equals that stored
+session start: that is the will of the session in progress. Accept it (mark the member offline),
+clear the stored session start so it can't be accepted twice, and leave the newest timestamp
+where it was. An earlier session's will never matches, so a late or replayed will can't mark a
+member who has reconnected offline.
+
+Both fields are optional: older senders omit them, older receivers ignore them, and
+`PROTOCOL_VERSION` is unchanged.
 
 #### Protocol version advertisement (since 1.12.6)
 
@@ -868,7 +897,8 @@ Receivers must apply three checks:
 
 1. **Replay** — reject a presence whose `timestamp` is older than the newest accepted one
    for that member, or a captured "offline" can be republished later at will. Allow equal
-   timestamps: the broker redelivers retained messages on every resubscribe.
+   timestamps: the broker redelivers retained messages on every resubscribe. The one exception
+   is the will of the member's current session (§6.2 "Sudden disconnect"), and only signed.
 2. **Downgrade** — once a member has been seen with a *valid* signature, reject a later
    unsigned update claiming to be them. That is an attacker stripping the field, not an
    old client.
@@ -2222,7 +2252,15 @@ signature: 34d343dff90717fc067e47957c947a83f10d42336d26d3e0130793213f93f5c3bfd66
 deviceSigningPayload("alice", 1700000000000, "00ff") = "presence-device:v1:alice:1700000000000:00ff"
 ```
 Asserted in Android's `DeviceIdentityTest`. With a 32-hex `memberId`, a 64-byte signature
-and a 32-hex `deviceId`, online and offline presence both pad to exactly 640 bytes.
+and a 32-hex `deviceId`, online and offline presence both pad to exactly 768 bytes (online
+with a session start, about 700 unpadded).
+
+### Presence session signing string (§6.2)
+```
+sessionSigningPayload("alice", 1700000000000, 1699999990000)
+  = "presence-session:v1:alice:1700000000000:1699999990000"
+```
+Asserted in Android's `PresenceSessionsTest`, with the receiver rule.
 
 ### Author signing strings (§6.2)
 ```

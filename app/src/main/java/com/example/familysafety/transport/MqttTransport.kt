@@ -73,8 +73,11 @@ class MqttTransport @Inject constructor(
      */
     private val presenceSigners = ConcurrentHashMap<String, Boolean>()
 
-    /** Newest accepted presence timestamp per member, used to reject replays. */
-    private val lastPresenceTimestamp = ConcurrentHashMap<String, Long>()
+    /** Newest accepted presence per member, used to reject replays, and each one's session will. */
+    private val presenceSessions = PresenceSessions()
+
+    /** The timestamp this connection's last-will was signed with; named in our online presence. */
+    @Volatile private var sessionStart = 0L
 
     /**
      * Wire-format version each peer last advertised, learned passively from presence.
@@ -379,12 +382,15 @@ class MqttTransport @Inject constructor(
                     // later, when we are gone and can neither sign nor encrypt. That is
                     // exactly why presence is sealed under the group key rather than to
                     // each recipient — there is no send-time to encrypt at.
+                    val willAt = System.currentTimeMillis()
                     val willJson = MessageProtocol.encodePresenceUpdate(
                         memberIdParam,
                         false,
                         sign = { cryptoProvider.signMessage(it) },
-                        deviceId = DeviceIdentity.get(context)
+                        deviceId = DeviceIdentity.get(context),
+                        timestamp = willAt
                     )
+                    sessionStart = willAt
                     willKid = groupStateManager.groupDefinition.value?.let { GroupKeys.stampFor(it) }
                     presenceSwitched = presenceGateOpen()
                     setWill(
@@ -771,7 +777,9 @@ class MqttTransport @Inject constructor(
             id,
             isOnline,
             sign = { cryptoProvider.signMessage(it) },
-            deviceId = DeviceIdentity.get(context)
+            deviceId = DeviceIdentity.get(context),
+            // Lets peers already listening accept this connection's will, though it is older.
+            sessionStart = sessionStart.takeIf { isOnline && it > 0L }
         )
         val sealed = sealPresence(presenceJson)
         // At-most-once, because retained does the work here. The broker keeps the last
@@ -1113,7 +1121,8 @@ class MqttTransport @Inject constructor(
      * Three checks, in order of cost:
      *  - **Replay.** A captured "offline" message could otherwise be republished later to
      *    mark someone offline at will. Equal timestamps are allowed because the broker
-     *    redelivers retained messages on every resubscribe.
+     *    redelivers retained messages on every resubscribe. The one older update accepted is
+     *    the will of the member's current session ([PresenceSessions]), and only signed.
      *  - **Downgrade.** An unsigned update from a member previously seen signing is an
      *    attacker stripping the signature, not an old client.
      *  - **Signature**, over the canonical payload rather than the raw JSON.
@@ -1122,22 +1131,22 @@ class MqttTransport @Inject constructor(
         senderId: String,
         update: MessageProtocol.PresenceUpdate
     ): Boolean {
-        val last = lastPresenceTimestamp[senderId]
-        if (last != null && update.timestamp < last) {
+        val verdict = presenceSessions.verdict(senderId, update.isOnline, update.timestamp)
+        if (verdict == PresenceSessions.Verdict.STALE) {
             Timber.w("$TAG: stale presence for ${senderId.take(8)} — ignoring replay")
             return false
         }
 
         val signatureHex = update.signature
         if (signatureHex == null) {
-            if (presenceSigners[senderId] == true) {
+            if (verdict == PresenceSessions.Verdict.SESSION_WILL || presenceSigners[senderId] == true) {
                 Timber.w("$TAG: unsigned presence for ${senderId.take(8)} after a signed one — ignoring")
                 return false
             }
             // Peer predates signed presence. Accepted so it does not appear permanently
             // offline; forgeable until that peer updates, which is why the downgrade
             // check above exists.
-            lastPresenceTimestamp[senderId] = update.timestamp
+            presenceSessions.accepted(senderId, update.isOnline, update.timestamp, verdict, null)
             return true
         }
 
@@ -1168,8 +1177,27 @@ class MqttTransport @Inject constructor(
         }
 
         presenceSigners[senderId] = true
-        lastPresenceTimestamp[senderId] = update.timestamp
+        presenceSessions.accepted(senderId, update.isOnline, update.timestamp, verdict, verifiedSessionStart(update, publicKey))
+        if (verdict == PresenceSessions.Verdict.SESSION_WILL) {
+            Timber.i("$TAG: ${senderId.take(8)} disconnected abruptly (session will)")
+        }
         return true
+    }
+
+    /** The session start in [update] if its session signature verifies under [ed25519Hex], else null. */
+    private fun verifiedSessionStart(update: MessageProtocol.PresenceUpdate, ed25519Hex: String): Long? {
+        val start = update.sessionStart ?: return null
+        val signature = update.sessionSignature ?: return null
+        val valid = try {
+            cryptoProvider.verifySignature(
+                message = MessageProtocol.sessionSigningPayload(update.memberId, update.timestamp, start),
+                signature = signature.chunked(2).map { it.toInt(16).toByte() }.toByteArray(),
+                publicKeyHex = ed25519Hex
+            )
+        } catch (e: Exception) {
+            false
+        }
+        return start.takeIf { valid }
     }
 
     /** The device ID in [update] if its device signature verifies under [ed25519Hex], else null. */
