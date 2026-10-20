@@ -414,7 +414,8 @@ the same UTF-8 payload (§5). Handlers are shared; the LAN is only another path.
   the broker **and** send to every reachable member over the LAN.
 - Duplicates (LAN and broker both delivering) are expected; the replay window (§3.1) and existing
   idempotence (file and vault ids, roster versions) absorb them.
-- Two LAN-only topics carry profile photos, which never go to the broker (below).
+- Two LAN-only topics carry profile photos, which never go to the broker (below). They are the one
+  exception to "otherwise publish to the broker": a failed LAN send means no photo this time.
 
 Nothing here is gated on `PROTOCOL_VERSION`: two phones either complete the handshake or don't
 use the LAN. Android 1.15.5 and earlier advertised `familysafety-<16 hex of memberId>` and accepted
@@ -502,8 +503,10 @@ Unused fields may be absent or `null` (Android sends `"topic":null,"payload":nul
   handshake frames and acks are at most 4 096 bytes.
 - A server accepts at most 16 connections at once.
 - **Reachability.** Android marks a member reachable when their service resolves to an address,
-  and unreachable when a handshake fails or a send isn't acknowledged in time (then re-resolves
-  with the backoff above). Only reachable members are sent to over the LAN.
+  and unreachable when a handshake fails, a send isn't acknowledged in time (then re-resolves
+  with the backoff above), their service disappears, or this phone's Wi-Fi network is lost. Only
+  reachable members are sent to over the LAN. Offline, reachability is the only sign a member is
+  around: presence fails the topic rule above, so it never travels over the LAN.
 
 ### Profile photos (LAN only)
 
