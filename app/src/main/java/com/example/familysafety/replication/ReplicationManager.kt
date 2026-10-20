@@ -87,6 +87,27 @@ class ReplicationManager @Inject constructor(
         private const val MIN_FULL_SYNC_INTERVAL_MS = 15 * 60_000L
         private const val MAX_ITEMS_PER_REQUEST = 500
 
+        /** Pages followed per gap (E7): 20 × 500 items, so a hostile `hasMore` can't loop us. */
+        internal const val MAX_PAGES = 20
+
+        /**
+         * The request for the page after a response, or null when there's none to ask for (E7).
+         * A responder sends at most `limit` items and sets `hasMore` when it stopped there;
+         * the rest used to wait for the next 30-minute announcement, one page at a time.
+         * Asks only when the page moved forward, so a peer can't keep us at one timestamp.
+         */
+        internal fun nextPageRequest(
+            asked: ReplicationRequest,
+            page: Int,
+            hasMore: Boolean,
+            newestTimestamp: Long?,
+            requestId: String
+        ): ReplicationRequest? {
+            if (!hasMore || page >= MAX_PAGES) return null
+            if (newestTimestamp == null || newestTimestamp <= asked.afterTimestamp) return null
+            return asked.copy(requestId = requestId, afterTimestamp = newestTimestamp)
+        }
+
         /**
          * Which peers to ask for [targetMemberId]'s location history.
          *
@@ -280,7 +301,8 @@ class ReplicationManager @Inject constructor(
      */
     private suspend fun sendReplicationRequest(
         peer: FamilyMember,
-        request: ReplicationRequest
+        request: ReplicationRequest,
+        page: Int = 1
     ) {
         try {
             val topic = MqttConfig.getReplicationRequestTopic(peer.memberId)
@@ -290,7 +312,8 @@ class ReplicationManager @Inject constructor(
             // Track pending request
             pendingRequests[request.requestId] = PendingRequest(
                 request = request,
-                timestamp = System.currentTimeMillis()
+                timestamp = System.currentTimeMillis(),
+                page = page
             )
 
             transportProvider.sendMessage(
@@ -506,7 +529,7 @@ class ReplicationManager @Inject constructor(
             Timber.d("$TAG: Received replication response ${response.requestId} from $senderMemberId")
 
             // Remove from pending
-            pendingRequests.remove(response.requestId)
+            val asked = pendingRequests.remove(response.requestId)
 
             when (response.dataType) {
                 ReplicationDataType.LOCATION_HISTORY -> {
@@ -590,6 +613,16 @@ class ReplicationManager @Inject constructor(
                 }
             }
 
+            // Only for a request of ours, and only from the peer that answered it.
+            if (asked != null && asked.request.dataType == response.dataType) {
+                nextPageRequest(
+                    asked.request, asked.page, response.hasMore, response.newestTimestamp,
+                    UUID.randomUUID().toString()
+                )?.let { next ->
+                    val peer = groupStateManager.groupDefinition.value?.findMemberById(senderMemberId)
+                    if (peer != null) sendReplicationRequest(peer, next, asked.page + 1)
+                }
+            }
         } catch (e: Exception) {
             Timber.e(e, "$TAG: Failed to handle replication response")
         }
@@ -622,18 +655,13 @@ class ReplicationManager @Inject constructor(
             }
 
             // Build chat data summary
-            val conversationIds = chatMessageDao.getAllConversationIds()
-            val chatSummary = conversationIds.mapNotNull { conversationId ->
-                val newest = chatMessageDao.getNewestTimestamp(conversationId)
-                val messages = chatMessageDao.getConversation(conversationId)
-                if (newest != null && messages.isNotEmpty()) {
-                    ConversationDataSummary(
-                        conversationId = conversationId,
-                        oldestTimestamp = messages.minOf { it.timestamp },
-                        newestTimestamp = newest,
-                        count = messages.size
-                    )
-                } else null
+            val chatSummary = chatMessageDao.getSummaryPerConversation().map {
+                ConversationDataSummary(
+                    conversationId = it.conversationId,
+                    oldestTimestamp = it.oldestTimestamp,
+                    newestTimestamp = it.newestTimestamp,
+                    count = it.count
+                )
             }
 
             // NaCl box is per-pair: one ciphertext can't be decrypted by every member.
@@ -779,7 +807,9 @@ class ReplicationManager @Inject constructor(
  */
 private data class PendingRequest(
     val request: ReplicationRequest,
-    val timestamp: Long
+    val timestamp: Long,
+    /** 1 for the first request for a gap, then one more for each page followed (E7). */
+    val page: Int = 1
 )
 
 /**

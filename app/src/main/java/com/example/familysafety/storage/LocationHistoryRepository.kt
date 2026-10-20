@@ -194,17 +194,9 @@ class LocationHistoryRepository @Inject constructor(
      * Returns map of memberId -> (oldestTimestamp, newestTimestamp, count)
      */
     suspend fun getDataSummary(): Map<String, DataSummary> {
-        val memberIds = locationHistoryDao.getMemberIdsWithData()
-        return memberIds.associateWith { memberId ->
-            DataSummary(
-                oldestTimestamp = locationHistoryDao.getOldestTimestamp(memberId),
-                newestTimestamp = locationHistoryDao.getNewestTimestamp(memberId),
-                count = locationHistoryDao.getLocationCount(
-                    memberId,
-                    0,
-                    System.currentTimeMillis()
-                )
-            )
+        // One grouped query instead of three per member (E4).
+        return locationHistoryDao.getSummaryPerMember().associate {
+            it.memberId to DataSummary(it.oldestTimestamp, it.newestTimestamp, it.count)
         }
     }
 
