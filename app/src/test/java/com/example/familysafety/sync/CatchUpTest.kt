@@ -100,4 +100,39 @@ class CatchUpTest {
         refreshRequestsToBob(1)
         assertFalse(sync.catchUpOnUnknownSender("dana"))
     }
+
+    @Test
+    fun `a sender the answering roster doesn't name isn't asked about again for a day`() {
+        assertTrue(sync.catchUpOnUnknownSender("mallory"))
+        sync.noteRosterAnswer(family) // a member answered; mallory isn't in it
+
+        now += 6 * 60_000L // past the 5-minute limit
+        assertFalse(sync.catchUpOnUnknownSender("mallory"))
+        now += 24 * 60 * 60_000L
+        assertTrue(sync.catchUpOnUnknownSender("mallory"))
+    }
+
+    @Test
+    fun `a real new member is in the answer, so is never given up on`() {
+        assertTrue(sync.catchUpOnUnknownSender("dana"))
+        sync.noteRosterAnswer(family.copy(members = family.members + member("dana"), version = 4L))
+        now += 6 * 60_000L
+        // Our own roster hasn't taken the update yet in this test, so dana is still unknown here.
+        assertTrue(sync.catchUpOnUnknownSender("dana"))
+    }
+
+    @Test
+    fun `only senders we actually asked about are given up on`() {
+        assertTrue(sync.catchUpOnUnknownSender("mallory"))
+        assertFalse(sync.catchUpOnUnknownSender("eve")) // rate-limited, so never asked
+        sync.noteRosterAnswer(family)
+        now += 6 * 60_000L
+        assertTrue(sync.catchUpOnUnknownSender("eve"))
+    }
+
+    @Test
+    fun `a roster with nobody asked about gives up on no one`() {
+        sync.noteRosterAnswer(family)
+        assertTrue(sync.catchUpOnUnknownSender("mallory"))
+    }
 }

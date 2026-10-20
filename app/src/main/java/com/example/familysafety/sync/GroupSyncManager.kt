@@ -52,6 +52,12 @@ class GroupSyncManager @Inject constructor(
     /** Replaceable for tests. */
     internal var clock: () -> Long = System::currentTimeMillis
 
+    /** Unknown senders we asked the family about, until an authenticated roster answers. */
+    private val askedAbout = mutableSetOf<String>()
+
+    /** Senders an answering roster didn't name, and when: not asked about again for a day. */
+    private val gaveUpOn = mutableMapOf<String, Long>()
+
     /**
      * Caps roster broadcasts sent *in reply* to something received: refresh requests, and
      * outdated versions. Broadcasts this phone starts itself (an edit, a join) aren't limited.
@@ -270,7 +276,30 @@ class GroupSyncManager @Inject constructor(
         val group = groupStateManager?.groupDefinition?.value ?: return false
         if (group.findMemberById(senderMemberId) != null) return false
         if (group.removedMemberIds.any { it == senderMemberId || it.startsWith("$senderMemberId#") }) return false
-        return requestCatchUp("message from ${senderMemberId.take(8)}, who isn't in our roster")
+        val now = clock()
+        synchronized(askedAbout) {
+            gaveUpOn.values.removeAll { now - it >= CATCH_UP_GIVE_UP_MS }
+            if (senderMemberId in gaveUpOn) return false
+        }
+        if (!requestCatchUp("message from ${senderMemberId.take(8)}, who isn't in our roster")) return false
+        synchronized(askedAbout) { askedAbout += senderMemberId }
+        return true
+    }
+
+    /**
+     * A member's authenticated roster arrived. Anyone we asked about who isn't in it is probably
+     * not a member at all (a stranger, a turned-down joiner): stop asking about them for a day,
+     * instead of every 5 minutes for good. A real new member is in the roster that answers, so
+     * they're never given up on; and if a member answers before learning of a join, the
+     * inviter's own broadcast of the addition still reaches us. Same rule as iOS.
+     */
+    internal fun noteRosterAnswer(roster: GroupDefinition) {
+        val now = clock()
+        synchronized(askedAbout) {
+            if (askedAbout.isEmpty()) return
+            askedAbout.filter { roster.findMemberById(it) == null }.forEach { gaveUpOn[it] = now }
+            askedAbout.clear()
+        }
     }
 
     /**
@@ -412,6 +441,7 @@ class GroupSyncManager @Inject constructor(
             SecurityRecorder.record(SecurityEventKind.FORGED_SIGNATURE, senderMemberId, "roster update")
             return
         }
+        noteRosterAnswer(syncMessage.groupDefinition)
 
         if (syncMessage.updaterMemberId == myMemberId) {
             Timber.d("Ignoring our own sync message")
@@ -971,6 +1001,9 @@ class GroupSyncManager @Inject constructor(
 
 /** At most one catch-up refresh (missed session, unknown sender) per this long. */
 private const val CATCH_UP_COOLDOWN_MS = 5 * 60_000L
+
+/** How long a sender an answering roster didn't name is not asked about again. */
+private const val CATCH_UP_GIVE_UP_MS = 24 * 60 * 60_000L
 
 /** At most one "we're missing from your roster" refresh per this long. */
 private const val ABSENT_REFRESH_COOLDOWN_MS = 5 * 60_000L
