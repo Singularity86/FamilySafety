@@ -1,5 +1,7 @@
 package com.example.familysafety.invite
 
+import com.example.familysafety.core.hexToBytes
+import com.example.familysafety.core.toHex
 import com.example.familysafety.group.GroupDefinition
 
 /**
@@ -69,10 +71,5 @@ object RejoinPolicy {
         return null
     }
 
-    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
-    private fun String.hexToBytes(): ByteArray {
-        require(length % 2 == 0) { "odd-length hex" }
-        return chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-    }
 }

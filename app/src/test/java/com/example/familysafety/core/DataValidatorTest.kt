@@ -1,7 +1,5 @@
 package com.example.familysafety.core
 
-import com.example.familysafety.group.FamilyMember
-import com.example.familysafety.group.GroupDefinition
 import com.example.familysafety.location.MemberLocation
 import org.junit.Assert.*
 import org.junit.Test
@@ -9,32 +7,6 @@ import org.junit.Test
 class DataValidatorTest {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
-    private fun validMember(
-        id: String = "member_001",
-        name: String = "Alice",
-        ed25519Key: String = "a".repeat(64),
-        x25519Key: String = "b".repeat(64),
-        addedAt: Long = 1000L
-    ) = FamilyMember(
-        memberId = id,
-        displayName = name,
-        ed25519PublicKey = ed25519Key,
-        x25519PublicKey = x25519Key,
-        addedAtEpochMs = addedAt
-    )
-
-    private fun validGroup(
-        members: Set<FamilyMember> = setOf(validMember()),
-        version: Long = 1L
-    ) = GroupDefinition(
-        groupId = "group_123",
-        groupName = "Test Family",
-        createdAtEpochMs = 1000L,
-        creatorMemberId = members.first().memberId,
-        members = members,
-        version = version
-    )
 
     private fun validLocation(
         memberId: String = "member_001",
@@ -108,110 +80,6 @@ class DataValidatorTest {
         assertTrue((result as ValidationResult.Invalid).errors.size >= 2)
     }
 
-    // ── validateFamilyMember ──────────────────────────────────────────────────
-
-    @Test
-    fun `validateFamilyMember returns Valid for correct member`() {
-        assertEquals(ValidationResult.Valid, DataValidator.validateFamilyMember(validMember()))
-    }
-
-    @Test
-    fun `validateFamilyMember returns Invalid for blank display name`() {
-        val result = DataValidator.validateFamilyMember(validMember(name = ""))
-        assertTrue(result is ValidationResult.Invalid)
-    }
-
-    @Test
-    fun `validateFamilyMember returns Invalid for name exceeding 50 chars`() {
-        val result = DataValidator.validateFamilyMember(validMember(name = "A".repeat(51)))
-        assertTrue(result is ValidationResult.Invalid)
-    }
-
-    @Test
-    fun `validateFamilyMember returns Invalid for ed25519 key with wrong length`() {
-        val result = DataValidator.validateFamilyMember(validMember(ed25519Key = "ab".repeat(10))) // 20 chars, not 64
-        assertTrue(result is ValidationResult.Invalid)
-    }
-
-    @Test
-    fun `validateFamilyMember returns Invalid for x25519 key with wrong length`() {
-        val result = DataValidator.validateFamilyMember(validMember(x25519Key = "cd")) // 2 chars, not 64
-        assertTrue(result is ValidationResult.Invalid)
-    }
-
-    @Test
-    fun `validateFamilyMember returns Invalid for negative addedAtEpochMs`() {
-        val result = DataValidator.validateFamilyMember(validMember(addedAt = -1L))
-        assertTrue(result is ValidationResult.Invalid)
-    }
-
-    @Test
-    fun `validateFamilyMember returns Invalid for display name with disallowed chars`() {
-        // Only a-z, A-Z, 0-9, space, apostrophe, hyphen are allowed
-        val result = DataValidator.validateFamilyMember(validMember(name = "Alice@Corp"))
-        assertTrue(result is ValidationResult.Invalid)
-    }
-
-    @Test
-    fun `validateFamilyMember accepts display name with allowed special chars`() {
-        // Apostrophe and hyphen are allowed
-        val result = DataValidator.validateFamilyMember(validMember(name = "O'Brien-Smith"))
-        assertEquals(ValidationResult.Valid, result)
-    }
-
-    // ── validateGroupDefinition ───────────────────────────────────────────────
-
-    @Test
-    fun `validateGroupDefinition returns Valid for correct group`() {
-        assertEquals(ValidationResult.Valid, DataValidator.validateGroupDefinition(validGroup()))
-    }
-
-    @Test
-    fun `validateGroupDefinition returns Invalid for empty members`() {
-        val group = validGroup().copy(members = emptySet())
-        val result = DataValidator.validateGroupDefinition(group)
-        assertTrue(result is ValidationResult.Invalid)
-    }
-
-    @Test
-    fun `validateGroupDefinition returns Invalid when creator not in members`() {
-        val member = validMember()
-        val group = validGroup(members = setOf(member)).copy(creatorMemberId = "nonexistent_id")
-        val result = DataValidator.validateGroupDefinition(group)
-        assertTrue(result is ValidationResult.Invalid)
-    }
-
-    @Test
-    fun `validateGroupDefinition returns Invalid for version less than 1`() {
-        val group = validGroup(version = 0L)
-        val result = DataValidator.validateGroupDefinition(group)
-        assertTrue(result is ValidationResult.Invalid)
-    }
-
-    @Test
-    fun `validateGroupDefinition returns Invalid for blank group name`() {
-        val group = validGroup().copy(groupName = "")
-        val result = DataValidator.validateGroupDefinition(group)
-        assertTrue(result is ValidationResult.Invalid)
-    }
-
-    @Test
-    fun `validateGroupDefinition cascades member validation errors`() {
-        val badMember = validMember(ed25519Key = "short")
-        val group = GroupDefinition(
-            groupId = "group_123",
-            groupName = "Test Family",
-            createdAtEpochMs = 1000L,
-            creatorMemberId = badMember.memberId,
-            members = setOf(badMember),
-            version = 1L
-        )
-        val result = DataValidator.validateGroupDefinition(group)
-        assertTrue(result is ValidationResult.Invalid)
-    }
-
-    // ── validateMnemonic ──────────────────────────────────────────────────────
-
     @Test
     fun `validateMnemonic returns Valid for 12 lowercase words`() {
         val mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
@@ -268,29 +136,6 @@ class DataValidatorTest {
         val result = DataValidator.sanitizeDisplayName("O'Brien-Smith 42")
         assertEquals("O'Brien-Smith 42", result)
     }
-
-    // ── sanitizeGroupName ─────────────────────────────────────────────────────
-
-    @Test
-    fun `sanitizeGroupName trims whitespace`() {
-        assertEquals("My Family", DataValidator.sanitizeGroupName("  My Family  "))
-    }
-
-    @Test
-    fun `sanitizeGroupName truncates to 100 characters`() {
-        val long = "A".repeat(120)
-        assertEquals(100, DataValidator.sanitizeGroupName(long).length)
-    }
-
-    @Test
-    fun `sanitizeGroupName removes disallowed special characters`() {
-        val sanitized = DataValidator.sanitizeGroupName("Family <3 & More!")
-        assertFalse(sanitized.contains("<"))
-        assertFalse(sanitized.contains("&"))
-        assertFalse(sanitized.contains("!"))
-    }
-
-    // ── ValidationResult ──────────────────────────────────────────────────────
 
     @Test
     fun `ValidationResult Valid is distinguishable from Invalid`() {

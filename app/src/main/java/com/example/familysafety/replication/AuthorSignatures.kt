@@ -1,5 +1,6 @@
 package com.example.familysafety.replication
 
+import com.example.familysafety.core.toHex
 import com.example.familysafety.location.MemberLocation
 import com.example.familysafety.storage.ChatMessageEntity
 import java.security.MessageDigest
@@ -82,5 +83,5 @@ object AuthorSignatures {
 
     private fun sha256Hex(text: String): String =
         MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
+            .toHex()
 }

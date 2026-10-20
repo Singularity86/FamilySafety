@@ -1,5 +1,7 @@
 package com.example.familysafety.group
 
+import com.example.familysafety.core.hexToBytes
+import com.example.familysafety.core.toHex
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
@@ -38,7 +40,7 @@ class KeyDerivationTest {
      */
     @Test
     fun slip10_testVector1_masterKey() {
-        val seed = "000102030405060708090a0b0c0d0e0f".hexToByteArray()
+        val seed = "000102030405060708090a0b0c0d0e0f".hexToBytes()
         // Pad to 64 bytes as required by our implementation
         val paddedSeed = ByteArray(64).also { 
             System.arraycopy(seed, 0, it, 0, seed.size) 
@@ -63,7 +65,7 @@ class KeyDerivationTest {
      */
     @Test
     fun slip10_testVector1_path_m_0h() {
-        val seed = "000102030405060708090a0b0c0d0e0f".hexToByteArray()
+        val seed = "000102030405060708090a0b0c0d0e0f".hexToBytes()
         val paddedSeed = ByteArray(64).also {
             System.arraycopy(seed, 0, it, 0, seed.size)
         }
@@ -87,7 +89,7 @@ class KeyDerivationTest {
     @Test
     fun slip10_testVector2_masterKey() {
         val seed = ("fffcf9f6f3f0edeae7e4e1dedbd8d5d2cfccc9c6c3c0bdbab7b4b1aeaba8a5a2" +
-                "9f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542").hexToByteArray()
+                "9f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542").hexToBytes()
 
         assertEquals("Test vector 2 seed should be 64 bytes", 64, seed.size)
 
@@ -119,7 +121,7 @@ class KeyDerivationTest {
         assertEquals(
             "BIP-39 seed should match test vector",
             expectedSeedHex.lowercase(),
-            seed.toHexString().lowercase()
+            seed.toHex().lowercase()
         )
     }
 
@@ -139,7 +141,7 @@ class KeyDerivationTest {
         assertEquals(
             "BIP-39 seed with passphrase should match test vector",
             expectedSeedHex.lowercase(),
-            seed.toHexString().lowercase()
+            seed.toHex().lowercase()
         )
     }
 

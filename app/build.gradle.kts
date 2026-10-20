@@ -93,7 +93,6 @@ android {
             ndk {
                 abiFilters += listOf("x86_64")
             }
-            buildConfigField("String", "MQTT_ENVIRONMENT", "\"DEVELOPMENT\"")
             buildConfigField("String", "MQTT_USERNAME", "\"${mqttProperties.getProperty("username", "")}\"")
             buildConfigField("String", "MQTT_PASSWORD", "\"${mqttProperties.getProperty("password", "")}\"")
         }
@@ -103,7 +102,6 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            buildConfigField("String", "MQTT_ENVIRONMENT", "\"PRODUCTION\"")
             buildConfigField("String", "MQTT_USERNAME", "\"${mqttProperties.getProperty("username", "")}\"")
             buildConfigField("String", "MQTT_PASSWORD", "\"${mqttProperties.getProperty("password", "")}\"")
             // Unsigned release builds still work when the keystore is absent

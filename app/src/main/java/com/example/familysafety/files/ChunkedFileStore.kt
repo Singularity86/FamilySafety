@@ -1,5 +1,6 @@
 package com.example.familysafety.files
 
+import com.example.familysafety.core.toHex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -175,7 +176,7 @@ class ChunkedFileStore(
                     }
                 }
                 out.flush()
-                digest.digest().joinToString("") { "%02x".format(it) }
+                digest.digest().toHex()
             } catch (e: Exception) {
                 Timber.e(e, "Failed to decrypt blob for $fileId")
                 null
@@ -286,7 +287,7 @@ class ChunkedFileStore(
                     }
                 }
                 EncryptedIngest(
-                    contentHash = digest.digest().joinToString("") { "%02x".format(it) },
+                    contentHash = digest.digest().toHex(),
                     sizeBytes = total,
                     chunkCount = index
                 )

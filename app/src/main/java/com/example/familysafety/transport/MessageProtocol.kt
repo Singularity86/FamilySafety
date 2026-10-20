@@ -1,5 +1,6 @@
 package com.example.familysafety.transport
 
+import com.example.familysafety.core.toHex
 import com.example.familysafety.location.MemberLocation
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -255,20 +256,19 @@ object MessageProtocol {
         timestamp: Long = System.currentTimeMillis(),
         sessionStart: Long? = null
     ): String {
-        fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
         val presenceUpdate = PresenceUpdate(
             memberId = memberId,
             isOnline = isOnline,
             timestamp = timestamp,
-            signature = sign?.invoke(presenceSigningPayload(memberId, isOnline, timestamp))?.hex(),
+            signature = sign?.invoke(presenceSigningPayload(memberId, isOnline, timestamp))?.toHex(),
             protocolVersion = PROTOCOL_VERSION,
             deviceId = deviceId,
             deviceSignature = if (deviceId != null) {
-                sign?.invoke(deviceSigningPayload(memberId, timestamp, deviceId))?.hex()
+                sign?.invoke(deviceSigningPayload(memberId, timestamp, deviceId))?.toHex()
             } else null,
             sessionStart = sessionStart,
             sessionSignature = if (sessionStart != null) {
-                sign?.invoke(sessionSigningPayload(memberId, timestamp, sessionStart))?.hex()
+                sign?.invoke(sessionSigningPayload(memberId, timestamp, sessionStart))?.toHex()
             } else null
         )
         

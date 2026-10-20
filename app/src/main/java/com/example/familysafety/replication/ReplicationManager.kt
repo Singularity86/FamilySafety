@@ -1,5 +1,6 @@
 package com.example.familysafety.replication
 
+import com.example.familysafety.core.hexToBytes
 import com.example.familysafety.core.DataValidator
 import com.example.familysafety.core.ValidationResult
 import com.example.familysafety.crypto.E2EEManager
@@ -352,8 +353,6 @@ class ReplicationManager @Inject constructor(
         }
     }
 
-    private fun String.hexToBytes(): ByteArray =
-        chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     // =========================================================================
     // INCOMING MESSAGE HANDLING

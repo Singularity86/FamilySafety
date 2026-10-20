@@ -1,5 +1,7 @@
 package com.example.familysafety.files
 
+import com.example.familysafety.core.toHex
+import com.example.familysafety.core.hexToBytes
 import com.example.familysafety.group.GroupKeys
 import android.content.Context
 import android.net.Uri
@@ -987,7 +989,7 @@ class SharedFileRepository @Inject constructor(
                 signature = runCatching {
                     cryptoProvider
                         .signMessage(manifestSigningPayload(fileKeyVersion, data, manifestKid))
-                        .joinToString("") { "%02x".format(it) }
+                        .toHex()
                 }.onFailure { Timber.e(it, "$TAG: could not sign manifest") }.getOrDefault("")
             )
             json.encodeToString(wrapped).toByteArray()
@@ -1447,8 +1449,6 @@ class SharedFileRepository @Inject constructor(
     private fun groupKeyHex(): String? =
         groupStateManager.groupDefinition.value?.fileEncryptionKey?.takeIf { it.isNotBlank() }
 
-    private fun String.hexToBytes(): ByteArray =
-        chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     /**
      * Legacy key: SHA-256(groupId + constant). Retained only so files shared before the
@@ -1522,7 +1522,7 @@ class SharedFileRepository @Inject constructor(
 
     private fun sha256Hex(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(bytes)
-            .joinToString("") { "%02x".format(it) }
+            .toHex()
 
     private fun filesDir(): File =
         File(context.getExternalFilesDir(null) ?: context.filesDir, "familysafety_files")

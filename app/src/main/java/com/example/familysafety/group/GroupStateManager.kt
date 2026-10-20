@@ -1,5 +1,7 @@
 package com.example.familysafety.group
 
+import com.example.familysafety.core.hexToBytes
+import com.example.familysafety.core.toHex
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -280,7 +282,7 @@ class GroupStateManager(
                     authorizerMemberId = localMemberId,
                     signature = cryptoProvider.sign(
                         buildRemovalProofMessage(currentGroup.groupId, tombstone)
-                    ).toHexString()
+                    ).toHex()
                 )
             } else null
             val updatedGroup = currentGroup.copy(
@@ -356,7 +358,7 @@ class GroupStateManager(
         )
         return QuorumSignature(
             voterMemberId = localMemberId,
-            signature = cryptoProvider.sign(message).toHexString()
+            signature = cryptoProvider.sign(message).toHex()
         )
     }
 
@@ -394,7 +396,7 @@ class GroupStateManager(
                     val valid = try {
                         cryptoProvider.verifySignature(
                             message = canonicalMessage,
-                            signature = vote.signature.hexToByteArray(),
+                            signature = vote.signature.hexToBytes(),
                             publicKeyHex = voter.ed25519PublicKey
                         )
                     } catch (e: Exception) {
@@ -534,7 +536,7 @@ class GroupStateManager(
     private fun signedProfile(groupId: String, member: FamilyMember): FamilyMember {
         val stamped = member.copy(profileUpdatedAtMs = System.currentTimeMillis(), profileSignature = null)
         val signature = runCatching {
-            cryptoProvider.sign(ProfileGuard.profileMessage(groupId, stamped)).toHexString()
+            cryptoProvider.sign(ProfileGuard.profileMessage(groupId, stamped)).toHex()
         }.getOrNull()
         return stamped.copy(profileSignature = signature)
     }
@@ -676,7 +678,7 @@ class GroupStateManager(
                 subscriptionSignature = if (memberId == localMemberId) {
                     runCatching {
                         cryptoProvider.sign(ProfileGuard.subscriptionMessage(currentGroup.groupId, memberId, atEpochMs))
-                            .toHexString()
+                            .toHex()
                     }.getOrNull()
                 } else null,
                 version = currentGroup.version + 1,
@@ -1098,7 +1100,7 @@ class GroupStateManager(
         else withFileKey.copy(groupKeys = GroupKeys.union(withFileKey.groupKeys, current.groupKeys))
         // Profile and subscription changes only from their author, and only if newer (F25).
         val newState = if (current == null) withKey else ProfileGuard.reconcile(current, withKey, updaterMemberId) { message, signatureHex, keyHex ->
-            cryptoProvider.verifySignature(message, signatureHex.hexToByteArray(), keyHex)
+            cryptoProvider.verifySignature(message, signatureHex.hexToBytes(), keyHex)
         }
 
         // A roster without us is only a removal if it carries a tombstone for our membership
@@ -1206,7 +1208,7 @@ class GroupStateManager(
     private fun generateFileEncryptionKey(): String {
         val key = ByteArray(32)
         java.security.SecureRandom().nextBytes(key)
-        return key.joinToString("") { "%02x".format(it) }
+        return key.toHex()
     }
 
     companion object {

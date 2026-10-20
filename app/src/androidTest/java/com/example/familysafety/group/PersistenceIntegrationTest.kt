@@ -1,5 +1,6 @@
 package com.example.familysafety.group
 
+import com.example.familysafety.core.toHex
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.flow.first
@@ -268,14 +269,14 @@ class PersistenceIntegrationTest {
     @Test
     fun keyStore_persistsAcrossInstances() {
         // Get public key from first instance
-        val publicKey1 = keyStore.getEd25519PublicKey().toHexString()
+        val publicKey1 = keyStore.getEd25519PublicKey().toHex()
 
         // Create new keystore instance
         val keyStore2 = AndroidKeyStoreLocalKeyStore(context)
 
         // Should still have the same keys
         assertTrue(keyStore2.isInitialized())
-        val publicKey2 = keyStore2.getEd25519PublicKey().toHexString()
+        val publicKey2 = keyStore2.getEd25519PublicKey().toHex()
 
         assertEquals(
             "Public key should persist across keystore instances",
@@ -299,7 +300,7 @@ class PersistenceIntegrationTest {
     @Test
     fun keyStore_canReinitializeAfterDestroy() {
         // Get original key
-        val originalPublicKey = keyStore.getEd25519PublicKey().toHexString()
+        val originalPublicKey = keyStore.getEd25519PublicKey().toHex()
 
         // Destroy
         keyStore.destroyKeys()
@@ -309,7 +310,7 @@ class PersistenceIntegrationTest {
         keyStore.initializeFromSeed(newSeed, 0)
 
         // New key should be different
-        val newPublicKey = keyStore.getEd25519PublicKey().toHexString()
+        val newPublicKey = keyStore.getEd25519PublicKey().toHex()
 
         assertNotEquals(
             "Reinitialized keys should be different",

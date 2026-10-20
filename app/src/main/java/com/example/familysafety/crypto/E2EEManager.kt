@@ -1,8 +1,9 @@
 package com.example.familysafety.crypto
 
+import com.example.familysafety.core.hexToBytes
+import com.example.familysafety.core.toHex
 import com.example.familysafety.group.LazysodiumCryptoProvider
 import com.goterl.lazysodium.LazySodiumAndroid
-import com.goterl.lazysodium.SodiumAndroid
 import com.goterl.lazysodium.interfaces.Box
 import com.goterl.lazysodium.interfaces.SecretBox
 import com.goterl.lazysodium.utils.Key
@@ -18,7 +19,7 @@ class E2EEManager @Inject constructor(
     private val cryptoProvider: LazysodiumCryptoProvider,
     private val replayGuard: ReplayGuard
 ) {
-    private val lazySodium = LazySodiumAndroid(SodiumAndroid())
+    private val lazySodium: LazySodiumAndroid get() = Sodium.instance
     private val sharedSecretCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
 
     @Serializable
@@ -39,7 +40,7 @@ class E2EEManager @Inject constructor(
          */
         /** Shared-secret cache key: the member and the X25519 key the secret was made with. */
         internal fun cacheKey(memberId: String, x25519PublicKey: ByteArray): String =
-            "$memberId:" + x25519PublicKey.joinToString("") { "%02x".format(it) }
+            "$memberId:" + x25519PublicKey.toHex()
 
         fun peekSenderMemberId(encryptedMessageJson: String): String? = try {
             envelopeJson.decodeFromString<EncryptedMessage>(encryptedMessageJson).senderMemberId
@@ -86,9 +87,9 @@ class E2EEManager @Inject constructor(
         
         val encryptedMessage = EncryptedMessage(
             senderMemberId = cryptoProvider.getMemberId(),
-            nonce = nonce.toHexString(),
-            ciphertext = ciphertext.toHexString(),
-            signature = signature.toHexString()
+            nonce = nonce.toHex(),
+            ciphertext = ciphertext.toHex(),
+            signature = signature.toHex()
         )
         
         return Json.encodeToString(encryptedMessage)
@@ -105,9 +106,9 @@ class E2EEManager @Inject constructor(
             throw EncryptionException("Failed to parse encrypted message: ${e.message}")
         }
         
-        val nonce = encryptedMessage.nonce.hexToByteArray()
-        val ciphertext = encryptedMessage.ciphertext.hexToByteArray()
-        val signature = encryptedMessage.signature.hexToByteArray()
+        val nonce = encryptedMessage.nonce.hexToBytes()
+        val ciphertext = encryptedMessage.ciphertext.hexToBytes()
+        val signature = encryptedMessage.signature.hexToBytes()
         
         val dataToVerify = nonce + ciphertext
         val isValidSignature = cryptoProvider.verifySignature(
@@ -143,7 +144,7 @@ class E2EEManager @Inject constructor(
         // and key only. Throws ReplayedEnvelopeException for a copy already taken (3.4).
         return replayGuard.open(
             senderId = encryptedMessage.senderMemberId,
-            senderEd25519Hex = senderEd25519PublicKey.toHexString(),
+            senderEd25519Hex = senderEd25519PublicKey.toHex(),
             plaintext = String(plaintext, Charsets.UTF_8)
         )
     }
@@ -185,14 +186,14 @@ class E2EEManager @Inject constructor(
         getOrComputeSharedSecret(memberId, x25519PublicKey).copyOf()
 
     /** This phone's Ed25519 signature over [message], hex. For author signatures (F24). */
-    fun signAsSelf(message: ByteArray): String = cryptoProvider.signMessage(message).toHexString()
+    fun signAsSelf(message: ByteArray): String = cryptoProvider.signMessage(message).toHex()
 
     /** Whether [signatureHex] is [ed25519Hex]'s signature over [message]. */
     fun verifyAuthor(message: ByteArray, signatureHex: String, ed25519Hex: String): Boolean =
         cryptoProvider.verifySignature(
             message = message,
-            signature = signatureHex.hexToByteArray(),
-            publicKey = ed25519Hex.hexToByteArray()
+            signature = signatureHex.hexToBytes(),
+            publicKey = ed25519Hex.hexToBytes()
         )
 
     /** Whether envelopes to this member are sequenced, so control messages can go inside one (3.4). */
@@ -215,11 +216,7 @@ class E2EEManager @Inject constructor(
         sharedSecretCache.keys.removeIf { it.startsWith("$memberId:") }
     }
 
-    private fun ByteArray.toHexString(): String =
-        joinToString("") { "%02x".format(it) }
 
-    private fun String.hexToByteArray(): ByteArray =
-        chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }
 
 /**
@@ -232,11 +229,11 @@ data class RecipientKeys(
 ) {
     /** Convert x25519 key to ByteArray for crypto operations */
     fun x25519PublicKeyBytes(): ByteArray =
-        x25519PublicKey.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        x25519PublicKey.hexToBytes()
 
     /** Convert ed25519 key to ByteArray for crypto operations */
     fun ed25519PublicKeyBytes(): ByteArray =
-        ed25519PublicKey.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        ed25519PublicKey.hexToBytes()
 }
 
 open class EncryptionException(message: String) : Exception(message)

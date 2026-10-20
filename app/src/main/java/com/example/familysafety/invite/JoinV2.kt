@@ -1,5 +1,7 @@
 package com.example.familysafety.invite
 
+import com.example.familysafety.core.hexToBytes
+import com.example.familysafety.core.toHex
 import com.example.familysafety.group.GroupTransitionValidator
 import kotlinx.serialization.Serializable
 import java.security.MessageDigest
@@ -67,12 +69,7 @@ object JoinV2 {
     fun sha256Hex(text: String): String =
         MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8)).toHex()
 
-    internal fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
-    internal fun String.hexToBytes(): ByteArray {
-        require(length % 2 == 0) { "odd-length hex" }
-        return chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-    }
 }
 
 /** The v2 part of an invite, as the joiner reads it from the QR. */
@@ -133,11 +130,11 @@ data class ScannedInviteV2(
     ): JoinRequestV2Message {
         require(signedRequest.inviteId == inviteId && signedRequest.signature != null)
         val mac = JoinV2.mac(secret, signedRequest.signedBytes())
-        val payload = JoinRequestV2Payload(signedRequest, mac.joinToString("") { "%02x".format(it) })
+        val payload = JoinRequestV2Payload(signedRequest, mac.toHex())
         return JoinRequestV2Message(
             inviteId = inviteId,
-            requesterEd25519 = signedRequest.ed25519PublicKey.joinToString("") { "%02x".format(it) },
-            requesterX25519 = signedRequest.x25519PublicKey.joinToString("") { "%02x".format(it) },
+            requesterEd25519 = signedRequest.ed25519PublicKey.toHex(),
+            requesterX25519 = signedRequest.x25519PublicKey.toHex(),
             encryptedRequest = encryptToInviter(encode(payload))
         )
     }

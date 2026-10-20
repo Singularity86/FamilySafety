@@ -1,5 +1,6 @@
 package com.example.familysafety.invite
 
+import com.example.familysafety.core.toHex
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -344,7 +345,7 @@ class InviteManager @Inject constructor(
             // otherwise the roster entry would be internally inconsistent (memberId is
             // used for topic routing while the key is used for crypto).
             val derivedRequesterId =
-                JoinApprovalValidator.deriveMemberId(request.ed25519PublicKey.toHexString())
+                JoinApprovalValidator.deriveMemberId(request.ed25519PublicKey.toHex())
             if (derivedRequesterId != request.requesterId) {
                 Timber.e("InviteManager: join request member ID does not match its key — rejecting")
                 return Result.failure(IllegalArgumentException("Join request ID/key mismatch"))
@@ -353,8 +354,8 @@ class InviteManager @Inject constructor(
             val newMember = FamilyMember(
                 memberId = request.requesterId,
                 displayName = request.displayName,
-                ed25519PublicKey = request.ed25519PublicKey.toHexString(),
-                x25519PublicKey = request.x25519PublicKey.toHexString(),
+                ed25519PublicKey = request.ed25519PublicKey.toHex(),
+                x25519PublicKey = request.x25519PublicKey.toHex(),
                 addedAtEpochMs = System.currentTimeMillis()
             )
 
@@ -541,8 +542,6 @@ class InviteManager @Inject constructor(
         scope.cancel()
     }
 
-    private fun ByteArray.toHexString(): String =
-        joinToString("") { "%02x".format(it) }
 
     private fun isJoinRequestClosed(requestId: String): Boolean {
         if (closedJoinRequestIds.contains(requestId)) return true

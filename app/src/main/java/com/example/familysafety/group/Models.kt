@@ -1,5 +1,6 @@
 package com.example.familysafety.group
 
+import com.example.familysafety.core.toHex
 import java.security.MessageDigest
 import kotlinx.serialization.Serializable
 
@@ -291,7 +292,7 @@ data class GroupDefinition(
         }
         val digest = MessageDigest.getInstance("SHA-256")
         return digest.digest(canonical.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
+            .toHex()
     }
 
     fun findMemberById(memberId: String): FamilyMember? =

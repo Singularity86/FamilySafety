@@ -1,5 +1,7 @@
 package com.example.familysafety.transport
 
+import com.example.familysafety.core.hexToBytes
+import com.example.familysafety.core.toHex
 import android.content.Context
 import com.example.familysafety.core.*
 import com.example.familysafety.core.NetworkMonitor
@@ -241,7 +243,7 @@ class MqttTransport @Inject constructor(
             val canonical = (listOf(brokerUrl) + topics.toSortedSet()).joinToString("\n")
             return java.security.MessageDigest.getInstance("SHA-256")
                 .digest(canonical.toByteArray())
-                .joinToString("") { "%02x".format(it) }
+                .toHex()
         }
 
         /**
@@ -669,29 +671,15 @@ class MqttTransport @Inject constructor(
         }
     }
 
+    /**
+     * Presence filters for members who just joined: their old topic until the switch, nothing
+     * after it (the family wildcard already covers the group topic, 4.2).
+     */
     private suspend fun subscribeToFamilyMembers(memberIds: List<String>) {
-        memberIds.filter { it != memberId }.forEach { otherId ->
-            subscribeToMember(otherId)
-        }
-    }
-
-    private suspend fun subscribeToMember(otherMemberId: String) {
-        withContext(Dispatchers.IO) {
-            val topics = memberTopicFilters(otherMemberId)
-            mqttClient?.subscribe(
-                topics.toTypedArray(),
-                IntArray(topics.size) { MqttConfig.DEFAULT_QOS },
-                null,
-                object : IMqttActionListener {
-                    override fun onSuccess(asyncActionToken: IMqttToken?) {
-                        Timber.i("$TAG: Subscribed to member: $otherMemberId")
-                    }
-
-                    override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
-                        Timber.e(exception, "$TAG: Failed to subscribe to member: $otherMemberId")
-                    }
-                }
-            )
+        val filters = PresenceTopics.peerFilters(memberIds.filter { it != memberId }, presenceSwitched)
+        if (filters.isEmpty()) return
+        if (subscribeAwait(filters) != true) {
+            Timber.e("$TAG: Failed to subscribe to ${filters.size} new member(s)")
         }
     }
 
@@ -1163,7 +1151,7 @@ class MqttTransport @Inject constructor(
                     update.isOnline,
                     update.timestamp
                 ),
-                signature = signatureHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray(),
+                signature = signatureHex.hexToBytes(),
                 publicKeyHex = publicKey
             )
         } catch (e: Exception) {
@@ -1191,7 +1179,7 @@ class MqttTransport @Inject constructor(
         val valid = try {
             cryptoProvider.verifySignature(
                 message = MessageProtocol.sessionSigningPayload(update.memberId, update.timestamp, start),
-                signature = signature.chunked(2).map { it.toInt(16).toByte() }.toByteArray(),
+                signature = signature.hexToBytes(),
                 publicKeyHex = ed25519Hex
             )
         } catch (e: Exception) {
@@ -1207,7 +1195,7 @@ class MqttTransport @Inject constructor(
         val valid = try {
             cryptoProvider.verifySignature(
                 message = MessageProtocol.deviceSigningPayload(update.memberId, update.timestamp, deviceId),
-                signature = signature.chunked(2).map { it.toInt(16).toByte() }.toByteArray(),
+                signature = signature.hexToBytes(),
                 publicKeyHex = ed25519Hex
             )
         } catch (e: Exception) {

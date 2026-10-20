@@ -1,5 +1,7 @@
 package com.example.familysafety.transport
 
+import com.example.familysafety.core.hexToBytes
+import com.example.familysafety.core.toHex
 import kotlinx.serialization.Serializable
 import java.nio.ByteBuffer
 import javax.crypto.Cipher
@@ -93,9 +95,7 @@ object LanProtocol {
     fun constantTimeEquals(a: String, b: String): Boolean =
         java.security.MessageDigest.isEqual(a.toByteArray(), b.toByteArray())
 
-    fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
-    fun String.hexToBytes(): ByteArray = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }
 
 /** Handshake step 1, client to server, plaintext. */

@@ -1,5 +1,6 @@
 package com.example.familysafety.invite
 
+import com.example.familysafety.core.toHex
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializer
@@ -131,7 +132,6 @@ data class JoinRequest(
     /** Whichever of [signingBytes] or [signingBytesV2] this request's signature covers. */
     fun signedBytes(): ByteArray = if (inviteId != null) signingBytesV2() else signingBytes()
 
-    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
