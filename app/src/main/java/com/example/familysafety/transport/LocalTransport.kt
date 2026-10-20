@@ -13,6 +13,7 @@ import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.group.GroupDefinition
 import com.example.familysafety.group.GroupKeys
 import com.example.familysafety.group.GroupStateManager
+import androidx.annotation.VisibleForTesting
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -205,26 +206,49 @@ class LocalTransport @Inject constructor(
 
                 registerNsdService()
                 startNsdDiscovery()
-
-                while (!server.isClosed) {
-                    try {
-                        val socket = withContext(Dispatchers.IO) { server.accept() }
-                        if (inboundCount.incrementAndGet() > MAX_INBOUND_CONNECTIONS) {
-                            inboundCount.decrementAndGet()
-                            Timber.w("Too many LAN connections — refusing one")
-                            runCatching { socket.close() }
-                            continue
-                        }
-                        launch {
-                            try { handleInboundConnection(socket) } finally { inboundCount.decrementAndGet() }
-                        }
-                    } catch (e: Exception) {
-                        if (!server.isClosed) Timber.e(e, "TCP accept error")
-                        break
-                    }
-                }
+                acceptLoop(server)
             } catch (e: Exception) {
                 Timber.e(e, "LocalTransport server failed to start")
+            }
+        }
+    }
+
+    /**
+     * Tests: listen on loopback without NSD, Wi-Fi or day-change hooks, and return the port.
+     * Peers are then pointed at it with [setPeerAddressForTest].
+     */
+    @VisibleForTesting
+    internal fun listenForTest(memberId: String): Int {
+        localMemberId = memberId
+        if (!scope.isActive) scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        val server = ServerSocket(0, 50, java.net.InetAddress.getLoopbackAddress())
+        serverSocket = server
+        serverPort = server.localPort
+        scope.launch { acceptLoop(server) }
+        return serverPort
+    }
+
+    @VisibleForTesting
+    internal fun setPeerAddressForTest(memberId: String, address: InetSocketAddress) {
+        peerAddresses[memberId] = address
+    }
+
+    private suspend fun acceptLoop(server: ServerSocket) = coroutineScope {
+        while (!server.isClosed) {
+            try {
+                val socket = withContext(Dispatchers.IO) { server.accept() }
+                if (inboundCount.incrementAndGet() > MAX_INBOUND_CONNECTIONS) {
+                    inboundCount.decrementAndGet()
+                    Timber.w("Too many LAN connections — refusing one")
+                    runCatching { socket.close() }
+                    continue
+                }
+                launch {
+                    try { handleInboundConnection(socket) } finally { inboundCount.decrementAndGet() }
+                }
+            } catch (e: Exception) {
+                if (!server.isClosed) Timber.e(e, "TCP accept error")
+                break
             }
         }
     }
