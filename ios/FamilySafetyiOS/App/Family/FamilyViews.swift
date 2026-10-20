@@ -201,6 +201,20 @@ struct SettingsView: View {
                     }
                     .font(Typeface.body).listRowBackground(Palette.surface)
                     Section {
+                        NavigationLink {
+                            SecurityLogView()
+                        } label: {
+                            LabeledContent("Security log") {
+                                Text(model.securityLog.events.isEmpty ? "Nothing unusual" : "\(model.securityLog.events.count)")
+                                    .font(Typeface.small)
+                            }
+                        }
+                    } footer: {
+                        Text("Things this phone refused that might be someone outside the family trying to get in. You can send it as a report.")
+                            .font(Typeface.small)
+                    }
+                    .font(Typeface.body).listRowBackground(Palette.surface)
+                    Section {
                         Button("Leave family", role: .destructive) { leaving = true }.font(Typeface.body)
                     }
                     .listRowBackground(Palette.surface)
@@ -280,5 +294,85 @@ struct ColourChooser: View {
     private var currentMember: FamilyMember? {
         if case .member(let g) = model.nodeState { return g.findMember(byId: model.memberId ?? "") }
         return nil
+    }
+}
+
+/// The phone's security log, newest first, and a button that hands a plain-text report to the
+/// share sheet: Mail, Messages, Files or a monitoring app. Nothing is sent without the user.
+struct SecurityLogView: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var report: String?
+
+    var body: some View {
+        Screen {
+            List {
+                if model.securityLog.events.isEmpty {
+                    Text("Nothing unusual recorded in the last 30 days.")
+                        .font(Typeface.body).foregroundStyle(Palette.secondaryText)
+                        .listRowBackground(Palette.surface)
+                } else {
+                    ForEach(model.securityLog.events.reversed()) { event in
+                        SecurityEventRow(event: event, name: name(event.memberId))
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .padding(.horizontal, -Spacing.m)
+        }
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: Spacing.s) {
+                if let report {
+                    ShareLink(item: report, subject: Text("FamilySafety security report"),
+                              message: Text("Security report from FamilySafety")) {
+                        Text("Send report")
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                }
+                Text("The report lists what was refused, when and from whom. No messages, locations or keys.")
+                    .font(Typeface.small).foregroundStyle(Palette.secondaryText).multilineTextAlignment(.center)
+            }
+            .padding(Spacing.m).background(Palette.background)
+        }
+        .navigationTitle("Security log")
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: model.securityLog) { report = await model.securityReport() }
+    }
+
+    private func name(_ memberId: String?) -> String {
+        guard let memberId else { return "Unknown sender" }
+        if case .member(let group) = model.nodeState, let m = group.findMember(byId: memberId) { return m.displayName }
+        return "Not in the family (\(memberId.prefix(8)))"
+    }
+}
+
+struct SecurityEventRow: View {
+    let event: SecurityEvent
+    let name: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(event.kind.title).font(Typeface.bodyStrong).foregroundStyle(colour)
+            Text("\(name) · \(when)\(event.count > 1 ? " · \(event.count) times" : "")")
+                .font(Typeface.small).foregroundStyle(Palette.secondaryText)
+            if let detail = event.detail {
+                Text(detail).font(Typeface.small).foregroundStyle(Palette.secondaryText)
+            }
+        }
+        .padding(.vertical, Spacing.xs)
+        .listRowBackground(Palette.background)
+        .listRowSeparatorTint(Palette.hairline)
+    }
+
+    private var colour: Color {
+        switch event.kind.severity {
+        case .high: return Palette.dangerText
+        case .medium: return Palette.warningText
+        case .low: return Palette.text
+        }
+    }
+
+    private var when: String {
+        Date(timeIntervalSince1970: Double(event.lastAtMs) / 1000).formatted(.relative(presentation: .named))
     }
 }

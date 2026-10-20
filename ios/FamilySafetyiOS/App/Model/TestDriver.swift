@@ -14,12 +14,14 @@ import Foundation
 ///   FS_TEST_APPROVE=1             approve every verified join request as it arrives
 ///   FS_TEST_RENAME=Name           once in a family, rename this person (signed, 3.1)
 ///   FS_TEST_COLOR=Teal            once in a family, choose this palette colour
+///   FS_TEST_SECURITY_REPORT=<sec> once in a family, print the security report after <sec> seconds
 @MainActor
 enum TestDriver {
     static let env = ProcessInfo.processInfo.environment
     private static var invited = false
     private static var acted = false
     private static var edited = false
+    private static var reported = false
 
     static func log(_ line: String) { print("[test] \(line)") }
 
@@ -51,6 +53,13 @@ enum TestDriver {
                 if let colour = env["FS_TEST_COLOR"], let c = PersonPalette.colors.first(where: { $0.name == colour }) {
                     await model.setColor(c); log("colour \(colour)")
                 }
+            }
+        case .member where env["FS_TEST_SECURITY_REPORT"] != nil && !reported:
+            reported = true
+            let delay = UInt64(env["FS_TEST_SECURITY_REPORT"].flatMap(UInt64.init) ?? 10)
+            Task {
+                try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
+                log("security report:\n\(await model.securityReport() ?? "no node")")
             }
         case .member where env["FS_TEST_INVITE"] != nil && !invited:
             invited = true

@@ -474,6 +474,27 @@ final class GroupSyncTests: XCTestCase {
         XCTAssertEqual(asked, 2, "asked again after a day")
     }
 
+    func test_engine_recordsReplaysForgeriesAndStrangersInTheSecurityLog() async throws {
+        let p = try await pair()
+        let recorder = SecurityRecorder(slot: nil)
+        let bob = GroupSyncEngine(identity: p.bob, store: p.bobStore, outbox: p.bobOut, security: recorder, now: { 1_800_000_000_000 })
+        await p.aliceEngine.recordSighting(memberId: p.bob.memberId, protocolVersion: 4)
+        let v3 = p.base.with(groupName: "R", version: 3, previousStateHash: .some(p.base.computeStateHash()))
+        await p.aliceEngine.broadcast(v3, changeType: .nameChanged)
+        let sealed = await p.aliceOut.to(Topics.groupSyncInbox(memberId: p.bob.memberId))
+        _ = await bob.handleGroupSync(payload: sealed[0])
+        _ = await bob.handleGroupSync(payload: sealed[0])            // replay
+        let forged = try JSONEncoder().encode(GroupUpdateAck(groupId: "g-1", version: 3, memberId: p.alice.memberId, timestamp: 1))
+        await bob.handleAck(payload: forged)                         // plaintext in Alice's name after she sealed
+        let stranger = try identity("stranger")
+        let crypto = E2EECrypto(localMemberId: stranger.memberId, localEd25519SecretKey: stranger.ed25519SecretKey64,
+                                localX25519SecretKey: stranger.x25519PrivateKey)
+        _ = await bob.handleGroupSync(payload: try crypto.encrypt(plaintext: "{}", recipientMemberId: p.bob.memberId,
+                                                                  recipientX25519PublicKey: p.bob.x25519PublicKey))
+        let kinds = Set(recorder.snapshot.events.map(\.kind))
+        XCTAssertEqual(kinds, [.replayRefused, .forgedControlMessage, .unknownSender])
+    }
+
     func test_engine_refreshRequests_membersOnly_andRateLimited_F16() async throws {
         let p = try await pair()
         let stranger = try identity("stranger")

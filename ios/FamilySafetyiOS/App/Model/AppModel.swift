@@ -24,6 +24,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var presence: [String: PresenceStatus] = [:]
     /// Members whose app is too old to follow the family (§6.2 rule 3).
     @Published private(set) var needsUpdate: Set<String> = []
+    /// Refusals that may be someone outside the family trying to get in (phase 1).
+    @Published private(set) var securityLog = SecurityLog()
     @Published var lastError: String?
     /// "Signed in on another phone" (2.2). Shown as its own alert.
     @Published var identityNotice: String?
@@ -35,6 +37,7 @@ final class AppModel: ObservableObject {
     private let deviceSlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "device-id")
     private let ledgerSlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "protocol-ledger")
     private let presenceSlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "presence-book")
+    private let securitySlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "security-log")
 
     var memberId: String? { try? profile?.identity().memberId }
 
@@ -63,6 +66,14 @@ final class AppModel: ObservableObject {
         _ = try profile.identity()
         try profileSlot.writeJSON(profile)
         try startNode(profile)
+    }
+
+    /// The security report as plain text, for the share sheet. Nil without a running node.
+    func securityReport() async -> String? {
+        guard let node else { return nil }
+        let info = Bundle.main.infoDictionary
+        let version = "\(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?"))"
+        return await node.securityReport(appVersion: version)
     }
 
     func recoveryPhrase() -> [String] {
@@ -120,10 +131,11 @@ final class AppModel: ObservableObject {
                                                     keyProvider: KeychainGroupStateKeyProvider())
         let node = try FamilyNode(profile: profile, credentials: credentials, groupPersistence: persistence,
                                   inviteSlot: inviteSlot, pendingJoinSlot: pendingJoinSlot, deviceSlot: deviceSlot,
-                                  ledgerSlot: ledgerSlot, presenceSlot: presenceSlot) { [weak self] event in
+                                  ledgerSlot: ledgerSlot, presenceSlot: presenceSlot, securitySlot: securitySlot) { [weak self] event in
             Task { @MainActor in self?.handle(event) }
         }
         self.node = node
+        securityLog = node.securityLog
         phase = .running
         Task { await node.start() }
     }
@@ -148,6 +160,7 @@ final class AppModel: ObservableObject {
             #endif
         case .presence(let map): presence = map
         case .needsUpdate(let members): needsUpdate = members
+        case .securityLog(let log): securityLog = log
         case .identityAlert(let text):
             identityNotice = text
             #if DEBUG

@@ -24,6 +24,8 @@ public enum NodeEvent: Sendable {
     /// Members whose app is too old to follow the family, or who went back to an older one
     /// (§6.2 rule 3). Name them in the UI.
     case needsUpdate(Set<String>)
+    /// The security log changed (intrusion detection, phase 1).
+    case securityLog(SecurityLog)
 }
 
 public enum NodeError: Error, Equatable {
@@ -67,6 +69,7 @@ public actor FamilyNode {
     private var sessionStart: Int64?
     private var presenceBook: PresenceBook
     private let presenceSlot: SecretSlot
+    private let security: SecurityRecorder
     private var lastNeedsUpdate: Set<String> = []
     private var inbound: AsyncStream<(String, Data)>.Continuation?
     private var bridge: TransportBridge?
@@ -74,7 +77,11 @@ public actor FamilyNode {
 
     public init(profile: LocalProfile, credentials: BrokerCredentials, groupPersistence: GroupStatePersistence,
                 inviteSlot: SecretSlot, pendingJoinSlot: SecretSlot, deviceSlot: SecretSlot, ledgerSlot: SecretSlot,
-                presenceSlot: SecretSlot, onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
+                presenceSlot: SecretSlot, securitySlot: SecretSlot,
+                onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
+        let security = SecurityRecorder(slot: securitySlot)
+        security.onChange = { onEvent(.securityLog($0)) }
+        self.security = security
         self.presenceSlot = presenceSlot
         let book = (try? presenceSlot.readJSON(PresenceBook.self)) ?? PresenceBook()
         self.presenceBook = book
@@ -95,7 +102,7 @@ public actor FamilyNode {
         }
         self.transport = MqttTransport(memberId: identity.memberId, credentials: credentials, deviceId: deviceId)
         self.outbox = TransportOutbox(transport: transport)
-        self.engine = GroupSyncEngine(identity: identity, store: store, outbox: outbox, ledgerSlot: ledgerSlot)
+        self.engine = GroupSyncEngine(identity: identity, store: store, outbox: outbox, ledgerSlot: ledgerSlot, security: security)
         self.desk = try InviterDesk(identity: identity, store: store, engine: engine, outbox: outbox, bookSlot: inviteSlot)
         self.onEvent = onEvent
     }
@@ -350,7 +357,15 @@ public actor FamilyNode {
                 break
             }
         case Topics.joinRequest(inviterMemberId: me):
-            if case .prompted = await desk.handle(payload: payload) { await publishPrompts() }
+            switch await desk.handle(payload: payload) {
+            case .prompted: await publishPrompts()
+            case .dropped(let reason):
+                // A member's ID with someone else's keys is an impersonation attempt; the rest
+                // are failed checks (a spent, expired or forged invite).
+                security.record(reason == "member ID with different keys" ? .impersonatedJoin : .joinRequestRejected,
+                                memberId: nil, detail: reason)
+            default: break
+            }
             if let group = await store.current, case .member = state { setState(.member(group)) }
         case Topics.groupSyncInbox(memberId: me):
             let before = await store.current?.members.map(\.memberId)
@@ -373,13 +388,14 @@ public actor FamilyNode {
                 guard !payload.isEmpty else { return } // a cleared retained copy
                 guard let member = group.findMember(byId: sender) else {
                     // Usually someone who joined while we were away (Android #49).
+                    engine.recordStranger(sender, roster: group, detail: "presence")
                     await engine.catchUpOnUnknownSender(sender)
                     return
                 }
                 let status: PresenceStatus
                 switch PresenceCodec.read(payload, sender: member, group: group) {
                 case .status(let read): status = read
-                case .unknownKey: await engine.unknownGroupKeySeen(); return
+                case .unknownKey: await engine.unknownGroupKeySeen(from: sender); return
                 case .invalid: return
                 }
                 if sender != me {
@@ -392,6 +408,8 @@ public actor FamilyNode {
                     // our phrase is in use elsewhere (§6.2 rule 4).
                     guard let other = status.deviceId,
                           CloneDetector.ownPresenceIsAnotherDevice(isOnline: status.isOnline, deviceId: other, myDeviceId: deviceId) else { return }
+                    // Logged every time; the notification below is capped to once per 6 hours.
+                    security.record(.identityInUseElsewhere, memberId: me, detail: "device \(other.prefix(8))")
                     let t = now()
                     if let last = lastSelfCloneAlert, t - last < CloneDetector.cooldown { return }
                     lastSelfCloneAlert = t
@@ -400,6 +418,7 @@ public actor FamilyNode {
                 }
                 if let device = status.deviceId,
                    cloneDetector.observe(memberId: sender, deviceId: device, isOnline: status.isOnline, now: now()) {
+                    security.record(.memberOnTwoPhones, memberId: sender, detail: "device \(device.prefix(8))")
                     onEvent(.identityAlert("\(member.displayName) is signed in on another phone. If that wasn't them, they should check their phones."))
                 }
                 // Replay check, with the sudden-disconnect exception for the current session's will.
@@ -409,6 +428,17 @@ public actor FamilyNode {
                 onEvent(.presence(presence))
             }
         }
+    }
+
+    // MARK: - Security log
+
+    public nonisolated var securityLog: SecurityLog { security.snapshot }
+
+    /// A plain-text report for the user to send wherever they choose (Mail, Messages, a
+    /// monitoring app). Nothing is sent from here.
+    public func securityReport(appVersion: String) async -> String {
+        security.flush()
+        return security.snapshot.report(group: await store.current, myMemberId: identity.memberId, appVersion: appVersion, now: now())
     }
 
     // MARK: - Helpers
