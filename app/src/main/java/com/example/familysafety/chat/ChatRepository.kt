@@ -1,5 +1,6 @@
 package com.example.familysafety.chat
 
+import com.example.familysafety.core.hexToBytes
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.group.FamilyMember
 import com.example.familysafety.group.GroupStateManager
@@ -480,7 +481,7 @@ class ChatRepository @Inject constructor(
         conversationId: String? = null
     ): Boolean {
         return try {
-            val recipientX25519Key = hexToByteArray(recipient.x25519PublicKey)
+            val recipientX25519Key = recipient.x25519PublicKey.hexToBytes()
 
             val encryptedContent = e2eeManager.encryptMessage(
                 plaintext = json.encodeToString(
@@ -572,8 +573,8 @@ class ChatRepository @Inject constructor(
 
         try {
             // Decrypt the message
-            val senderX25519Key = hexToByteArray(sender.x25519PublicKey)
-            val senderEd25519Key = hexToByteArray(sender.ed25519PublicKey)
+            val senderX25519Key = sender.x25519PublicKey.hexToBytes()
+            val senderEd25519Key = sender.ed25519PublicKey.hexToBytes()
 
             val decryptedJson = e2eeManager.decryptMessage(
                 encryptedMessageJson = encryptedPayload,
@@ -689,7 +690,7 @@ class ChatRepository @Inject constructor(
             val encrypted = e2eeManager.encryptMessage(
                 plaintext = json.encodeToString(receipt),
                 recipientMemberId = recipient.memberId,
-                recipientX25519PublicKey = hexToByteArray(recipient.x25519PublicKey)
+                recipientX25519PublicKey = recipient.x25519PublicKey.hexToBytes()
             )
 
             val topic = if (status == MessageStatus.READ) {
@@ -726,8 +727,8 @@ class ChatRepository @Inject constructor(
 
             val receiptJson = e2eeManager.decryptMessage(
                 encryptedMessageJson = encryptedPayload,
-                senderX25519PublicKey = hexToByteArray(sender.x25519PublicKey),
-                senderEd25519PublicKey = hexToByteArray(sender.ed25519PublicKey)
+                senderX25519PublicKey = sender.x25519PublicKey.hexToBytes(),
+                senderEd25519PublicKey = sender.ed25519PublicKey.hexToBytes()
             )
             val receipt = json.decodeFromString<DeliveryReceipt>(receiptJson)
 
@@ -805,9 +806,6 @@ class ChatRepository @Inject constructor(
     // HELPERS
     // =========================================================================
 
-    private fun hexToByteArray(hex: String): ByteArray {
-        return hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-    }
 }
 
 /**

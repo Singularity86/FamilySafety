@@ -1,5 +1,7 @@
 package com.example.familysafety.onboarding
 
+import com.example.familysafety.core.toHex
+import com.example.familysafety.core.hexToBytes
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -236,7 +238,7 @@ class OnboardingViewModel @Inject constructor(
             )
             val joinRequest = unsigned.copy(
                 signature = cryptoProvider.signMessage(unsigned.signedBytes())
-                    .joinToString("") { "%02x".format(it) }
+                    .toHex()
             )
             val joinRequestJson = if (invite == null) {
                 json.encodeToString(joinRequest)
@@ -362,8 +364,6 @@ class OnboardingViewModel @Inject constructor(
     // A restored phone now rejoins through sendJoinRequest() with the restored phrase; see
     // RejoinPolicy for why a member's own phone is let back in without a prompt.
 
-    private fun String.hexToBytes(): ByteArray =
-        chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     private fun saveOnboardingComplete() {
         val prefs = context.getSharedPreferences("familysafety_prefs", Context.MODE_PRIVATE)

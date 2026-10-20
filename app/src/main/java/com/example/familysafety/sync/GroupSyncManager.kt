@@ -1,5 +1,7 @@
 package com.example.familysafety.sync
 
+import com.example.familysafety.core.hexToBytes
+import com.example.familysafety.core.toHex
 import com.example.familysafety.core.ErrorHandler
 import com.example.familysafety.core.RateLimiter
 import com.example.familysafety.core.RateLimiters
@@ -119,7 +121,7 @@ class GroupSyncManager @Inject constructor(
                 val payload = createSyncSignaturePayload(syncMessage)
                 val signature = cryptoProvider.signMessage(payload.toByteArray())
 
-                val signedMessage = syncMessage.copy(signature = signature.toHexString())
+                val signedMessage = syncMessage.copy(signature = signature.toHex())
                 val messageJson = json.encodeToString(signedMessage)
 
                 val peers = groupDefinition.members.filter { it.memberId != myMemberId }
@@ -129,7 +131,7 @@ class GroupSyncManager @Inject constructor(
                         val encrypted = e2eeManager.encryptMessage(
                             plaintext = messageJson,
                             recipientMemberId = member.memberId,
-                            recipientX25519PublicKey = member.x25519PublicKey.hexToByteArray(),
+                            recipientX25519PublicKey = member.x25519PublicKey.hexToBytes(),
                             recipientEd25519Hex = member.ed25519PublicKey
                         )
                         val topic = MqttConfig.getGroupSyncInboxTopic(member.memberId)
@@ -374,8 +376,8 @@ class GroupSyncManager @Inject constructor(
         val decryptedJson = try {
             e2eeManager.decryptMessage(
                 encryptedMessageJson = encryptedPayload,
-                senderX25519PublicKey = sender.x25519PublicKey.hexToByteArray(),
-                senderEd25519PublicKey = sender.ed25519PublicKey.hexToByteArray()
+                senderX25519PublicKey = sender.x25519PublicKey.hexToBytes(),
+                senderEd25519PublicKey = sender.ed25519PublicKey.hexToBytes()
             )
         } catch (e: Exception) {
             Timber.w(e, "Failed to decrypt group sync message from ${senderMemberId.take(8)}")
@@ -615,8 +617,8 @@ class GroupSyncManager @Inject constructor(
             val valid = try {
                 cryptoProvider.verifySignature(
                     message = canonicalMessage,
-                    signature = vote.signature.hexToByteArray(),
-                    publicKey = voter.ed25519PublicKey.hexToByteArray()
+                    signature = vote.signature.hexToBytes(),
+                    publicKey = voter.ed25519PublicKey.hexToBytes()
                 )
             } catch (e: Exception) {
                 false
@@ -643,8 +645,8 @@ class GroupSyncManager @Inject constructor(
                 val valid = try {
                     cryptoProvider.verifySignature(
                         message = buildRemovalProofMessage(currentGroup.groupId, proof.tombstone),
-                        signature = proof.signature.hexToByteArray(),
-                        publicKey = authorizer.ed25519PublicKey.hexToByteArray()
+                        signature = proof.signature.hexToBytes(),
+                        publicKey = authorizer.ed25519PublicKey.hexToBytes()
                     )
                 } catch (e: Exception) {
                     false
@@ -694,8 +696,8 @@ class GroupSyncManager @Inject constructor(
             }
             val decryptedJson = e2eeManager.decryptMessage(
                 encryptedMessageJson = encryptedPayload,
-                senderX25519PublicKey = sender.x25519PublicKey.hexToByteArray(),
-                senderEd25519PublicKey = sender.ed25519PublicKey.hexToByteArray()
+                senderX25519PublicKey = sender.x25519PublicKey.hexToBytes(),
+                senderEd25519PublicKey = sender.ed25519PublicKey.hexToBytes()
             )
             val vote = json.decodeFromString<RemovalVoteMessage>(decryptedJson)
             if (vote.groupId != currentGroup.groupId) return@safely
@@ -763,7 +765,7 @@ class GroupSyncManager @Inject constructor(
                 val encrypted = e2eeManager.encryptMessage(
                     plaintext = messageJson,
                     recipientMemberId = member.memberId,
-                    recipientX25519PublicKey = member.x25519PublicKey.hexToByteArray(),
+                    recipientX25519PublicKey = member.x25519PublicKey.hexToBytes(),
                     recipientEd25519Hex = member.ed25519PublicKey
                 )
                 transportProvider.sendMessage(
@@ -804,8 +806,8 @@ class GroupSyncManager @Inject constructor(
         val valid = try {
             cryptoProvider.verifySignature(
                 message = canonicalMessage,
-                signature = vote.signature.hexToByteArray(),
-                publicKey = voter.ed25519PublicKey.hexToByteArray()
+                signature = vote.signature.hexToBytes(),
+                publicKey = voter.ed25519PublicKey.hexToBytes()
             )
         } catch (e: Exception) {
             false
@@ -862,12 +864,12 @@ class GroupSyncManager @Inject constructor(
                 }
 
             val payload = createSyncSignaturePayload(syncMessage)
-            val signature = syncMessage.signature.hexToByteArray()
+            val signature = syncMessage.signature.hexToBytes()
 
             cryptoProvider.verifySignature(
                 message = payload.toByteArray(),
                 signature = signature,
-                publicKey = updater.ed25519PublicKey.hexToByteArray()
+                publicKey = updater.ed25519PublicKey.hexToBytes()
             )
         } catch (e: Exception) {
             Timber.e(e, "Signature verification failed")
@@ -901,7 +903,7 @@ class GroupSyncManager @Inject constructor(
             e2eeManager.encryptMessage(
                 plaintext = messageJson,
                 recipientMemberId = recipient.memberId,
-                recipientX25519PublicKey = recipient.x25519PublicKey.hexToByteArray(),
+                recipientX25519PublicKey = recipient.x25519PublicKey.hexToBytes(),
                 recipientEd25519Hex = recipient.ed25519PublicKey
             )
         } else messageJson
@@ -928,8 +930,8 @@ class GroupSyncManager @Inject constructor(
             val plaintext = try {
                 e2eeManager.decryptMessage(
                     encryptedMessageJson = payload,
-                    senderX25519PublicKey = sender.x25519PublicKey.hexToByteArray(),
-                    senderEd25519PublicKey = sender.ed25519PublicKey.hexToByteArray()
+                    senderX25519PublicKey = sender.x25519PublicKey.hexToBytes(),
+                    senderEd25519PublicKey = sender.ed25519PublicKey.hexToBytes()
                 )
             } catch (e: Exception) {
                 Timber.w("Dropped sealed $what from ${envelopeSender.take(8)}: ${e.message}")
@@ -958,11 +960,7 @@ class GroupSyncManager @Inject constructor(
         } catch (e: Exception) { null }
     }
 
-    private fun ByteArray.toHexString(): String =
-        joinToString("") { "%02x".format(it) }
 
-    private fun String.hexToByteArray(): ByteArray =
-        chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }
 
 /** At most one catch-up refresh (missed session, unknown sender) per this long. */

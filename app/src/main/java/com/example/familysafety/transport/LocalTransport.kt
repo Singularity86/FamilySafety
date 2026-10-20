@@ -1,5 +1,7 @@
 package com.example.familysafety.transport
 
+import com.example.familysafety.core.hexToBytes
+import com.example.familysafety.core.toHex
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
@@ -11,8 +13,6 @@ import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.group.GroupDefinition
 import com.example.familysafety.group.GroupKeys
 import com.example.familysafety.group.GroupStateManager
-import com.example.familysafety.transport.LanProtocol.hexToBytes
-import com.example.familysafety.transport.LanProtocol.toHex
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex

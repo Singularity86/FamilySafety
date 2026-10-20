@@ -1,5 +1,7 @@
 package com.example.familysafety.group
 
+import com.example.familysafety.core.hexToBytes
+import com.example.familysafety.core.toHex
 import java.security.MessageDigest
 
 /**
@@ -53,10 +55,10 @@ object GroupTransitionValidator {
 
     /** memberId = SHA-256(ed25519PublicKeyBytes).take(16).toHex() — must match CryptoProvider.deriveMemberId. */
     fun deriveMemberIdFromKey(ed25519PublicKeyHex: String): String {
-        val publicKey = ed25519PublicKeyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        val publicKey = ed25519PublicKeyHex.hexToBytes()
         return MessageDigest.getInstance("SHA-256").digest(publicKey)
-            .take(16)
-            .joinToString("") { "%02x".format(it) }
+            .copyOf(16)
+            .toHex()
     }
 
     /**

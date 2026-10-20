@@ -1,5 +1,6 @@
 package com.example.familysafety.invite
 
+import com.example.familysafety.core.toHex
 import android.content.SharedPreferences
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -24,7 +25,7 @@ class InviteSecretStore(
     @Synchronized
     fun create(now: Long): Pair<PendingInvite, ByteArray> {
         val secret = ByteArray(JoinV2.SECRET_BYTES).also { random.nextBytes(it) }
-        val id = ByteArray(8).also { random.nextBytes(it) }.joinToString("") { "%02x".format(it) }
+        val id = ByteArray(8).also { random.nextBytes(it) }.toHex()
         val invite = PendingInvite(
             inviteId = id,
             secret = Base64.getEncoder().encodeToString(secret),

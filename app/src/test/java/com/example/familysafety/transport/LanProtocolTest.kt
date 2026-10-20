@@ -1,5 +1,6 @@
 package com.example.familysafety.transport
 
+import com.example.familysafety.core.toHex
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import org.junit.Assert.assertArrayEquals

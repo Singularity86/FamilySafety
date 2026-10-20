@@ -1,5 +1,6 @@
 package com.example.familysafety.files
 
+import com.example.familysafety.core.hexToBytes
 import com.example.familysafety.crypto.GroupCipher
 import java.security.MessageDigest
 
@@ -54,6 +55,4 @@ object FileKeys {
     fun legacy(groupId: String): ByteArray =
         MessageDigest.getInstance("SHA-256").digest((groupId + LEGACY_SALT).toByteArray(Charsets.UTF_8))
 
-    private fun String.hexToBytes(): ByteArray =
-        chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }

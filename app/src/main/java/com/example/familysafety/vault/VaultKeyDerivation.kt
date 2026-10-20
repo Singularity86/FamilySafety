@@ -1,7 +1,7 @@
 package com.example.familysafety.vault
 
+import com.example.familysafety.crypto.Sodium
 import com.goterl.lazysodium.LazySodiumAndroid
-import com.goterl.lazysodium.SodiumAndroid
 import com.goterl.lazysodium.interfaces.PwHash
 import com.sun.jna.NativeLong
 import java.security.MessageDigest
@@ -46,7 +46,7 @@ import javax.inject.Singleton
 @Singleton
 class VaultKeyDerivation @Inject constructor() {
 
-    private val sodium = LazySodiumAndroid(SodiumAndroid())
+    private val sodium: LazySodiumAndroid get() = Sodium.instance
 
     /**
      * Derive the 32-byte key for [code] within [groupId].

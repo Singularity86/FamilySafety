@@ -1,5 +1,6 @@
 package com.example.familysafety.location
 
+import com.example.familysafety.core.hexToBytes
 import android.app.*
 import android.content.Context
 import android.content.Intent
@@ -717,7 +718,7 @@ class LocationService : Service() {
                     val encryptedPayload = e2eeManager.encryptMessage(
                         plaintext = com.example.familysafety.transport.MessageProtocol.encodeLocationUpdate(location),
                         recipientMemberId = peer.memberId,
-                        recipientX25519PublicKey = peer.x25519PublicKey.hexToByteArray()
+                        recipientX25519PublicKey = peer.x25519PublicKey.hexToBytes()
                     )
                     transportProvider.sendMessage(
                         recipientId = peer.memberId,
@@ -795,8 +796,6 @@ class LocationService : Service() {
         }.onFailure { Timber.w(it, "LocationService: could not sign a fix") }.getOrDefault(unsigned)
     }
 
-    private fun String.hexToByteArray(): ByteArray =
-        chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     private fun adjustIntervalFromGps(location: Location) {
         val speed = if (location.hasSpeed()) location.speed else 0f

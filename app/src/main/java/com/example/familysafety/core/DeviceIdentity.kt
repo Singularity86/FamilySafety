@@ -20,7 +20,7 @@ object DeviceIdentity {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.getString(KEY, null)?.let { return it }
         val id = ByteArray(16).also { SecureRandom().nextBytes(it) }
-            .joinToString("") { "%02x".format(it) }
+            .toHex()
         prefs.edit().putString(KEY, id).commit()
         return id
     }

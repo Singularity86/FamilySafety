@@ -1,5 +1,7 @@
 package com.example.familysafety.group
 
+import com.example.familysafety.core.toHex
+import com.example.familysafety.core.hexToBytes
 import kotlinx.serialization.Serializable
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -37,10 +39,10 @@ object GroupKeys {
 
     fun kidOf(keyHex: String): String =
         MessageDigest.getInstance("SHA-256").digest(keyHex.hexToBytes())
-            .copyOfRange(0, 8).joinToString("") { "%02x".format(it) }
+            .copyOfRange(0, 8).toHex()
 
     fun newKey(epoch: Int): GroupKey {
-        val key = ByteArray(32).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
+        val key = ByteArray(32).also { SecureRandom().nextBytes(it) }.toHex()
         return GroupKey(kidOf(key), epoch, key)
     }
 
@@ -144,5 +146,4 @@ object GroupKeys {
 
     private val HEX_64 = Regex("^[0-9a-fA-F]{64}$")
 
-    private fun String.hexToBytes(): ByteArray = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }

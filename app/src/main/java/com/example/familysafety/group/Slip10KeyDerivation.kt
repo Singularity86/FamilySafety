@@ -1,5 +1,6 @@
 package com.example.familysafety.group
 
+import com.example.familysafety.core.toHex
 import java.security.MessageDigest
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -232,10 +233,10 @@ class FamilySafeKeyDerivation(private val seed: ByteArray) {
         val accountIndex: Int
     ) {
         val ed25519PublicKeyHex: String
-            get() = signingKeyPair.publicKey.toHexString()
+            get() = signingKeyPair.publicKey.toHex()
 
         val x25519PublicKeyHex: String
-            get() = encryptionKeyPair.publicKey.toHexString()
+            get() = encryptionKeyPair.publicKey.toHex()
 
         /**
          * Derive member ID from Ed25519 public key.
@@ -244,7 +245,7 @@ class FamilySafeKeyDerivation(private val seed: ByteArray) {
         val memberId: String by lazy {
             val hash = MessageDigest.getInstance("SHA-256")
                 .digest(signingKeyPair.publicKey)
-            hash.take(16).toByteArray().toHexString()
+            hash.take(16).toByteArray().toHex()
         }
     }
 }

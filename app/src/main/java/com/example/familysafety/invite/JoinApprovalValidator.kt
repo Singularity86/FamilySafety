@@ -1,5 +1,6 @@
 package com.example.familysafety.invite
 
+import com.example.familysafety.core.toHex
 import com.example.familysafety.group.GroupDefinition
 import com.example.familysafety.group.GroupTransitionValidator
 

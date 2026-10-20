@@ -1,5 +1,6 @@
 package com.example.familysafety.crypto
 
+import com.example.familysafety.core.hexToBytes
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Cipher
@@ -43,7 +44,7 @@ object GroupCipher {
      * sufficient here and is trivial to reimplement on another platform.
      */
     fun deriveSubkey(groupKeyHex: String, purpose: String): ByteArray {
-        val keyBytes = groupKeyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        val keyBytes = groupKeyHex.hexToBytes()
         return MessageDigest.getInstance("SHA-256")
             .digest(keyBytes + purpose.toByteArray(Charsets.UTF_8))
     }

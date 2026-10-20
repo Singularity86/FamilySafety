@@ -1,5 +1,7 @@
 package com.example.familysafety.onboarding
 
+import com.example.familysafety.core.toHex
+import com.example.familysafety.core.hexToBytes
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -188,7 +190,7 @@ class MembershipViewModel @Inject constructor(
             val derivedPublicKey = FamilySafeKeyDerivation(seed.copyOf())
                 .deriveKeysForAccount(0).signingKeyPair.publicKey
             val derivedMemberId = GroupTransitionValidator.deriveMemberIdFromKey(
-                derivedPublicKey.joinToString("") { "%02x".format(it) }
+                derivedPublicKey.toHex()
             )
 
             if (StorageArea.IDENTITY !in unreadable) {
@@ -381,8 +383,6 @@ class MembershipViewModel @Inject constructor(
         return true
     }
 
-    private fun String.hexToBytes(): ByteArray =
-        chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     private suspend fun listenForApproval(
         memberId: String,

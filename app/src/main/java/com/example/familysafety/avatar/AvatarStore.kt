@@ -1,5 +1,6 @@
 package com.example.familysafety.avatar
 
+import com.example.familysafety.core.toHex
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
@@ -38,7 +39,7 @@ class AvatarStore @Inject constructor(
     companion object {
         fun sha256Hex(bytes: ByteArray): String {
             val md = MessageDigest.getInstance("SHA-256")
-            return md.digest(bytes).joinToString("") { "%02x".format(it) }
+            return md.digest(bytes).toHex()
         }
     }
 }

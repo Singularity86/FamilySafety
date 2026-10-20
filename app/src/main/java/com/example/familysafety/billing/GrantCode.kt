@@ -1,6 +1,6 @@
 package com.example.familysafety.billing
 
-import com.example.familysafety.group.hexToByteArray
+import com.example.familysafety.core.hexToBytes
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -67,14 +67,14 @@ object GrantCode {
         }
 
         val signatureBytes = try {
-            payload.signatureHex.hexToByteArray()
+            payload.signatureHex.hexToBytes()
         } catch (e: Exception) {
             return GrantCodeResult.InvalidFormat
         }
         if (signatureBytes.size != 64) return GrantCodeResult.InvalidFormat
 
         val publicKeyBytes = try {
-            publicKeyHex.hexToByteArray()
+            publicKeyHex.hexToBytes()
         } catch (e: Exception) {
             return GrantCodeResult.InvalidFormat
         }

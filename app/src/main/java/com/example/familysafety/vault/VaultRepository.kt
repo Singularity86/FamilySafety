@@ -1,5 +1,7 @@
 package com.example.familysafety.vault
 
+import com.example.familysafety.core.hexToBytes
+import com.example.familysafety.core.toHex
 import android.content.Context
 import android.net.Uri
 import com.example.familysafety.files.ChunkBitmap
@@ -668,10 +670,7 @@ class VaultRepository @Inject constructor(
         return cipher.doFinal(data.copyOfRange(NONCE_BYTES, data.size))
     }
 
-    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
-    private fun String.hexToBytes(): ByteArray =
-        chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     /** Same reasoning as the file subsystem: a name from a slot must not become a path. */
     private fun safeName(name: String): String {

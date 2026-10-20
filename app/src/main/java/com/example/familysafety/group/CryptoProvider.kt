@@ -1,5 +1,7 @@
 package com.example.familysafety.group
 
+import com.example.familysafety.core.toHex
+
 /**
  * Interface for cryptographic operations required by GroupStateManager.
  *
@@ -62,48 +64,9 @@ interface CryptoProvider {
      */
     fun sha256(input: ByteArray): ByteArray
 
-    /**
-     * Encrypt a message for a specific recipient using X25519 + XSalsa20-Poly1305 (NaCl box).
-     *
-     * @param plaintext The message to encrypt
-     * @param recipientX25519PublicKeyHex Recipient's X25519 public key
-     * @return Encrypted message (nonce prepended)
-     */
-    fun encryptForRecipient(
-        plaintext: ByteArray,
-        recipientX25519PublicKeyHex: String
-    ): ByteArray
-
-    /**
-     * Decrypt a message sent to us using our X25519 private key.
-     *
-     * @param ciphertext The encrypted message (with prepended nonce)
-     * @param senderX25519PublicKeyHex Sender's X25519 public key
-     * @return Decrypted plaintext, or null if decryption fails
-     */
-    fun decryptFromSender(
-        ciphertext: ByteArray,
-        senderX25519PublicKeyHex: String
-    ): ByteArray?
 }
 
 // =========================================================================
 // EXTENSION FUNCTIONS
 // =========================================================================
 
-/**
- * Convert hex string to ByteArray.
- */
-fun String.hexToByteArray(): ByteArray {
-    require(length % 2 == 0) { "Hex string must have even length" }
-    return chunked(2)
-        .map { it.toInt(16).toByte() }
-        .toByteArray()
-}
-
-/**
- * Convert ByteArray to lowercase hex string.
- */
-fun ByteArray.toHexString(): String {
-    return joinToString("") { "%02x".format(it) }
-}

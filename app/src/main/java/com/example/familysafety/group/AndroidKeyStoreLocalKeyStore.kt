@@ -1,12 +1,14 @@
 package com.example.familysafety.group
 
+import com.example.familysafety.core.hexToBytes
+import com.example.familysafety.core.toHex
 import android.content.Context
 import android.content.SharedPreferences
 import com.example.familysafety.storage.AndroidEncryptedPrefsBackend
 import com.example.familysafety.storage.DedicatedEncryptedPrefs
 import com.example.familysafety.storage.StorageUnavailableException
+import com.example.familysafety.crypto.Sodium
 import com.goterl.lazysodium.LazySodiumAndroid
-import com.goterl.lazysodium.SodiumAndroid
 import timber.log.Timber
 import java.io.File
 import java.security.KeyStore
@@ -59,7 +61,7 @@ class AndroidKeyStoreLocalKeyStore(
         private const val KEY_MNEMONIC = "mnemonic"
     }
 
-    private val sodium = LazySodiumAndroid(SodiumAndroid())
+    private val sodium: LazySodiumAndroid get() = Sodium.instance
 
     // Not cached on failure (lazy retries its initializer), so a transient Keystore error
     // clears on its own once the Keystore answers again.
@@ -181,14 +183,14 @@ class AndroidKeyStoreLocalKeyStore(
         // and, next door in storeMnemonic, the only copy of their recovery phrase. These
         // run once during onboarding, so blocking on the disk write is free.
         encryptedPrefs.edit()
-            .putString(name, key.toHexString())
+            .putString(name, key.toHex())
             .commit()
     }
 
     private fun loadKey(name: String): ByteArray {
         val hex = read { encryptedPrefs.getString(name, null) }
             ?: throw IllegalStateException("Key $name not found in storage")
-        return hex.hexToByteArray()
+        return hex.hexToBytes()
     }
 
     // =========================================================================
