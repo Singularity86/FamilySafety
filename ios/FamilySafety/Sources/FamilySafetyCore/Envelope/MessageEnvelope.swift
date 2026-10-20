@@ -36,10 +36,10 @@ public struct MessageEnvelope: Codable, Equatable {
 public enum EnvelopePadding {
     /// Bytes-per-bucket for location (§6.1).
     public static let target = 512
-    /// Presence went 256 → 512 with its signature, then 512 → 640 with the signed device ID
-    /// (Android 2.2), which takes a presence update to about 525 bytes. Online and offline must
-    /// still land in one bucket.
-    public static let presenceTarget = 640
+    /// Presence went 256 → 512 with its signature, 512 → 640 with the signed device ID
+    /// (Android 2.2), then 640 → 768 with the signed session start (about 700 bytes online).
+    /// Online and offline must still land in one bucket.
+    public static let presenceTarget = 768
 
     public static func target(for type: EnvelopeType) -> Int {
         type == .presenceUpdate ? presenceTarget : target

@@ -12,6 +12,9 @@ setvbuf(stdout, nil, _IONBF, 0)
 //       to <outDir>/<n>-<epochMs>.bin, byte for byte. Runs until Ctrl-C.
 //   swift run ReplayHarness replay <memberId> <file>
 //       Publishes that captured envelope back to familysafe/{memberId}/group_sync, once.
+//   swift run ReplayHarness watch <topicFilter> <outDir>
+//       Like capture, for any filter (wildcards allowed), and says per message whether it's a
+//       sealed §3 envelope (and from whom) or bare JSON. Used for joint checks of 3.4.
 //
 // Connects as its own throwaway client with a clean session and NO last-will, so it never
 // touches the member's presence or broker session. It can't read the envelopes (E2EE); the
@@ -31,8 +34,10 @@ final class Listener: CocoaMQTTDelegate {
         count += 1
         let ms = Int(Date().timeIntervalSince1970 * 1000)
         let file = outDir.appendingPathComponent("\(count)-\(ms).bin")
-        try? Data(message.payload).write(to: file)
-        print("captured #\(count) \(message.payload.count) bytes at \(Date()) -> \(file.lastPathComponent)")
+        let data = Data(message.payload)
+        try? data.write(to: file)
+        let shape = EncryptedEnvelope.peekSenderMemberId(json: data).map { "sealed from \($0.prefix(8))" } ?? "bare JSON"
+        print("captured #\(count) \(message.payload.count) bytes at \(Date()) on \(message.topic) [\(shape)] -> \(file.lastPathComponent)")
     }
     func mqtt(_ mqtt: CocoaMQTT, didSubscribeTopics success: NSDictionary, failed: [String]) {
         print("subscribed: \(success) failed: \(failed)")
@@ -46,12 +51,12 @@ final class Listener: CocoaMQTTDelegate {
 }
 
 let args = CommandLine.arguments
-guard args.count == 4, ["capture", "replay"].contains(args[1]) else {
-    print("usage: ReplayHarness capture <memberId> <outDir> | replay <memberId> <file>"); exit(2)
+guard args.count == 4, ["capture", "replay", "watch"].contains(args[1]) else {
+    print("usage: ReplayHarness capture <memberId> <outDir> | replay <memberId> <file> | watch <topicFilter> <outDir>"); exit(2)
 }
 guard let creds = HarnessCredentials.load() else { print(HarnessCredentials.missingMessage); exit(1) }
-let topic = Topics.groupSyncInbox(memberId: args[2])
-let capturing = args[1] == "capture"
+let topic = args[1] == "watch" ? args[2] : Topics.groupSyncInbox(memberId: args[2])
+let capturing = args[1] != "replay"
 let listener = Listener(outDir: capturing ? URL(fileURLWithPath: args[3]) : nil)
 
 let client = CocoaMQTT(clientID: "replay-harness-\(UUID().uuidString.prefix(8))",

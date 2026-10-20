@@ -61,6 +61,12 @@ public actor FamilyNode {
     private var reconnectRequested = false
     /// Which group key sealed the last-will at connect; a rotation needs a reconnect to re-seal it.
     private var willKid: String?
+    /// Whether this connection uses the group presence topic only (4.2); fixed at connect.
+    private var presenceSwitched = false
+    /// The timestamp this connection's will was signed with, sent as `sessionStart` (§6.2).
+    private var sessionStart: Int64?
+    private var presenceBook: PresenceBook
+    private let presenceSlot: SecretSlot
     private var lastNeedsUpdate: Set<String> = []
     private var inbound: AsyncStream<(String, Data)>.Continuation?
     private var bridge: TransportBridge?
@@ -68,7 +74,11 @@ public actor FamilyNode {
 
     public init(profile: LocalProfile, credentials: BrokerCredentials, groupPersistence: GroupStatePersistence,
                 inviteSlot: SecretSlot, pendingJoinSlot: SecretSlot, deviceSlot: SecretSlot, ledgerSlot: SecretSlot,
-                onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
+                presenceSlot: SecretSlot, onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
+        self.presenceSlot = presenceSlot
+        let book = (try? presenceSlot.readJSON(PresenceBook.self)) ?? PresenceBook()
+        self.presenceBook = book
+        self.presence = book.statuses
         self.profile = profile
         self.identity = try profile.identity()
         self.credentials = credentials
@@ -102,6 +112,9 @@ public actor FamilyNode {
         do {
             if let group = try await store.load() {
                 setState(.member(group))
+                // The last known presence, until the broker says otherwise (no retained replay
+                // when it kept our session, §4).
+                if !presence.isEmpty { onEvent(.presence(presence)) }
             } else if let pending = try pendingJoinSlot.readJSON(PendingJoin.self) {
                 resumeJoin(pending)
             } else {
@@ -119,9 +132,8 @@ public actor FamilyNode {
     public func stop() async {
         running = false
         await coordinator?.stop()
-        if transport.isConnected, let group = await store.current,
-           let offline = try? PresenceCodec.encode(identity: identity, isOnline: false, timestamp: now(), group: group, deviceId: deviceId) {
-            transport.publish(topic: Topics.presence(memberId: identity.memberId), payload: offline, qos: .qos1, retained: true)
+        if transport.isConnected, let group = await store.current {
+            publishPresence(isOnline: false, group: group)
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
         transport.disconnect()
@@ -187,14 +199,14 @@ public actor FamilyNode {
         let group: GroupDefinition
         do { group = try await store.remove(memberId: identity.memberId, identity: identity) } catch { throw NodeError.storageUnavailable }
         await engine.broadcast(group, changeType: .memberRemoved, changedMemberId: identity.memberId)
-        if let before,
-           let offline = try? PresenceCodec.encode(identity: identity, isOnline: false, timestamp: now(), group: before, deviceId: deviceId) {
-            transport.publish(topic: Topics.presence(memberId: identity.memberId), payload: offline, qos: .qos1, retained: true)
-        }
+        if let before { publishPresence(isOnline: false, group: before) }
         try? await Task.sleep(nanoseconds: 1_000_000_000)
         transport.clearRetained(topic: Topics.presence(memberId: identity.memberId))
+        if let before { transport.clearRetained(topic: PresenceTopics.group(groupId: before.groupId, memberId: identity.memberId)) }
         try? await store.forget()
         presence = [:]
+        presenceBook = PresenceBook()
+        try? presenceSlot.delete()
         onEvent(.presence(presence))
         setState(.noFamily)
         await reconnect()
@@ -238,12 +250,16 @@ public actor FamilyNode {
 
     private func connectOnce() async {
         let group = await store.current
+        let switched: Bool
+        if let group { switched = await engine.presenceGateOpen(group) } else { switched = false }
+        let willTimestamp = now()
         let will: Data
         do {
-            will = try PresenceCodec.encode(identity: identity, isOnline: false, timestamp: now(), group: group, deviceId: deviceId)
+            will = try PresenceCodec.encode(identity: identity, isOnline: false, timestamp: willTimestamp, group: group, deviceId: deviceId)
         } catch { return }
         do {
-            try await transport.connect(willPayload: will)
+            try await transport.connect(willPayload: will, willTopic: PresenceTopics.willTopic(
+                memberId: identity.memberId, groupId: group?.groupId, switched: switched))
         } catch MqttTransportError.alreadyConnecting {
             return
         } catch {
@@ -252,9 +268,11 @@ public actor FamilyNode {
         }
         backoffSeconds = 2
         willKid = group.flatMap(GroupKeys.stamp)
+        presenceSwitched = switched
+        sessionStart = willTimestamp
         await resubscribe()
-        if let group, let online = try? PresenceCodec.encode(identity: identity, isOnline: true, timestamp: now(), group: group, deviceId: deviceId) {
-            transport.publish(topic: Topics.presence(memberId: identity.memberId), payload: online, qos: .qos1, retained: true)
+        if let group {
+            publishPresence(isOnline: true, group: group)
             await engine.requestRefresh(reason: "connected")
             // A joiner was written into the roster by its inviter, unsigned; sign it so relays can
             // pass on later changes (3.1, Android ensureMyProfileSigned).
@@ -278,7 +296,7 @@ public actor FamilyNode {
     private func resubscribe() async {
         let group = await store.current
         let peers = group?.members.map(\.memberId).filter { $0 != identity.memberId } ?? []
-        _ = await transport.restoreSubscriptions(groupId: group?.groupId, peerMemberIds: peers)
+        _ = await transport.restoreSubscriptions(groupId: group?.groupId, peerMemberIds: peers, presenceSwitched: presenceSwitched)
     }
 
     private func scheduleReconnect() {
@@ -350,9 +368,14 @@ public actor FamilyNode {
         default:
             if let group = await store.current, topic == Topics.groupAck(groupId: group.groupId) {
                 await engine.handleAck(payload: payload)
-            } else if topic.hasSuffix("/presence"), let group = await store.current {
-                let sender = topic.split(separator: "/").dropFirst().first.map(String.init) ?? ""
-                guard let member = group.findMember(byId: sender) else { return }
+            } else if let group = await store.current, let sender = PresenceTopics.sender(of: topic, groupId: group.groupId) {
+                // Either presence topic (4.2); the same update may come on both mid-switch.
+                guard !payload.isEmpty else { return } // a cleared retained copy
+                guard let member = group.findMember(byId: sender) else {
+                    // Usually someone who joined while we were away (Android #49).
+                    await engine.catchUpOnUnknownSender(sender)
+                    return
+                }
                 let status: PresenceStatus
                 switch PresenceCodec.read(payload, sender: member, group: group) {
                 case .status(let read): status = read
@@ -379,14 +402,34 @@ public actor FamilyNode {
                    cloneDetector.observe(memberId: sender, deviceId: device, isOnline: status.isOnline, now: now()) {
                     onEvent(.identityAlert("\(member.displayName) is signed in on another phone. If that wasn't them, they should check their phones."))
                 }
-                if let known = presence[sender], known.timestamp > status.timestamp { return }
-                presence[sender] = status
+                // Replay check, with the sudden-disconnect exception for the current session's will.
+                guard presenceBook.accept(status, from: sender) else { return }
+                presence = presenceBook.statuses
+                try? presenceSlot.writeJSON(presenceBook)
                 onEvent(.presence(presence))
             }
         }
     }
 
     // MARK: - Helpers
+
+    /// Publishes our presence where the switch rules put it (4.2): retained only on the will's
+    /// topic, so an abrupt death overwrites it. Online carries this connection's session start.
+    /// Once per (group, switched) state, the retained copy on the other topic is cleared.
+    private func publishPresence(isOnline: Bool, group: GroupDefinition) {
+        guard let payload = try? PresenceCodec.encode(identity: identity, isOnline: isOnline, timestamp: now(), group: group,
+                                                      deviceId: deviceId, sessionStart: isOnline ? sessionStart : nil) else { return }
+        for target in PresenceTopics.publishTargets(memberId: identity.memberId, groupId: group.groupId, switched: presenceSwitched) {
+            transport.publish(topic: target.topic, payload: payload, qos: .qos1, retained: target.retained)
+        }
+        let state = "\(group.groupId):\(presenceSwitched)"
+        if presenceBook.clearedStaleFor != state {
+            transport.clearRetained(topic: PresenceTopics.staleTopic(memberId: identity.memberId, groupId: group.groupId,
+                                                                     switched: presenceSwitched))
+            presenceBook.clearedStaleFor = state
+            try? presenceSlot.writeJSON(presenceBook)
+        }
+    }
 
     /// After the family's state or a member's advertised version changed: add a group key if a
     /// removal calls for one and everyone can follow (3.3), re-seal the last-will under a new
@@ -400,9 +443,19 @@ public actor FamilyNode {
             setState(.member(rotated))
             await engine.broadcast(rotated, changeType: .versionSync)
         }
-        if transport.isConnected, GroupKeys.stamp(group) != willKid {
+        // The will's key and topic are fixed at connect: a new current key (3.3) or the presence
+        // gate opening or closing (4.2) needs a reconnect.
+        let gate = await engine.presenceGateOpen(group)
+        if transport.isConnected, GroupKeys.stamp(group) != willKid || gate != presenceSwitched {
             willKid = GroupKeys.stamp(group)
             await reconnect()
+        }
+        let members = Set(group.members.map(\.memberId))
+        if Set(presenceBook.statuses.keys).subtracting(members).isEmpty == false {
+            presenceBook.keepOnly(members)
+            presence = presenceBook.statuses
+            try? presenceSlot.writeJSON(presenceBook)
+            onEvent(.presence(presence))
         }
         let outdated = await engine.outdatedMembers(group)
         if outdated != lastNeedsUpdate {

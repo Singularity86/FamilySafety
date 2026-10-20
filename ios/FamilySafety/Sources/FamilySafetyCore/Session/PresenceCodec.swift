@@ -1,19 +1,24 @@
 import Foundation
 
-/// What we know about one member's presence.
-public struct PresenceStatus: Equatable, Sendable {
+/// What we know about one member's presence. Codable so the last known state survives a
+/// restart: a reconnect that keeps the broker session gets no retained replay (§4).
+public struct PresenceStatus: Codable, Equatable, Sendable {
     public let isOnline: Bool
     public let timestamp: Int64
     /// The sender's install, only when its device signature verified (2.2).
     public let deviceId: String?
     /// What the sender advertises (§6.2); recorded only because the presence authenticated.
     public let protocolVersion: Int
+    /// On online presence, the sender's connection start, only when its session signature
+    /// verified (§6.2 "Sudden disconnect").
+    public let sessionStart: Int64?
 
-    public init(isOnline: Bool, timestamp: Int64, deviceId: String? = nil, protocolVersion: Int = 1) {
+    public init(isOnline: Bool, timestamp: Int64, deviceId: String? = nil, protocolVersion: Int = 1, sessionStart: Int64? = nil) {
         self.isOnline = isOnline
         self.timestamp = timestamp
         self.deviceId = deviceId
         self.protocolVersion = protocolVersion
+        self.sessionStart = sessionStart
     }
 }
 
@@ -32,9 +37,10 @@ public enum PresenceCodec {
     /// Seals under the group's current key (3.3), stamping its kid unless it is epoch 0. A group
     /// without a shared key (or none at all) publishes plaintext.
     public static func encode(identity: FamilySafeIdentity, isOnline: Bool, timestamp: Int64,
-                              group: GroupDefinition?, deviceId: String? = nil) throws -> Data {
+                              group: GroupDefinition?, deviceId: String? = nil, sessionStart: Int64? = nil) throws -> Data {
         let presence = try PresenceUpdate.signed(memberId: identity.memberId, isOnline: isOnline, timestamp: timestamp,
-                                                 ed25519SecretKey64: identity.ed25519SecretKey64, deviceId: deviceId)
+                                                 ed25519SecretKey64: identity.ed25519SecretKey64, deviceId: deviceId,
+                                                 sessionStart: sessionStart)
         let inner = String(decoding: try JSONEncoder().encode(presence), as: UTF8.self)
         let envelope = try JSONEncoder().encode(try EnvelopePadding.build(type: .presenceUpdate, payload: inner))
         guard let group, let key = GroupKeys.current(group) else { return envelope }
@@ -61,6 +67,7 @@ public enum PresenceCodec {
               let key = Hex.decode(sender.ed25519PublicKey), presence.verifySignature(publicKey: key) else { return .invalid }
         return .status(PresenceStatus(isOnline: presence.isOnline, timestamp: presence.timestamp,
                                       deviceId: presence.verifiedDeviceId(publicKey: key),
-                                      protocolVersion: presence.protocolVersion))
+                                      protocolVersion: presence.protocolVersion,
+                                      sessionStart: presence.verifiedSessionStart(publicKey: key)))
     }
 }

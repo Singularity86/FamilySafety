@@ -117,7 +117,7 @@ public final class MqttTransport: NSObject {
     /// Bounded, single-flight connect (§4). `willPayload` is the pre-built (possibly
     /// sealed + signed) offline `PresenceUpdate` envelope for the last-will — building it
     /// is the presence/crypto layers' job, not transport's; this method only ships it.
-    public func connect(willPayload: Data) async throws {
+    public func connect(willPayload: Data, willTopic: String? = nil) async throws {
         let alreadyConnecting = withStateLock { () -> Bool in
             guard connectingSince == nil else { return true }
             connectingSince = Date()
@@ -138,7 +138,7 @@ public final class MqttTransport: NSObject {
         client.autoReconnect = false // app-managed backoff, not the library's (§4)
         client.inflightWindowSize = TransportTiming.maxInflight
         client.willMessage = CocoaMQTTMessage(
-            topic: Topics.presence(memberId: memberId),
+            topic: willTopic ?? Topics.presence(memberId: memberId),
             payload: [UInt8](willPayload),
             qos: .qos1,
             retained: true
@@ -233,10 +233,13 @@ public final class MqttTransport: NSObject {
 
     /// Two wildcards plus each peer's presence (§5): 2 + one per peer, so a family of nine
     /// fits the quota. The legacy per-peer `location` topic is no longer subscribed.
-    static func subscriptionSet(memberId: String, groupId: String?, peerMemberIds: [String]) -> [(String, CocoaMQTTQoS)] {
+    /// The two wildcards, plus each peer's old presence topic until the presence switch (4.2):
+    /// after it, two subscriptions whatever the family's size.
+    static func subscriptionSet(memberId: String, groupId: String?, peerMemberIds: [String],
+                                presenceSwitched: Bool = false) -> [(String, CocoaMQTTQoS)] {
         var set: [(String, CocoaMQTTQoS)] = [(Topics.ownWildcard(memberId: memberId), .qos1)]
         if let groupId { set.append((Topics.groupWildcard(groupId: groupId), .qos1)) }
-        for peer in peerMemberIds where peer != memberId {
+        for peer in peerMemberIds where peer != memberId && !(presenceSwitched && groupId != nil) {
             set.append((Topics.presence(memberId: peer), .qos0))
         }
         return set
@@ -247,9 +250,10 @@ public final class MqttTransport: NSObject {
     /// and stored only once the SUBACK grants every filter, so a crash or refusal mid-way is
     /// never trusted on the next connect. Returns `true` if the subscriptions are in place.
     @discardableResult
-    public func restoreSubscriptions(groupId: String?, peerMemberIds: [String]) async -> Bool {
+    public func restoreSubscriptions(groupId: String?, peerMemberIds: [String], presenceSwitched: Bool = false) async -> Bool {
         guard let mqtt else { return false }
-        let set = Self.subscriptionSet(memberId: memberId, groupId: groupId, peerMemberIds: peerMemberIds)
+        let set = Self.subscriptionSet(memberId: memberId, groupId: groupId, peerMemberIds: peerMemberIds,
+                                       presenceSwitched: presenceSwitched)
         let current = SubscriptionPolicy.fingerprint(
             brokerUrl: "\(FamilySafetyBroker.host):\(FamilySafetyBroker.port)", topics: set.map { $0.0 })
         guard SubscriptionPolicy.shouldResubscribe(

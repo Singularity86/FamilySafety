@@ -2,7 +2,7 @@ import CryptoKit
 import XCTest
 @testable import FamilySafetyCore
 
-/// Android 2.2 (PR #31) on iOS: the signed device ID in presence, 640-byte padding, and the
+/// Android 2.2 (PR #31) on iOS: the signed device ID in presence, 768-byte padding, and the
 /// clone detector, mirroring Android's DeviceIdentityTest.
 final class DeviceIdentityTests: XCTestCase {
     private let now: Int64 = 1_800_000_000_000
@@ -12,14 +12,16 @@ final class DeviceIdentityTests: XCTestCase {
                        "presence-device:v1:alice:1700000000000:00ff")
     }
 
-    func test_onlineAndOfflinePadToExactly640() throws {
+    /// 768 since the session start (§12): online carries it, offline and the will don't.
+    func test_onlineAndOfflinePadToExactly768() throws {
         let id = try FamilySafeKeyDerivation.deriveIdentity(seed: Array(SHA512.hash(data: Data("pad".utf8))))
         let device = String(repeating: "ab", count: 16)
         for online in [true, false] {
-            let p = try PresenceUpdate.signed(memberId: id.memberId, isOnline: online, timestamp: now, ed25519SecretKey64: id.ed25519SecretKey64, deviceId: device)
+            let p = try PresenceUpdate.signed(memberId: id.memberId, isOnline: online, timestamp: now, ed25519SecretKey64: id.ed25519SecretKey64,
+                                              deviceId: device, sessionStart: now - 10_000)
             let inner = String(decoding: try JSONEncoder().encode(p), as: UTF8.self)
             let size = try JSONEncoder().encode(EnvelopePadding.build(type: .presenceUpdate, payload: inner)).count
-            XCTAssertEqual(size, 640, "online=\(online)")
+            XCTAssertEqual(size, 768, "online=\(online)")
         }
     }
 
