@@ -77,6 +77,9 @@ public actor FamilyNode {
     private var location: LocationState
     private let locationSlot: SecretSlot
     private var heartbeat: Task<Void, Never>?
+    /// Woken in the background for one fix: connect, send it, disconnect (spec §11). No
+    /// heartbeat re-stamp on that connect, or it would make the new fix look redundant.
+    private var backgroundWake = false
     /// Android re-stamps and re-sends the last fix every 5 minutes so freshness itself is news.
     static let locationHeartbeatSeconds: UInt64 = 5 * 60
     private var lastNeedsUpdate: Set<String> = []
@@ -313,8 +316,10 @@ public actor FamilyNode {
         await coordinator?.start()
         await groupChanged()
         // Peers see where we are as soon as we're back, then every 5 minutes at least.
-        await sendHeartbeatFix()
-        startHeartbeat()
+        if !backgroundWake {
+            await sendHeartbeatFix()
+            startHeartbeat()
+        }
     }
 
     /// The last-will is fixed at connect, so a new family (or a new key) needs a new session.
@@ -480,6 +485,26 @@ public actor FamilyNode {
     }
 
     public nonisolated var sharingPausedAtLaunch: Bool { (try? locationSlot.readJSON(LocationState.self))?.paused ?? false }
+
+    /// The last fix this phone shared, or nil if it has never shared in its current family (and
+    /// after leaving). Background wake-ups are armed around it, even before the node starts.
+    public nonisolated var savedLastFix: LocationUpdate? { (try? locationSlot.readJSON(LocationState.self))?.lastSent }
+
+    /// A fix CoreLocation delivered while the app is in the background: connect if needed, send
+    /// it, and disconnect again if we weren't already running. The caller holds a background task.
+    public func shareFromBackground(_ fix: LocationUpdate) async {
+        let wasRunning = running
+        if !wasRunning {
+            backgroundWake = true
+            await start()
+        }
+        await shareLocation(fix)
+        if !wasRunning {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)   // let the QoS 0 publishes leave
+            backgroundWake = false
+            await stop()
+        }
+    }
 
     private func publishLocation(_ fix: LocationUpdate) async {
         guard case .member(let group) = state, transport.isConnected,

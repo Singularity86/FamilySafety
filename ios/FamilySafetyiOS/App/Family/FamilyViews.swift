@@ -212,6 +212,16 @@ struct SettingsView: View {
                         Toggle("Share my location", isOn: Binding(get: { !model.sharingPaused },
                                                                   set: { on in Task { await model.setSharingPaused(!on) } }))
                             .tint(Palette.amber)
+                        if !model.sharingPaused {
+                            LabeledContent("While the app is closed") {
+                                if model.locationAuthorization == .authorizedAlways {
+                                    Text("On").font(Typeface.small)
+                                } else {
+                                    Button("Allow") { model.allowBackgroundLocation() }
+                                        .font(Typeface.bodyStrong).foregroundStyle(Palette.amber)
+                                }
+                            }
+                        }
                         if model.locationAuthorization == .denied || model.locationAuthorization == .restricted {
                             Text("Location is off for this app in iPhone Settings, so your family can't see where you are.")
                                 .font(Typeface.small).foregroundStyle(Palette.warningText)
@@ -219,7 +229,9 @@ struct SettingsView: View {
                     } footer: {
                         Text(model.sharingPaused
                              ? "Paused: this phone sends no location, and won't start again by itself. You still see your family and can chat."
-                             : "While the app is open, your family sees where you are. It's encrypted on this phone; no server can read it.")
+                             : model.locationAuthorization == .authorizedAlways
+                                ? "Your family sees where you are, also while the app is closed: this phone sends a new position when you move about 150 m or more. It's encrypted on this phone; no server can read it."
+                                : "While the app is open, your family sees where you are. Allow it while closed so they still see you after you put the phone away. It's encrypted on this phone; no server can read it.")
                             .font(Typeface.small)
                     }
                     .font(Typeface.body).listRowBackground(Palette.surface)

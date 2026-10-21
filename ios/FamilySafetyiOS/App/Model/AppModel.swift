@@ -1,3 +1,4 @@
+import UIKit
 import CoreLocation
 import FamilySafetyCore
 import Foundation
@@ -100,13 +101,27 @@ final class AppModel: ObservableObject {
         _ = await run { await $0.setSharingPaused(paused) }
     }
 
-    /// Location runs while the app is open, in a family, and sharing isn't paused. Nothing
-    /// restarts it while paused (spec §11, "A real pause").
+    /// Open: continuous updates while in a family and not paused. In the background: wake-ups
+    /// around the last shared fix (with Always permission), decided from saved state because a
+    /// background relaunch hasn't loaded the family yet. Nothing restarts while paused (spec §11).
     private func updateLocationUpdates() {
-        if isActive, !sharingPaused, case .member = nodeState, let id = memberId {
-            locationProvider.start(memberId: id)
+        guard !sharingPaused, let id = memberId else { locationProvider.stop(); return }
+        if isActive {
+            if case .member = nodeState { locationProvider.start(memberId: id) } else { locationProvider.stop() }
+        } else if let last = node?.savedLastFix {
+            locationProvider.enterBackground(memberId: id, lastFix: last)
         } else {
             locationProvider.stop()
+        }
+    }
+
+    /// From the user's tap in Settings: ask for Always, or send them to iPhone Settings if the
+    /// system won't ask again.
+    func allowBackgroundLocation() {
+        if locationAuthorization == .authorizedWhenInUse || locationAuthorization == .notDetermined {
+            locationProvider.requestAlways()
+        } else if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
         }
     }
 
@@ -169,6 +184,20 @@ final class AppModel: ObservableObject {
             Task { await node.shareLocation(fix) }
         }
         locationProvider.onAuthorization = { [weak self] status in self?.locationAuthorization = status }
+        locationProvider.onBackgroundFix = { [weak self] fix in
+            guard let node = self?.node else { return }
+            // ~10 s of background time to connect, send and disconnect (spec §11).
+            var task = UIBackgroundTaskIdentifier.invalid
+            task = UIApplication.shared.beginBackgroundTask(withName: "share-location") {
+                UIApplication.shared.endBackgroundTask(task)
+            }
+            Task {
+                await node.shareFromBackground(fix)
+                UIApplication.shared.endBackgroundTask(task)
+            }
+        }
+        // Launched into the background by a location wake-up: re-arm before anything else.
+        updateLocationUpdates()
         phase = .running
         Task { await node.start() }
     }
