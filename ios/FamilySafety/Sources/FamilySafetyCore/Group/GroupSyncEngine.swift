@@ -361,6 +361,20 @@ public actor GroupSyncEngine {
 
     // MARK: - Envelopes (§3, §3.1)
 
+    /// Encrypts `plaintext` to one member for any per-recipient topic (location, later chat),
+    /// sequenced when they can read it (§3.1). Nil if it can't be sealed.
+    public func sealForPeer(_ plaintext: String, to peer: FamilyMember) -> Data? {
+        seal(plaintext, to: peer)
+    }
+
+    /// Opens an envelope from a roster member through the replay window (§3.1). Returns the
+    /// authenticated sender and the body, or nil (and logs anything suspicious).
+    public func openFromPeer(_ payload: Data) async -> (sender: FamilyMember, body: String)? {
+        guard let roster = await store.current else { return nil }
+        if case .opened(let sender, let body) = open(payload, roster: roster) { return (sender, body) }
+        return nil
+    }
+
     private enum Opened {
         case opened(sender: FamilyMember, body: String)
         case refused(GroupSyncEvent)

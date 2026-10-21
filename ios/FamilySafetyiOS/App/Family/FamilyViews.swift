@@ -80,7 +80,10 @@ struct MemberRow: View {
                 Text(isMe ? "\(member.displayName) (you)" : member.displayName)
                     .font(Typeface.title)
                     .foregroundStyle(Palette.personText(PersonPalette.forMember(memberId: member.memberId, colorHue: member.colorHue)))
-                Text(detail).font(Typeface.small).foregroundStyle(Palette.secondaryText)
+                Group {
+                    if let seen = lastSeen { RelativeTime(date: seen, prefix: "Last seen ") } else { detailText }
+                }
+                .font(Typeface.small).foregroundStyle(Palette.secondaryText)
             }
             Spacer()
         }
@@ -89,13 +92,18 @@ struct MemberRow: View {
         .listRowSeparatorTint(Palette.hairline)
     }
 
-    private var detail: String {
-        if isMe { return "This phone" }
-        if needsUpdate { return "Needs to update the app to stay in sync" }
-        guard let status else { return "Not heard from yet" }
-        if status.isOnline { return "Online" }
-        let date = Date(timeIntervalSince1970: Double(status.timestamp) / 1000)
-        return "Last seen " + date.formatted(.relative(presentation: .named))
+    /// The status line; "Last seen …" is drawn by `RelativeTime` so it keeps up (it used to freeze).
+    private var detailText: Text {
+        if isMe { return Text("This phone") }
+        if needsUpdate { return Text("Needs to update the app to stay in sync") }
+        guard let status else { return Text("Not heard from yet") }
+        return Text("Online")
+    }
+
+    /// When an offline member was last seen; nil when the plain text above applies.
+    private var lastSeen: Date? {
+        guard !isMe, !needsUpdate, let status, !status.isOnline else { return nil }
+        return Date(timeIntervalSince1970: Double(status.timestamp) / 1000)
     }
 }
 
@@ -198,6 +206,21 @@ struct SettingsView: View {
                         }
                         ColourChooser()
                         LabeledContent("Member ID") { Text(model.memberId ?? "").font(Typeface.small).textSelection(.enabled) }
+                    }
+                    .font(Typeface.body).listRowBackground(Palette.surface)
+                    Section {
+                        Toggle("Share my location", isOn: Binding(get: { !model.sharingPaused },
+                                                                  set: { on in Task { await model.setSharingPaused(!on) } }))
+                            .tint(Palette.amber)
+                        if model.locationAuthorization == .denied || model.locationAuthorization == .restricted {
+                            Text("Location is off for this app in iPhone Settings, so your family can't see where you are.")
+                                .font(Typeface.small).foregroundStyle(Palette.warningText)
+                        }
+                    } footer: {
+                        Text(model.sharingPaused
+                             ? "Paused: this phone sends no location, and won't start again by itself. You still see your family and can chat."
+                             : "While the app is open, your family sees where you are. It's encrypted on this phone; no server can read it.")
+                            .font(Typeface.small)
                     }
                     .font(Typeface.body).listRowBackground(Palette.surface)
                     Section {

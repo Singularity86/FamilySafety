@@ -1,3 +1,4 @@
+import CoreLocation
 import FamilySafetyCore
 import Foundation
 import SwiftUI
@@ -26,6 +27,13 @@ final class AppModel: ObservableObject {
     @Published private(set) var needsUpdate: Set<String> = []
     /// Refusals that may be someone outside the family trying to get in (phase 1).
     @Published private(set) var securityLog = SecurityLog()
+    /// The newest known location per member, ours included (B2).
+    @Published private(set) var locations: [String: LocationUpdate] = [:]
+    /// "Share my location" is off.
+    @Published private(set) var sharingPaused = false
+    @Published private(set) var locationAuthorization: CLAuthorizationStatus = .notDetermined
+    private let locationProvider = LocationProvider()
+    private var isActive = false
     @Published var lastError: String?
     /// "Signed in on another phone" (2.2). Shown as its own alert.
     @Published var identityNotice: String?
@@ -38,6 +46,7 @@ final class AppModel: ObservableObject {
     private let ledgerSlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "protocol-ledger")
     private let presenceSlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "presence-book")
     private let securitySlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "security-log")
+    private let locationSlot: SecretSlot = KeychainSlot(service: "jibaro.familysafety", account: "location-state")
 
     var memberId: String? { try? profile?.identity().memberId }
 
@@ -81,8 +90,24 @@ final class AppModel: ObservableObject {
     }
 
     func setActive(_ active: Bool) {
+        isActive = active
+        updateLocationUpdates()
         guard let node else { return }
         Task { active ? await node.start() : await node.stop() }
+    }
+
+    func setSharingPaused(_ paused: Bool) async {
+        _ = await run { await $0.setSharingPaused(paused) }
+    }
+
+    /// Location runs while the app is open, in a family, and sharing isn't paused. Nothing
+    /// restarts it while paused (spec §11, "A real pause").
+    private func updateLocationUpdates() {
+        if isActive, !sharingPaused, case .member = nodeState, let id = memberId {
+            locationProvider.start(memberId: id)
+        } else {
+            locationProvider.stop()
+        }
     }
 
     func createFamily(name: String) async {
@@ -131,11 +156,19 @@ final class AppModel: ObservableObject {
                                                     keyProvider: KeychainGroupStateKeyProvider())
         let node = try FamilyNode(profile: profile, credentials: credentials, groupPersistence: persistence,
                                   inviteSlot: inviteSlot, pendingJoinSlot: pendingJoinSlot, deviceSlot: deviceSlot,
-                                  ledgerSlot: ledgerSlot, presenceSlot: presenceSlot, securitySlot: securitySlot) { [weak self] event in
+                                  ledgerSlot: ledgerSlot, presenceSlot: presenceSlot, securitySlot: securitySlot,
+                                  locationSlot: locationSlot) { [weak self] event in
             Task { @MainActor in self?.handle(event) }
         }
         self.node = node
         securityLog = node.securityLog
+        sharingPaused = node.sharingPausedAtLaunch
+        locationAuthorization = locationProvider.authorization
+        locationProvider.onFix = { [weak self] fix in
+            guard let node = self?.node else { return }
+            Task { await node.shareLocation(fix) }
+        }
+        locationProvider.onAuthorization = { [weak self] status in self?.locationAuthorization = status }
         phase = .running
         Task { await node.start() }
     }
@@ -145,6 +178,7 @@ final class AppModel: ObservableObject {
         case .state(let state):
             if state == .storageUnavailable { phase = .storageUnavailable }
             nodeState = state
+            updateLocationUpdates()
             #if DEBUG
             TestDriver.observe(self, state: state)
             #endif
@@ -161,6 +195,10 @@ final class AppModel: ObservableObject {
         case .presence(let map): presence = map
         case .needsUpdate(let members): needsUpdate = members
         case .securityLog(let log): securityLog = log
+        case .locations(let map): locations = map
+        case .sharingPaused(let paused):
+            sharingPaused = paused
+            updateLocationUpdates()
         case .identityAlert(let text):
             identityNotice = text
             #if DEBUG

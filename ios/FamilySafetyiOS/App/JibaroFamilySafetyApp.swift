@@ -70,6 +70,7 @@ struct FamilyRoot: View {
             PendingJoinView(familyName: familyName, inviterName: inviterName, fingerprint: fingerprint)
         case .member(let group):
             TabView {
+                FamilyMapView(group: group).tabItem { Label("Map", systemImage: "map") }
                 FamilyView(group: group).tabItem { Label("Family", systemImage: "person.3") }
                 SettingsView().tabItem { Label("Settings", systemImage: "gearshape") }
             }

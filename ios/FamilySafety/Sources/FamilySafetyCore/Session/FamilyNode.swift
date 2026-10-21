@@ -26,6 +26,10 @@ public enum NodeEvent: Sendable {
     case needsUpdate(Set<String>)
     /// The security log changed (intrusion detection, phase 1).
     case securityLog(SecurityLog)
+    /// The newest known location per member, ours included (B2).
+    case locations([String: LocationUpdate])
+    /// Whether "Share my location" is off.
+    case sharingPaused(Bool)
 }
 
 public enum NodeError: Error, Equatable {
@@ -70,6 +74,11 @@ public actor FamilyNode {
     private var presenceBook: PresenceBook
     private let presenceSlot: SecretSlot
     private let security: SecurityRecorder
+    private var location: LocationState
+    private let locationSlot: SecretSlot
+    private var heartbeat: Task<Void, Never>?
+    /// Android re-stamps and re-sends the last fix every 5 minutes so freshness itself is news.
+    static let locationHeartbeatSeconds: UInt64 = 5 * 60
     private var lastNeedsUpdate: Set<String> = []
     private var inbound: AsyncStream<(String, Data, Bool)>.Continuation?
     private var bridge: TransportBridge?
@@ -77,8 +86,10 @@ public actor FamilyNode {
 
     public init(profile: LocalProfile, credentials: BrokerCredentials, groupPersistence: GroupStatePersistence,
                 inviteSlot: SecretSlot, pendingJoinSlot: SecretSlot, deviceSlot: SecretSlot, ledgerSlot: SecretSlot,
-                presenceSlot: SecretSlot, securitySlot: SecretSlot,
+                presenceSlot: SecretSlot, securitySlot: SecretSlot, locationSlot: SecretSlot,
                 onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
+        self.locationSlot = locationSlot
+        self.location = (try? locationSlot.readJSON(LocationState.self)) ?? LocationState()
         let security = SecurityRecorder(slot: securitySlot)
         security.onChange = { onEvent(.securityLog($0)) }
         self.security = security
@@ -122,6 +133,8 @@ public actor FamilyNode {
                 // The last known presence, until the broker says otherwise (no retained replay
                 // when it kept our session, §4).
                 if !presence.isEmpty { onEvent(.presence(presence)) }
+                onEvent(.sharingPaused(location.paused))
+                if !location.book.latest.isEmpty { onEvent(.locations(location.book.latest)) }
             } else if let pending = try pendingJoinSlot.readJSON(PendingJoin.self) {
                 resumeJoin(pending)
             } else {
@@ -138,6 +151,8 @@ public actor FamilyNode {
     /// Disconnects cleanly (peers see "offline" at once). Call when the app goes to the background.
     public func stop() async {
         running = false
+        heartbeat?.cancel()
+        heartbeat = nil
         await coordinator?.stop()
         if transport.isConnected, let group = await store.current {
             publishPresence(isOnline: false, group: group)
@@ -214,6 +229,12 @@ public actor FamilyNode {
         presence = [:]
         presenceBook = PresenceBook()
         try? presenceSlot.delete()
+        // Keep only the pause choice: it's this person's, not the family's.
+        let paused = location.paused
+        location = LocationState()
+        location.paused = paused
+        saveLocation()
+        onEvent(.locations([:]))
         onEvent(.presence(presence))
         setState(.noFamily)
         await reconnect()
@@ -291,6 +312,9 @@ public actor FamilyNode {
         transport.flushPendingQueue()
         await coordinator?.start()
         await groupChanged()
+        // Peers see where we are as soon as we're back, then every 5 minutes at least.
+        await sendHeartbeatFix()
+        startHeartbeat()
     }
 
     /// The last-will is fixed at connect, so a new family (or a new key) needs a new session.
@@ -380,6 +404,12 @@ public actor FamilyNode {
             _ = await engine.handleRefreshRequest(payload: payload)
         case Topics.groupAckInbox(memberId: me):
             await engine.handleAck(payload: payload)
+        case Topics.locationInbox(memberId: me):
+            guard let (sender, body) = await engine.openFromPeer(payload),
+                  let fix = LocationCodec.read(body, sender: sender),
+                  location.book.accept(fix) else { return }
+            saveLocation()
+            onEvent(.locations(location.book.latest))
         default:
             if let group = await store.current, topic == Topics.groupAck(groupId: group.groupId) {
                 await engine.handleAck(payload: payload)
@@ -430,6 +460,72 @@ public actor FamilyNode {
             }
         }
     }
+
+    // MARK: - Location (B2)
+
+    /// A new fix from this phone's CoreLocation. Sent to every member unless sharing is paused or
+    /// it adds nothing over the last one sent (Android LocationPublishPolicy).
+    public func shareLocation(_ fix: LocationUpdate) async {
+        guard !location.paused, case .member = state else { return }
+        if let last = location.lastSent, LocationPublishPolicy.isRedundant(previous: last, next: fix) { return }
+        await publishLocation(fix)
+    }
+
+    /// "Share my location": off stops publishing at once and on every relaunch until it's on again.
+    public func setSharingPaused(_ paused: Bool) async {
+        location.paused = paused
+        saveLocation()
+        onEvent(.sharingPaused(paused))
+        if paused { heartbeat?.cancel(); heartbeat = nil } else { await sendHeartbeatFix(); startHeartbeat() }
+    }
+
+    public nonisolated var sharingPausedAtLaunch: Bool { (try? locationSlot.readJSON(LocationState.self))?.paused ?? false }
+
+    private func publishLocation(_ fix: LocationUpdate) async {
+        guard case .member(let group) = state, transport.isConnected,
+              let plaintext = try? LocationCodec.plaintext(for: fix, identity: identity) else {
+            // Not connected: keep it; the next connect sends it, re-stamped.
+            location.lastSent = location.lastSent.map { $0.timestamp > fix.timestamp ? $0 : fix } ?? fix
+            if location.book.accept(fix) { onEvent(.locations(location.book.latest)) }
+            saveLocation()
+            return
+        }
+        for peer in group.members where peer.memberId != identity.memberId {
+            guard let sealed = await engine.sealForPeer(plaintext, to: peer) else { continue }
+            // QoS 0: a position supersedes itself, so redelivery only wastes in-flight slots (§4).
+            transport.publish(topic: Topics.locationInbox(memberId: peer.memberId), payload: sealed, qos: .qos0, retained: false)
+        }
+        location.lastSent = fix
+        _ = location.book.accept(fix)
+        saveLocation()
+        onEvent(.locations(location.book.latest))
+    }
+
+    /// The heartbeat re-stamps the last fix with the current time, and so re-signs it (§6.2).
+    private func sendHeartbeatFix() async {
+        guard !location.paused, let last = location.lastSent else { return }
+        await publishLocation(LocationUpdate(memberId: last.memberId, latitude: last.latitude, longitude: last.longitude,
+                                             accuracy: last.accuracy, timestamp: max(now(), last.timestamp + 1),
+                                             speed: last.speed, bearing: last.bearing))
+    }
+
+    private func startHeartbeat() {
+        guard heartbeat == nil, !location.paused else { return }
+        heartbeat = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.locationHeartbeatSeconds * 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                await self?.heartbeatTick()
+            }
+        }
+    }
+
+    private func heartbeatTick() async {
+        guard let last = location.lastSent, now() - last.timestamp >= LocationPublishPolicy.maxSilenceMs - 60_000 else { return }
+        await sendHeartbeatFix()
+    }
+
+    private func saveLocation() { try? locationSlot.writeJSON(location) }
 
     // MARK: - Security log
 
@@ -482,6 +578,11 @@ public actor FamilyNode {
             await reconnect()
         }
         let members = Set(group.members.map(\.memberId))
+        if !Set(location.book.latest.keys).subtracting(members).isEmpty {
+            location.book.keepOnly(members)
+            saveLocation()
+            onEvent(.locations(location.book.latest))
+        }
         if Set(presenceBook.statuses.keys).subtracting(members).isEmpty == false {
             presenceBook.keepOnly(members)
             presence = presenceBook.statuses
