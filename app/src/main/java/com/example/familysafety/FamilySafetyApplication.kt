@@ -26,7 +26,7 @@ class FamilySafetyApplication : Application() {
         // Initialize Timber for logging. Only plant the verbose DebugTree in
         // debug builds — in release we'd otherwise leak location coords, member
         // IDs, and other PII to logcat.
-        if (BuildConfig.DEBUG) {
+        if (BuildConfig.DEBUG || BuildConfig.LOGS) {
             Timber.plant(Timber.DebugTree())
         }
 
