@@ -6,5 +6,9 @@
 	<string>$(FS_BROKER_USERNAME_HEX)</string>
 	<key>FSBrokerPasswordHex</key>
 	<string>$(FS_BROKER_PASSWORD_HEX)</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 </dict>
 </plist>
