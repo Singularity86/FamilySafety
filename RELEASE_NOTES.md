@@ -9,6 +9,52 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.15.6 (47) — Local Wi-Fi security, presence for big families, security log
+
+Builds on 1.15.5 (46). Contains #49 (catch-up on a stale roster), #50 (4.1 authenticated LAN),
+#53 + #54 (4.2 presence under the group topic, with the retained-copy fix), #56 (sudden
+disconnect shows as offline), #58 + #59 + #60 (Phase 5 cleanup and tests), #62 (security log
+with Send report) and #63 (catch-up gives up on a stranger for 24 h). Not included: #64
+(inbound queues, needs a two-phone test) and #67 (R8 shrinking, checklist unfinished); each
+ships on its own later.
+
+Wire format: **changes. `PROTOCOL_VERSION` goes to 5**; phones on 4 and earlier keep working:
+- Presence goes to both the old and the group topic until every member who counts is on 5
+  (30-day rule); only then does a phone move to the group topic and two subscriptions.
+- Online presence gains an optional signed `sessionStart`; presence padding goes from 640 to
+  768 bytes. Older phones ignore both.
+- The LAN channel is now authenticated. Phones on 1.15.5 or earlier aren't found on the LAN, so
+  a mixed pair talks through the broker until both are updated.
+
+Database: unchanged (11).
+
+**Crash fix, found 2026-10-22 on 1.15.5:** the app aborted with "JNI ERROR: global reference
+table overflow (max=102400)" in JNA's `Native.registerMethod`, usually as it was opened (seen on
+the S9 as a hang at start-up). Every LocationService start (app open, heartbeat, watchdog) built
+a key store, which built a new libsodium binding, and each binding keeps JNI global references
+forever. 1.15.6 has one binding per process (`crypto/Sodium.kt`, from #58), so the table no longer
+grows.
+
+Checked on 2026-10-21: full unit suite on main; the debug build installed over 1.13.6-debug on
+the Galaxy S9 kept its family and identity, connected to the broker with 2 subscriptions, and the
+security log and Send report worked. **Not run on a device:** anything between two phones
+(chat, location, presence, sudden disconnect, LAN). The PC had too little free memory for an
+emulator; do a two-phone check before promoting past internal testing.
+
+### Play copy
+
+```
+Security and reliability update.
+• Fixes the app freezing or closing on start after running for a day or so
+• Phones on the same Wi-Fi now prove who they are before talking directly
+• Once everyone updates, big families see every member online, not just the first ten
+• If a phone dies suddenly, the family sees it go offline
+• New Settings → Security log: see what your phone refused, and send a report if you want
+• A phone that missed a new member catches up on its own
+```
+
+---
+
 ## 1.15.5 (46) — Authenticated joins, signed history, key rotation, replay protection
 
 Builds on 1.15.4 (45). Contains everything open on 2026-10-16: #27 (2.1 authenticated join),
