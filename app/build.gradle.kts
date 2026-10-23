@@ -8,6 +8,8 @@ plugins {
     id("com.google.devtools.ksp")
     id("org.jetbrains.kotlin.plugin.serialization")
     alias(libs.plugins.compose.compiler)  // ADD THIS
+    // Uploads the release bundle to Play's internal testing track (PLAY_PUBLISHING.md).
+    id("com.github.triplet.play")
 
 }
 
@@ -296,4 +298,49 @@ dependencies {
     
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+// Uploading to Play (PLAY_PUBLISHING.md): `./gradlew publishReleaseBundle` builds the release
+// bundle and uploads it to the internal testing track, nowhere else. Promoting it to closed
+// testing or production stays a button in Play Console, after a check on two phones.
+play {
+    // A service account key that can release to testing tracks only. It lives outside git,
+    // next to the upload keystore (keystore/ is ignored); without it, publishing fails and
+    // building doesn't.
+    val credentials = rootProject.file("keystore/play-service-account.json")
+    if (credentials.exists()) serviceAccountCredentials.set(credentials)
+    defaultToAppBundles.set(true)
+    track.set("internal")
+}
+
+// "What's new" for Play comes from the newest entry's Play copy in RELEASE_NOTES.md, so it is
+// written once, deliberately, and never retyped in the upload dialog.
+val syncPlayReleaseNotes by tasks.registering {
+    val source = rootProject.file("RELEASE_NOTES.md")
+    val target = file("src/main/play/release-notes/en-US/default.txt")
+    inputs.file(source)
+    outputs.file(target)
+    doLast {
+        val notes = source.readText().replace("\r\n", "\n")
+        val copy = Regex("""### Play copy\s*\n```\n(.*?)\n```""", RegexOption.DOT_MATCHES_ALL)
+            .find(notes)?.groupValues?.get(1)?.trim()
+            ?: throw GradleException("RELEASE_NOTES.md has no Play copy block")
+        if (copy.length > 500) throw GradleException("Play copy is ${copy.length} characters; Play allows 500")
+        target.parentFile.mkdirs()
+        target.writeText(copy + "\n")
+        logger.lifecycle("Play release notes: ${copy.length} of 500 characters, from RELEASE_NOTES.md")
+    }
+}
+tasks.matching { it.name.startsWith("generate") && it.name.endsWith("PlayResources") }.configureEach {
+    dependsOn(syncPlayReleaseNotes)
+}
+
+// Only the bundle is published from here. The store listing, in-app products and the
+// subscription are edited in Play Console; these tasks would overwrite them from files we
+// don't keep. (The service account can't do it either; this is a second lock.)
+tasks.matching {
+    it.name.startsWith("publish") &&
+        listOf("Listing", "Products", "Subscriptions", "Apps").any { part -> it.name.endsWith(part) }
+}.configureEach {
+    enabled = false
 }
