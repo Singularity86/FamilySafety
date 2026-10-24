@@ -189,6 +189,7 @@ struct SettingsView: View {
     @State private var notice: String?
     @State private var name = ""
     @State private var leaving = false
+    @State private var testingAlert = false
 
     var body: some View {
         NavigationStack {
@@ -240,6 +241,30 @@ struct SettingsView: View {
                             .font(Typeface.small)
                     }
                     .font(Typeface.body).listRowBackground(Palette.surface)
+                    if let alert = model.emergency.current(now: Int64(Date().timeIntervalSince1970 * 1000)) {
+                        Section {
+                            NavigationLink {
+                                CrashAlertStatusView(alertId: alert.id)
+                            } label: {
+                                LabeledContent("Crash alert") {
+                                    Text("Sent \(Date(timeIntervalSince1970: Double(alert.raisedAtMs) / 1000).formatted(date: .omitted, time: .shortened))")
+                                        .font(Typeface.small)
+                                }
+                            }
+                        } footer: {
+                            Text("It keeps being sent until each phone confirms it, for up to a day.").font(Typeface.small)
+                        }
+                        .font(Typeface.body).listRowBackground(Palette.surface)
+                    }
+                    #if DEBUG
+                    Section {
+                        Button("Send a test crash alert") { testingAlert = true }.font(Typeface.body)
+                    } header: { Text("Crash alert (debug)").font(Typeface.label) } footer: {
+                        Text("Debug builds only. Sends a real crash alert to every family member, as crash detection would.")
+                            .font(Typeface.small)
+                    }
+                    .listRowBackground(Palette.surface)
+                    #endif
                     Section {
                         NavigationLink {
                             SecurityLogView()
@@ -266,6 +291,11 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $revealing) { RevealPhraseView(words: model.recoveryPhrase()) }
             .onAppear { name = model.profile?.displayName ?? "" }
+            .confirmationDialog("Send a crash alert to the whole family?", isPresented: $testingAlert, titleVisibility: .visible) {
+                Button("Send alert", role: .destructive) { Task { await model.raiseCrashAlert() } }
+            } message: {
+                Text("Everyone's phone will show that you may have been in an accident.")
+            }
             .confirmationDialog("Leave the family?", isPresented: $leaving, titleVisibility: .visible) {
                 Button("Leave", role: .destructive) { Task { await model.leaveFamily() } }
             } message: {

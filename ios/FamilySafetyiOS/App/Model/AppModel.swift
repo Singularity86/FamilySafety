@@ -34,6 +34,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var sharingPaused = false
     /// Every chat message on this phone (B3).
     @Published private(set) var chat = ChatBook()
+    /// Crash alerts this phone raised, with each member's copy (B3).
+    @Published private(set) var emergency = EmergencyOutbox()
     @Published private(set) var locationAuthorization: CLAuthorizationStatus = .notDetermined
     private let locationProvider = LocationProvider()
     private var isActive = false
@@ -166,6 +168,14 @@ final class AppModel: ObservableObject {
         await node?.openConversation(conversationId)
     }
 
+    /// Sends a crash alert to everyone else, worded as Android words it so both apps' families
+    /// read the same thing, with this phone's last position when there is one.
+    func raiseCrashAlert() async {
+        let name = profile?.displayName ?? "A family member"
+        let place = chatMemberId.flatMap { locations[$0] }.map { " https://maps.google.com/?q=\($0.latitude),\($0.longitude)" } ?? ""
+        await node?.raiseEmergencyAlert("🚨 \(name) may have been in an accident and did not respond.\(place)")
+    }
+
     /// This phone's member id, derived once when the node starts (deriving it is slow).
     private(set) var chatMemberId: String?
 
@@ -188,7 +198,8 @@ final class AppModel: ObservableObject {
                                   ledgerSlot: ledgerSlot, presenceSlot: presenceSlot, securitySlot: securitySlot,
                                   locationSlot: locationSlot,
                                   chatSlot: SealedFileSlot(url: directory.appendingPathComponent("chat.sealed"),
-                                                           keySlot: KeychainSlot(service: "jibaro.familysafety", account: "chat-key"))) { [weak self] event in
+                                                           keySlot: KeychainSlot(service: "jibaro.familysafety", account: "chat-key")),
+                                  emergencySlot: KeychainSlot(service: "jibaro.familysafety", account: "emergency-outbox")) { [weak self] event in
             Task { @MainActor in self?.handle(event) }
         }
         self.node = node
@@ -243,6 +254,7 @@ final class AppModel: ObservableObject {
         case .securityLog(let log): securityLog = log
         case .locations(let map): locations = map
         case .chat(let book): chat = book
+        case .emergency(let box): emergency = box
         case .sharingPaused(let paused):
             sharingPaused = paused
             updateLocationUpdates()

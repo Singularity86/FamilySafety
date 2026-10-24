@@ -32,6 +32,8 @@ public enum NodeEvent: Sendable {
     case sharingPaused(Bool)
     /// Every chat message held, after any change (B3).
     case chat(ChatBook)
+    /// Crash alerts this phone raised and each member's copy, after any change (B3).
+    case emergency(EmergencyOutbox)
 }
 
 public enum NodeError: Error, Equatable {
@@ -85,6 +87,10 @@ public actor FamilyNode {
     private let chatReadable: Bool
     /// The conversation open on screen: what arrives there is read at once.
     private var activeConversation: String?
+    private var alerts: EmergencyOutbox
+    private let emergencySlot: SecretSlot
+    /// Wakes when the next alert copy falls due.
+    private var alertTimer: Task<Void, Never>?
     /// Woken in the background for one fix: connect, send it, disconnect (spec §11). No
     /// heartbeat re-stamp on that connect, or it would make the new fix look redundant.
     private var backgroundWake = false
@@ -98,8 +104,10 @@ public actor FamilyNode {
     public init(profile: LocalProfile, credentials: BrokerCredentials, groupPersistence: GroupStatePersistence,
                 inviteSlot: SecretSlot, pendingJoinSlot: SecretSlot, deviceSlot: SecretSlot, ledgerSlot: SecretSlot,
                 presenceSlot: SecretSlot, securitySlot: SecretSlot, locationSlot: SecretSlot,
-                chatSlot: SecretSlot = InMemorySlot(),
+                chatSlot: SecretSlot = InMemorySlot(), emergencySlot: SecretSlot = InMemorySlot(),
                 onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
+        self.emergencySlot = emergencySlot
+        self.alerts = (try? emergencySlot.readJSON(EmergencyOutbox.self)) ?? EmergencyOutbox()
         self.chatSlot = chatSlot
         do {
             self.chat = try chatSlot.readJSON(ChatBook.self) ?? ChatBook()
@@ -119,6 +127,7 @@ public actor FamilyNode {
         self.presence = book.statuses
         self.profile = profile
         self.identity = try profile.identity()
+        self.memberId = identity.memberId
         self.credentials = credentials
         self.store = GroupStateStore(localMemberId: identity.memberId, persistence: groupPersistence)
         self.pendingJoinSlot = pendingJoinSlot
@@ -138,7 +147,7 @@ public actor FamilyNode {
         self.onEvent = onEvent
     }
 
-    public nonisolated var memberId: String { identity.memberId }
+    public nonisolated let memberId: String
 
     // MARK: - Lifecycle
 
@@ -156,6 +165,7 @@ public actor FamilyNode {
                 onEvent(.sharingPaused(location.paused))
                 if !location.book.latest.isEmpty { onEvent(.locations(location.book.latest)) }
                 onEvent(.chat(chat))
+                onEvent(.emergency(alerts))
             } else if let pending = try pendingJoinSlot.readJSON(PendingJoin.self) {
                 resumeJoin(pending)
             } else {
@@ -174,6 +184,8 @@ public actor FamilyNode {
         running = false
         heartbeat?.cancel()
         heartbeat = nil
+        alertTimer?.cancel()
+        alertTimer = nil
         await coordinator?.stop()
         if transport.isConnected, let group = await store.current {
             publishPresence(isOnline: false, group: group)
@@ -260,6 +272,9 @@ public actor FamilyNode {
         chat = ChatBook()
         saveChat()
         onEvent(.chat(chat))
+        alerts = EmergencyOutbox()
+        saveAlerts()
+        onEvent(.emergency(alerts))
         setState(.noFamily)
         await reconnect()
     }
@@ -335,6 +350,8 @@ public actor FamilyNode {
         }
         transport.flushPendingQueue()
         await sendUnsentChat()
+        // Every copy still owed goes at once on a reconnect (§6.3).
+        await flushAlerts(everything: true)
         await coordinator?.start()
         await groupChanged()
         // Peers see where we are as soon as we're back, then every 5 minutes at least.
@@ -441,7 +458,14 @@ public actor FamilyNode {
             await receiveChat(payload)
         case Topics.chatReceipt(memberId: me), Topics.chatRead(memberId: me):
             guard let (sender, body) = await engine.openFromPeer(payload),
-                  let receipt = ChatCodec.readReceipt(body), chat.apply(receipt, from: sender.memberId) else { return }
+                  let receipt = ChatCodec.readReceipt(body) else { return }
+            // A crash alert owed to this member: only their own signed receipt settles their copy.
+            if receipt.recipientId == sender.memberId, receipt.status == .delivered || receipt.status == .read,
+               alerts.markDelivered(alertId: receipt.messageId, by: sender.memberId, now: now()) {
+                saveAlerts()
+                onEvent(.emergency(alerts))
+            }
+            guard chat.apply(receipt, from: sender.memberId) else { return }
             saveChat()
             onEvent(.chat(chat))
         default:
@@ -651,7 +675,69 @@ public actor FamilyNode {
     }
 
     private func sendUnsentChat() async {
-        for message in chat.unsent { await deliver(message) }
+        // Crash alerts have their own per-member resends.
+        for message in chat.unsent where !alerts.isAlert(message.messageId) { await deliver(message) }
+    }
+
+    // MARK: - Crash alerts (B3)
+
+    /// Raises a crash alert to everyone else in the family and returns its id. It is stored before
+    /// the first send, then sent to each member until their phone confirms, for up to 24 hours.
+    @discardableResult
+    public func raiseEmergencyAlert(_ content: String) async -> String? {
+        guard case .member(let group) = state else { return nil }
+        let message = ChatCodec.compose(content: content, to: nil, groupId: group.groupId, identity: identity, now: now())
+        alerts.add(message, recipients: group.members.map(\.memberId).filter { $0 != identity.memberId })
+        saveAlerts()
+        chat.insert(message)
+        saveChat()
+        onEvent(.chat(chat))
+        onEvent(.emergency(alerts))
+        await flushAlerts(everything: false)
+        return message.messageId
+    }
+
+    /// Sends every copy that's due (or, on a reconnect, every one still owed). Each resend reuses
+    /// the original messageId and timestamp, so receivers keep one copy.
+    private func flushAlerts(everything: Bool) async {
+        defer { scheduleAlertTimer() }
+        guard case .member(let group) = state, transport.isConnected else { return }
+        let t = now()
+        let due = alerts.due(now: t, everything: everything)
+        guard !due.isEmpty else { return }
+        for (alert, recipientId) in due {
+            guard let peer = group.findMember(byId: recipientId) else {
+                alerts.markLeft(alertId: alert.id, recipientId: recipientId)
+                continue
+            }
+            guard let plaintext = try? ChatCodec.plaintext(alert.message),
+                  let sealed = await engine.sealForPeer(plaintext, to: peer) else { continue }
+            transport.publish(topic: Topics.chat(memberId: peer.memberId), payload: sealed, qos: .qos1)
+            alerts.recordAttempt(alertId: alert.id, recipientId: recipientId, now: t)
+            // PENDING → SENT only; a receipt may already have moved it further.
+            if chat.messages[alert.id]?.status == .pending { chat.setStatus(alert.id, .sent) }
+        }
+        saveAlerts()
+        saveChat()
+        onEvent(.emergency(alerts))
+        onEvent(.chat(chat))
+    }
+
+    private func scheduleAlertTimer() {
+        alertTimer?.cancel()
+        alertTimer = nil
+        guard running, let next = alerts.nextDueAtMs(now: now()) else { return }
+        let wait = UInt64(max(next - now(), 0)) * 1_000_000
+        alertTimer = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: wait)
+            guard !Task.isCancelled else { return }
+            await self?.flushAlerts(everything: false)
+        }
+    }
+
+    private func saveAlerts() {
+        alerts.prune(now: now())
+        try? emergencySlot.writeJSON(alerts)
     }
 
     private func sendReceipt(_ status: DeliveryStatus, for messageId: String, to memberId: String) async {
