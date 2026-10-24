@@ -72,6 +72,7 @@ struct FamilyRoot: View {
             TabView {
                 FamilyMapView(group: group).tabItem { Label("Map", systemImage: "map") }
                 FamilyView(group: group).tabItem { Label("Family", systemImage: "person.3") }
+                FilesView(group: group).tabItem { Label("Files", systemImage: "folder") }
                 ChatListView(group: group)
                     .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
                     .badge(model.chat.unreadCount())
