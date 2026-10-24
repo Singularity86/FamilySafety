@@ -301,10 +301,11 @@ dependencies {
 }
 
 // Uploading to Play (PLAY_PUBLISHING.md): `./gradlew publishReleaseBundle` builds the release
-// bundle and uploads it to the internal testing track, nowhere else. Promoting it to closed
-// testing or production stays a button in Play Console, after a check on two phones.
+// bundle and uploads it to the internal testing track. After a check on two phones,
+// `promoteReleaseArtifact` moves that same bundle to production as a staged rollout; Managed
+// publishing holds it until the owner presses Publish in Play Console.
 play {
-    // A service account key that can release to testing tracks only. It lives outside git,
+    // A service account key that can release to testing and production. It lives outside git,
     // next to the upload keystore (keystore/ is ignored); without it, publishing fails and
     // building doesn't.
     val credentials = rootProject.file("keystore/play-service-account.json")

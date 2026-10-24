@@ -6,10 +6,21 @@ One command builds the release bundle and uploads it to Play's **internal testin
 ./gradlew publishReleaseBundle
 ```
 
-It uploads to internal testing and nowhere else. Moving a release on to closed testing or
-production stays a button in Play Console, pressed after the release has been checked on two
-phones. The store listing, in-app products and the subscription are edited in Play Console
-only; their publish tasks are switched off in `app/build.gradle.kts`.
+Every release goes to internal testing first. After it has been checked on two phones, the
+same bundle (not a rebuild) is promoted to production as a 20% staged rollout:
+
+```
+./gradlew promoteReleaseArtifact --from-track internal --promote-track production --release-status inProgress --user-fraction 0.2
+```
+
+Managed publishing is on, so nothing goes live from here: Play reviews the release, then the
+owner presses **Publish** in Play Console → Publishing overview. Raise the rollout to 100%, or
+halt it, in Play Console. The store listing, in-app products and the subscription are edited in
+Play Console only; their publish tasks are switched off in `app/build.gradle.kts`.
+
+Why the gate: this PC is shared with other administrators, who can read the robot's key. With
+Managed publishing, a stolen key can at most queue a release; only the owner's Play login can
+send it to the family's phones.
 
 ## Before each upload
 
@@ -26,14 +37,18 @@ readable crash reports.
 
 ## One-time setup (owner only: needs the Play Console login)
 
-1. **Play Console → Setup → API access.** Link a Google Cloud project (create one if asked).
-2. **Google Cloud Console → IAM & Admin → Service accounts.** Create a service account (for
-   example `play-upload`). Under **Keys → Add key → JSON**, download its key.
+1. **Google Cloud Console.** In a project of your own, enable the **Google Play Android
+   Developer API** (APIs & Services → Library).
+2. **IAM & Admin → Service accounts.** Create a service account (for example `play-upload`).
+   Under **Keys → Add key → JSON**, download its key.
 3. **Play Console → Users and permissions → Invite new users.** Invite the service account's
    email address. Give it **this app only** and these permissions only:
    - Release apps to testing tracks
-   - (nothing for production, the store listing, or financial data)
-4. Save the key as `keystore/play-service-account.json`. `keystore/` is ignored by git, and
+   - Release to production, exclude devices, and use Play App Signing
+   - (nothing for the store listing, financial data, or account permissions)
+4. **Play Console → the app → Publishing overview → Managed publishing: on.** Never turn it
+   off while the robot has production rights.
+5. Save the key as `keystore/play-service-account.json`. `keystore/` is ignored by git, and
    `play-service-account*.json` is ignored anywhere as a second lock.
 
 Never paste the key into a chat, an issue or a commit: the repository is public. If it ever
@@ -54,5 +69,6 @@ Play copy is missing or too long. Then `./gradlew :app:tasks --group publishing`
 
 - **"No credentials"**: `keystore/play-service-account.json` is missing.
 - **403, "The caller does not have permission"**: the service account wasn't invited for this
-  app, or the invitation is still being processed (it can take a while after the first setup).
+  app, the app permissions weren't saved (**Apply**, then **Save changes** at the bottom of the
+  page), or the invitation is still being processed (it can take a while after the first setup).
 - **"Version code … has already been used"**: bump `versionCode` (see "Before each upload").
