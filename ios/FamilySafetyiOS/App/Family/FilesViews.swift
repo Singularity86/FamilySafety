@@ -7,6 +7,8 @@ struct FilesView: View {
     @EnvironmentObject private var model: AppModel
     let group: GroupDefinition
     @State private var preview: URL?
+    @State private var picking = false
+    @State private var deleting: FileLibrary.Entry?
 
     var body: some View {
         NavigationStack {
@@ -19,6 +21,12 @@ struct FilesView: View {
                     List(model.files.visible) { entry in
                         Button { open(entry) } label: { FileRow(entry: entry, group: group) }
                             .listRowBackground(Palette.background)
+                            .contextMenu {
+                                Button(entry.file.isEssential ? "Only download when opened" : "Keep on every phone") {
+                                    Task { await model.setEssential(entry.file.fileId, !entry.file.isEssential) }
+                                }
+                                Button("Delete for everyone", role: .destructive) { deleting = entry }
+                            }
                     }
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
@@ -28,6 +36,22 @@ struct FilesView: View {
             .navigationTitle("Files")
             .navigationBarTitleDisplayMode(.inline)
             .quickLookPreview($preview)
+            .safeAreaInset(edge: .bottom) {
+                Button("Add a file") { picking = true }.buttonStyle(PrimaryButtonStyle())
+                    .padding(Spacing.m).background(Palette.background)
+            }
+            .fileImporter(isPresented: $picking, allowedContentTypes: [.item]) { result in
+                if case .success(let url) = result { Task { await model.uploadFile(url) } }
+            }
+            .confirmationDialog("Delete \"\(deleting?.file.name ?? "")\" for everyone in the family?",
+                                isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                                titleVisibility: .visible) {
+                Button("Delete", role: .destructive) {
+                    if let id = deleting?.file.fileId { Task { await model.deleteFile(id) } }
+                }
+            } message: {
+                Text("It's removed from every phone in the family, including yours.")
+            }
         }
     }
 

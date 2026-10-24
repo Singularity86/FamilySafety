@@ -196,6 +196,49 @@ final class SharedFileTests: XCTestCase {
         XCTAssertTrue(lib.holdings.isEmpty)
     }
 
+    // MARK: Our own changes
+
+    func test_ownUpload_isCompleteAndCountsAgainstTheCap() {
+        var lib = FileLibrary()
+        lib.addOwn(file("mine", chunks: 2, hash: "ABC"), keyVersion: 3)
+        XCTAssertEqual(lib.entries["mine"]?.state, .complete)
+        XCTAssertEqual(lib.entries["mine"]?.held, [0, 1])
+        XCTAssertTrue(lib.holdsCopy(ofHash: "abc"), "the same bytes aren't shared twice")
+        XCTAssertEqual(lib.usedBytes, 70_000)
+        XCTAssertEqual(lib.announcement(me: "me", now: 0)?.holdings.first?.state, "COMPLETE")
+        let out = lib.serve(ChunkRepairRequest(requestId: "r", requesterId: "ben", fileId: "mine", contentHash: "ABC", totalChunks: 2,
+                                               missing: [1], timestamp: 0), from: "ben")
+        XCTAssertEqual(out?.indices, [1])
+        XCTAssertEqual(out?.keyVersion, 3)
+    }
+
+    func test_delete_travelsAsATombstone_andExpiresAfter90Days() {
+        var lib = FileLibrary()
+        lib.addOwn(file("a"), keyVersion: 3)
+        XCTAssertTrue(lib.delete("a", by: "me", now: 1_000))
+        XCTAssertFalse(lib.delete("a", by: "me", now: 1_001))
+        XCTAssertFalse(lib.holdsCopy(ofHash: "h"))
+        XCTAssertEqual(lib.usedBytes, 0)
+        let m = lib.manifest(groupId: "g-1", now: 2_000)
+        XCTAssertEqual(m.files.first?.isDeleted, true, "deletion is a present, flagged entry")
+        XCTAssertEqual(m.files.first?.deletedByMemberId, "me")
+        XCTAssertTrue(lib.manifest(groupId: "g-1", now: 1_000 + FileLibrary.tombstoneRetentionMs).files.isEmpty)
+        XCTAssertTrue(String(decoding: try! JSONEncoder().encode(m), as: UTF8.self).contains("\"isDeleted\":true"))
+    }
+
+    func test_pinning_startsOrStopsTheFetch() {
+        var lib = FileLibrary()
+        _ = lib.apply(FileManifest(groupId: "g-1", files: [file("a", essential: false)], version: 1), groupId: "g-1", now: 0)
+        XCTAssertTrue(lib.due(now: 0).isEmpty)
+        XCTAssertTrue(lib.setEssential("a", true, now: 5))
+        XCTAssertEqual(lib.due(now: 5), ["a"])
+        XCTAssertEqual(lib.manifest(groupId: "g-1", now: 6).files.first?.isEssential, true)
+        XCTAssertTrue(lib.setEssential("a", false, now: 7))
+        XCTAssertTrue(lib.due(now: 7).isEmpty)
+        XCTAssertEqual(lib.entries["a"]?.state, .notDownloaded)
+        XCTAssertFalse(lib.setEssential("a", false, now: 8), "no change, no republish")
+    }
+
     // MARK: Storage
 
     func test_store_refusesUnsafeIds_andVerifiesTheWhole() throws {
