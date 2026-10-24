@@ -30,18 +30,27 @@ concurrency:
 
 jobs:
   test:
-    name: android build and test
-    runs-on: ubuntu-latest
+    name: android build and test (${{ matrix.os }}, JDK ${{ matrix.jdk }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, jdk: '21' }
+          - { os: windows-latest, jdk: '17' }
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: ${{ matrix.jdk }}
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
