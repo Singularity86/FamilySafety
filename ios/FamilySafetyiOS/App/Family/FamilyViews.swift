@@ -23,6 +23,7 @@ struct FamilyView: View {
                         ForEach(sortedMembers, id: \.memberId) { member in
                             MemberRow(member: member, isMe: member.memberId == model.memberId,
                                       status: model.presence[member.memberId],
+                                      lastFix: model.locations[member.memberId],
                                       needsUpdate: model.needsUpdate.contains(member.memberId))
                                 .swipeActions {
                                     if isCreator && member.memberId != model.memberId {
@@ -71,6 +72,7 @@ struct MemberRow: View {
     let member: FamilyMember
     let isMe: Bool
     let status: PresenceStatus?
+    var lastFix: LocationUpdate? = nil
     var needsUpdate = false
 
     var body: some View {
@@ -100,10 +102,13 @@ struct MemberRow: View {
         return Text("Online")
     }
 
-    /// When an offline member was last seen; nil when the plain text above applies.
+    /// When an offline member was last seen; nil when the plain text above applies. A last-will
+    /// is signed at connect, so after a sudden death its timestamp is when the session began; a
+    /// newer location fix is the better answer.
     private var lastSeen: Date? {
         guard !isMe, !needsUpdate, let status, !status.isOnline else { return nil }
-        return Date(timeIntervalSince1970: Double(status.timestamp) / 1000)
+        let millis = max(status.timestamp, lastFix?.timestamp ?? 0)
+        return Date(timeIntervalSince1970: Double(millis) / 1000)
     }
 }
 
