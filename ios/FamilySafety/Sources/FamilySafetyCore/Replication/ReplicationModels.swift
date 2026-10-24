@@ -141,3 +141,55 @@ public struct DataAvailabilityAnnouncement: Codable, Equatable {
         self.timestamp = timestamp
     }
 }
+
+
+// Android's kotlinx JSON omits any field still equal to its default (encodeDefaults = false),
+// so these decode a missing field as Android's default instead of failing.
+
+extension ReplicationRequest {
+    private enum CodingKeys: String, CodingKey {
+        case requestId, requesterId, dataType, targetMemberId, conversationId, afterTimestamp, limit, timestamp
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(requestId: try c.decode(String.self, forKey: .requestId),
+                  requesterId: try c.decode(String.self, forKey: .requesterId),
+                  dataType: try c.decode(ReplicationDataType.self, forKey: .dataType),
+                  targetMemberId: try c.decodeIfPresent(String.self, forKey: .targetMemberId),
+                  conversationId: try c.decodeIfPresent(String.self, forKey: .conversationId),
+                  afterTimestamp: try c.decodeIfPresent(Int64.self, forKey: .afterTimestamp) ?? 0,
+                  limit: try c.decodeIfPresent(Int.self, forKey: .limit) ?? 500,
+                  timestamp: try c.decodeIfPresent(Int64.self, forKey: .timestamp) ?? 0)
+    }
+}
+
+extension ReplicationResponse {
+    private enum CodingKeys: String, CodingKey {
+        case requestId, senderId, dataType, locations, messages, hasMore, newestTimestamp, timestamp
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(requestId: try c.decode(String.self, forKey: .requestId),
+                  senderId: try c.decode(String.self, forKey: .senderId),
+                  dataType: try c.decode(ReplicationDataType.self, forKey: .dataType),
+                  locations: try c.decodeIfPresent([LocationUpdate].self, forKey: .locations) ?? [],
+                  messages: try c.decodeIfPresent([ReplicatedMessage].self, forKey: .messages) ?? [],
+                  hasMore: try c.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false,
+                  newestTimestamp: try c.decodeIfPresent(Int64.self, forKey: .newestTimestamp),
+                  timestamp: try c.decodeIfPresent(Int64.self, forKey: .timestamp) ?? 0)
+    }
+}
+
+extension DataAvailabilityAnnouncement {
+    private enum CodingKeys: String, CodingKey { case announcerId, locationDataSummary, chatDataSummary, timestamp }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(announcerId: try c.decode(String.self, forKey: .announcerId),
+                  locationDataSummary: try c.decodeIfPresent([LocationHistorySummary].self, forKey: .locationDataSummary) ?? [],
+                  chatDataSummary: try c.decodeIfPresent([ChatHistorySummary].self, forKey: .chatDataSummary) ?? [],
+                  timestamp: try c.decodeIfPresent(Int64.self, forKey: .timestamp) ?? 0)
+    }
+}

@@ -91,6 +91,9 @@ public actor FamilyNode {
     private let emergencySlot: SecretSlot
     /// Wakes when the next alert copy falls due.
     private var alertTimer: Task<Void, Never>?
+    /// Chat history back-fill (B5): announce, request, respond.
+    private var replication: ChatReplication
+    private var announceTimer: Task<Void, Never>?
     /// Woken in the background for one fix: connect, send it, disconnect (spec §11). No
     /// heartbeat re-stamp on that connect, or it would make the new fix look redundant.
     private var backgroundWake = false
@@ -128,6 +131,7 @@ public actor FamilyNode {
         self.profile = profile
         self.identity = try profile.identity()
         self.memberId = identity.memberId
+        self.replication = ChatReplication(me: identity.memberId)
         self.credentials = credentials
         self.store = GroupStateStore(localMemberId: identity.memberId, persistence: groupPersistence)
         self.pendingJoinSlot = pendingJoinSlot
@@ -186,6 +190,8 @@ public actor FamilyNode {
         heartbeat = nil
         alertTimer?.cancel()
         alertTimer = nil
+        announceTimer?.cancel()
+        announceTimer = nil
         await coordinator?.stop()
         if transport.isConnected, let group = await store.current {
             publishPresence(isOnline: false, group: group)
@@ -352,6 +358,7 @@ public actor FamilyNode {
         await sendUnsentChat()
         // Every copy still owed goes at once on a reconnect (§6.3).
         await flushAlerts(everything: true)
+        await backfillChat()
         await coordinator?.start()
         await groupChanged()
         // Peers see where we are as soon as we're back, then every 5 minutes at least.
@@ -456,6 +463,8 @@ public actor FamilyNode {
             onEvent(.locations(location.book.latest))
         case Topics.chat(memberId: me):
             await receiveChat(payload)
+        case Topics.replicationAnnounceInbox(memberId: me), Topics.replicationRequest(memberId: me), Topics.replicationData(memberId: me):
+            await handleReplication(topic: topic, payload: payload)
         case Topics.chatReceipt(memberId: me), Topics.chatRead(memberId: me):
             guard let (sender, body) = await engine.openFromPeer(payload),
                   let receipt = ChatCodec.readReceipt(body) else { return }
@@ -677,6 +686,78 @@ public actor FamilyNode {
     private func sendUnsentChat() async {
         // Crash alerts have their own per-member resends.
         for message in chat.unsent where !alerts.isAlert(message.messageId) { await deliver(message) }
+    }
+
+    // MARK: - Chat history back-fill (B5)
+
+    /// On connect: ask for anything newer in the conversations we hold, then tell everyone what we
+    /// hold so they can ask us. Then announce every 30 minutes while running.
+    private func backfillChat() async {
+        guard case .member(let group) = state else { return }
+        let peers = group.members.map(\.memberId).filter { $0 != identity.memberId }
+        for (peerId, request) in replication.fullSync(book: chat, peers: peers, groupId: group.groupId, now: now()) {
+            await sendReplication(request, topic: Topics.replicationRequest(memberId: peerId), to: peerId)
+        }
+        await announceChat()
+        guard announceTimer == nil else { return }
+        announceTimer = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(ChatReplication.announceIntervalMs) * 1_000_000)
+                guard !Task.isCancelled else { return }
+                await self?.announceChat()
+            }
+        }
+    }
+
+    private func announceChat() async {
+        guard case .member(let group) = state, transport.isConnected else { return }
+        for peer in group.members where peer.memberId != identity.memberId {
+            let a = replication.announcement(for: peer.memberId, book: chat, groupId: group.groupId, now: now())
+            guard !a.chatDataSummary.isEmpty else { continue }
+            await sendReplication(a, topic: Topics.replicationAnnounceInbox(memberId: peer.memberId), to: peer.memberId, qos: .qos0)
+        }
+    }
+
+    private func handleReplication(topic: String, payload: Data) async {
+        guard case .member(let group) = state, let (sender, body) = await engine.openFromPeer(payload),
+              sender.memberId != identity.memberId else { return }
+        let data = Data(body.utf8)
+        let me = identity.memberId
+        switch topic {
+        case Topics.replicationAnnounceInbox(memberId: me):
+            guard let a = try? JSONDecoder().decode(DataAvailabilityAnnouncement.self, from: data) else { return }
+            for r in replication.handle(a, from: sender.memberId, book: chat, groupId: group.groupId, now: now()) {
+                await sendReplication(r, topic: Topics.replicationRequest(memberId: sender.memberId), to: sender.memberId)
+            }
+        case Topics.replicationRequest(memberId: me):
+            guard let r = try? JSONDecoder().decode(ReplicationRequest.self, from: data),
+                  let response = replication.respond(to: r, from: sender.memberId, book: chat, groupId: group.groupId, now: now()) else { return }
+            await sendReplication(response, topic: Topics.replicationData(memberId: sender.memberId), to: sender.memberId)
+        default:
+            guard let response = try? JSONDecoder().decode(ReplicationResponse.self, from: data) else { return }
+            var versions: [String: Int] = [:]
+            for m in response.messages where versions[m.senderId] == nil {
+                versions[m.senderId] = await engine.advertisedVersion(of: m.senderId) ?? 0
+            }
+            let got = replication.handle(response, from: sender, roster: group, authorVersion: { versions[$0] }, now: now())
+            var changed = false
+            for m in got.messages { changed = chat.insert(m) || changed }
+            if changed {
+                chat.prune(now: now(), me: identity.memberId, members: Set(group.members.map(\.memberId)), groupId: group.groupId)
+                saveChat()
+                onEvent(.chat(chat))
+            }
+            if let next = got.next {
+                await sendReplication(next, topic: Topics.replicationRequest(memberId: sender.memberId), to: sender.memberId)
+            }
+        }
+    }
+
+    private func sendReplication<T: Encodable>(_ value: T, topic: String, to memberId: String, qos: CocoaMQTTQoS = .qos1) async {
+        guard let peer = await store.current?.findMember(byId: memberId),
+              let json = try? JSONEncoder().encode(value), let plaintext = String(data: json, encoding: .utf8),
+              let sealed = await engine.sealForPeer(plaintext, to: peer) else { return }
+        transport.publish(topic: topic, payload: sealed, qos: qos)
     }
 
     // MARK: - Crash alerts (B3)
