@@ -184,6 +184,11 @@ public actor GroupSyncEngine {
 
     // MARK: - Protocol ledger (3.3, 3.4)
 
+    /// The protocol version a member's authenticated presence last advertised, if ever seen.
+    public func advertisedVersion(of memberId: String) -> Int? {
+        ledger.sightings[memberId]?.protocolVersion
+    }
+
     /// Records what a member's *authenticated* presence advertised (§6.2 rule 2).
     public func recordSighting(memberId: String, protocolVersion: Int) {
         let t = now()
