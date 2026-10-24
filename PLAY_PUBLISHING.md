@@ -69,5 +69,6 @@ Play copy is missing or too long. Then `./gradlew :app:tasks --group publishing`
 
 - **"No credentials"**: `keystore/play-service-account.json` is missing.
 - **403, "The caller does not have permission"**: the service account wasn't invited for this
-  app, or the invitation is still being processed (it can take a while after the first setup).
+  app, the app permissions weren't saved (**Apply**, then **Save changes** at the bottom of the
+  page), or the invitation is still being processed (it can take a while after the first setup).
 - **"Version code … has already been used"**: bump `versionCode` (see "Before each upload").
