@@ -32,6 +32,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var locations: [String: LocationUpdate] = [:]
     /// "Share my location" is off.
     @Published private(set) var sharingPaused = false
+    /// Every chat message on this phone (B3).
+    @Published private(set) var chat = ChatBook()
     @Published private(set) var locationAuthorization: CLAuthorizationStatus = .notDetermined
     private let locationProvider = LocationProvider()
     private var isActive = false
@@ -155,6 +157,18 @@ final class AppModel: ObservableObject {
         await run { try await $0.updateProfile(colorHue: .some(colour.storedHue)) }
     }
 
+    func sendChat(_ text: String, to memberId: String?) async {
+        await node?.sendChat(text, to: memberId)
+    }
+
+    /// The conversation on screen (nil when none): its messages are marked read, and the senders told.
+    func openConversation(_ conversationId: String?) async {
+        await node?.openConversation(conversationId)
+    }
+
+    /// This phone's member id, derived once when the node starts (deriving it is slow).
+    private(set) var chatMemberId: String?
+
     func leaveFamily() async { await run { try await $0.leave() } }
     func removeMember(_ memberId: String) async { await run { try await $0.removeMember(memberId) } }
 
@@ -172,10 +186,13 @@ final class AppModel: ObservableObject {
         let node = try FamilyNode(profile: profile, credentials: credentials, groupPersistence: persistence,
                                   inviteSlot: inviteSlot, pendingJoinSlot: pendingJoinSlot, deviceSlot: deviceSlot,
                                   ledgerSlot: ledgerSlot, presenceSlot: presenceSlot, securitySlot: securitySlot,
-                                  locationSlot: locationSlot) { [weak self] event in
+                                  locationSlot: locationSlot,
+                                  chatSlot: SealedFileSlot(url: directory.appendingPathComponent("chat.sealed"),
+                                                           keySlot: KeychainSlot(service: "jibaro.familysafety", account: "chat-key"))) { [weak self] event in
             Task { @MainActor in self?.handle(event) }
         }
         self.node = node
+        chatMemberId = node.memberId
         securityLog = node.securityLog
         sharingPaused = node.sharingPausedAtLaunch
         locationAuthorization = locationProvider.authorization
@@ -225,6 +242,7 @@ final class AppModel: ObservableObject {
         case .needsUpdate(let members): needsUpdate = members
         case .securityLog(let log): securityLog = log
         case .locations(let map): locations = map
+        case .chat(let book): chat = book
         case .sharingPaused(let paused):
             sharingPaused = paused
             updateLocationUpdates()

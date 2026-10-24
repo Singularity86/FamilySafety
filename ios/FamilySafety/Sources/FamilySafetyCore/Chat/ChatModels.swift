@@ -1,12 +1,12 @@
 import Foundation
 
-public enum ChatMessageType: String, Codable {
+public enum ChatMessageType: String, Codable, Sendable {
     case text = "TEXT"
     case location = "LOCATION"
     case system = "SYSTEM"
 }
 
-public enum DeliveryStatus: String, Codable {
+public enum DeliveryStatus: String, Codable, Sendable {
     case pending = "PENDING"
     case sent = "SENT"
     case delivered = "DELIVERED"
@@ -17,7 +17,7 @@ public enum DeliveryStatus: String, Codable {
 /// Plaintext inside the E2EE envelope (§3) on the `chat` topic. `conversationId == nil`
 /// means a 1:1 conversation (the peer's memberId); a groupId means group chat, sent as one
 /// E2EE copy per member (§6.3).
-public struct ChatMessagePayload: Codable, Equatable {
+public struct ChatMessagePayload: Codable, Equatable, Sendable {
     public let messageId: String
     public let content: String
     public let messageType: ChatMessageType
@@ -55,7 +55,7 @@ public struct ChatLocationContent: Codable, Equatable {
 /// Plaintext inside the E2EE envelope. DELIVERED goes on `chat/receipt`, READ on
 /// `chat/read` (§6.3). Reject receipts for message IDs never addressed to the receipt's
 /// authenticated sender — anti-forgery, enforced by the caller, not this struct.
-public struct DeliveryReceipt: Codable, Equatable {
+public struct DeliveryReceipt: Codable, Equatable, Sendable {
     public let messageId: String
     public let recipientId: String
     public let status: DeliveryStatus
