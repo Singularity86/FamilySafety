@@ -210,3 +210,54 @@ private struct MessageBubble: View {
         }
     }
 }
+
+/// Who has a crash alert, member by member (spec §6.3 statuses). Updates as receipts arrive.
+struct CrashAlertStatusView: View {
+    @EnvironmentObject private var model: AppModel
+    let alertId: String
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            let now = Int64(context.date.timeIntervalSince1970 * 1000)
+            ZStack {
+                Palette.background.ignoresSafeArea()
+                VStack(alignment: .leading, spacing: Spacing.m) {
+                    Label("Your family is being alerted", systemImage: "exclamationmark.triangle.fill")
+                        .font(Typeface.display).foregroundStyle(Palette.dangerText)
+                    Text("The alert keeps being sent until each phone confirms it, even if you have no signal right now. You can leave this screen.")
+                        .font(Typeface.body)
+                    if let alert = model.emergency.alerts[alertId] {
+                        ForEach(alert.copies.values.sorted { name($0.recipientId) < name($1.recipientId) }, id: \.recipientId) { copy in
+                            HStack {
+                                Text(name(copy.recipientId)).font(Typeface.title)
+                                Spacer()
+                                Text(label(model.emergency.status(copy, of: alert, now: now))).font(Typeface.bodyStrong)
+                            }
+                            .accessibilityElement(children: .combine)
+                        }
+                    }
+                }
+                .foregroundStyle(Palette.text)
+                .padding(Spacing.l)
+                .frame(maxHeight: .infinity, alignment: .top)
+            }
+        }
+        .navigationTitle("Crash alert")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func name(_ memberId: String) -> String {
+        if case .member(let group) = model.nodeState, let m = group.findMember(byId: memberId) { return m.displayName }
+        return "Former member"
+    }
+
+    private func label(_ status: EmergencyOutbox.CopyStatus) -> String {
+        switch status {
+        case .sending: return "Sending…"
+        case .waiting: return "Waiting for their phone"
+        case .received: return "Received"
+        case .notReached: return "Not reached"
+        case .leftFamily: return "Left the family"
+        }
+    }
+}
