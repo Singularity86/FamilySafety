@@ -47,6 +47,8 @@ android {
         versionName = "1.15.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // App logs (Timber): on in debug and releaseCheck, off in the shipped release.
+        buildConfigField("boolean", "LOGS", "false")
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -99,7 +101,10 @@ android {
             buildConfigField("String", "MQTT_PASSWORD", "\"${mqttProperties.getProperty("password", "")}\"")
         }
         release {
-            isMinifyEnabled = false
+            // R8 shrinks the libraries; our own code is kept whole for now (proguard-rules.pro).
+            // A shrinking mistake fails at run time, in release only, so it is checked on the
+            // releaseCheck build below before it ships.
+            isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -129,6 +134,21 @@ android {
                 // libraries Play flags for 16 KB (the arm64 copy of libjnidispatch is
                 // still flagged, so this narrows the surface rather than clearing the
                 // warning) and drops a set of binaries no family member would ever run.
+            }
+        }
+        // The release build exactly as shrunk, but signed with the debug key and installable
+        // next to the other two, so the shrunk code can be exercised on emulators before a
+        // release goes out. Never uploaded.
+        create("releaseCheck") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".check"
+            versionNameSuffix = "-check"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+            // Logs on, so a failure in the shrunk code can be read; the shipped release stays silent.
+            buildConfigField("boolean", "LOGS", "true")
+            ndk {
+                abiFilters += listOf("x86_64")
             }
         }
     }
