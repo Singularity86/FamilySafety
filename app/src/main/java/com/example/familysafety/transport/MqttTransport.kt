@@ -49,8 +49,11 @@ class MqttTransport @Inject constructor(
     private var memberId: String? = null
     private var groupId: String? = null
 
-    // Callback for incoming messages (set by UnifiedTransportManager)
-    var onMessageReceived: (suspend (topic: String, payload: String) -> Unit)? = null
+    /**
+     * Every incoming message, set by [UnifiedTransportManager], which queues it by kind (E5).
+     * Called on Paho's callback thread, so it must only enqueue.
+     */
+    var onInbound: ((InboundMessage) -> Unit)? = null
 
     private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var reconnectJob: Job? = null
@@ -519,15 +522,15 @@ class MqttTransport @Inject constructor(
 
             override fun messageArrived(topic: String?, message: MqttMessage?) {
                 message?.let {
-                    val topicStr = topic ?: ""
-                    val payloadStr = String(it.payload)
+                    val inbound = InboundMessage(topic ?: "", String(it.payload), retained = it.isRetained)
+                    onInbound?.let { route -> route(inbound); return }
+                    // No router attached (it always is once the app is up): location and
+                    // presence, which this class handles itself, still work.
                     scope.launch {
-                        // Location and presence are handled here — e2eeManager + familyMemberKeys live here
                         when {
-                            topicStr.endsWith("/location_inbox") -> handleLocationInbox(payloadStr)
-                            topicStr.endsWith("/location") || PresenceTopics.isPresenceTopic(topicStr) ->
-                                handleLocationOrPresence(topicStr, payloadStr, retained = it.isRetained)
-                            else -> onMessageReceived?.invoke(topicStr, payloadStr)
+                            inbound.topic.endsWith("/location_inbox") -> handleLocationInbox(inbound.payload)
+                            inbound.topic.endsWith("/location") || PresenceTopics.isPresenceTopic(inbound.topic) ->
+                                handleLocationOrPresence(inbound.topic, inbound.payload, inbound.retained)
                         }
                     }
                 }
@@ -1084,8 +1087,8 @@ class MqttTransport @Inject constructor(
         }
     }
 
-    suspend fun handleLocationOrPresencePublic(topic: String, encryptedPayload: String) =
-        handleLocationOrPresence(topic, encryptedPayload)
+    suspend fun handleLocationOrPresencePublic(topic: String, encryptedPayload: String, retained: Boolean = false) =
+        handleLocationOrPresence(topic, encryptedPayload, retained)
 
     private suspend fun handleLocationOrPresence(topic: String, payload: String, retained: Boolean = false) {
         if (PresenceTopics.isPresenceTopic(topic)) {
