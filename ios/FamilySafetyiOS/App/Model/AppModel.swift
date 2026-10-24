@@ -178,6 +178,18 @@ final class AppModel: ObservableObject {
         await node?.raiseEmergencyAlert("🚨 \(name) may have been in an accident and did not respond.\(place)")
     }
 
+    /// Shares a file picked from Files with the family. The picker hands over a security-scoped URL.
+    func uploadFile(_ url: URL) async {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let type = (try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType
+        await run { try await $0.uploadFile(at: url, name: url.lastPathComponent,
+                                            mimeType: type?.preferredMIMEType ?? "application/octet-stream") }
+    }
+
+    func deleteFile(_ fileId: String) async { await node?.deleteFile(fileId) }
+    func setEssential(_ fileId: String, _ essential: Bool) async { await node?.setEssential(fileId, essential) }
+
     /// A file that isn't downloaded automatically: fetch it.
     func requestFile(_ fileId: String) async { await node?.requestFile(fileId) }
 
@@ -291,6 +303,8 @@ final class AppModel: ObservableObject {
         case NodeError.alreadyInFamily: return "This phone is already in a family."
         case NodeError.notInFamily: return "Join or create a family first."
         case NodeError.storageUnavailable: return "This phone's storage can't be used right now. Try again in a moment."
+        case NodeError.storageFull: return "The family's files would go over 500 MB. Delete something first."
+        case NodeError.fileUnreadable: return "That file couldn't be read, or there isn't room for it on this phone."
         case JoinV2Error.invalidInvite(let reason): return reason
         case JoinDeskError.keyConflict: return "Someone else is using that person's name with different keys. Nothing was approved."
         default: return "Something went wrong: \(error.localizedDescription)"
