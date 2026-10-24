@@ -30,6 +30,8 @@ public enum NodeEvent: Sendable {
     case locations([String: LocationUpdate])
     /// Whether "Share my location" is off.
     case sharingPaused(Bool)
+    /// Every chat message held, after any change (B3).
+    case chat(ChatBook)
 }
 
 public enum NodeError: Error, Equatable {
@@ -77,6 +79,12 @@ public actor FamilyNode {
     private var location: LocationState
     private let locationSlot: SecretSlot
     private var heartbeat: Task<Void, Never>?
+    private var chat: ChatBook
+    private let chatSlot: SecretSlot
+    /// False when saved chat couldn't be read: nothing is then saved over it (F14).
+    private let chatReadable: Bool
+    /// The conversation open on screen: what arrives there is read at once.
+    private var activeConversation: String?
     /// Woken in the background for one fix: connect, send it, disconnect (spec §11). No
     /// heartbeat re-stamp on that connect, or it would make the new fix look redundant.
     private var backgroundWake = false
@@ -90,7 +98,16 @@ public actor FamilyNode {
     public init(profile: LocalProfile, credentials: BrokerCredentials, groupPersistence: GroupStatePersistence,
                 inviteSlot: SecretSlot, pendingJoinSlot: SecretSlot, deviceSlot: SecretSlot, ledgerSlot: SecretSlot,
                 presenceSlot: SecretSlot, securitySlot: SecretSlot, locationSlot: SecretSlot,
+                chatSlot: SecretSlot = InMemorySlot(),
                 onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
+        self.chatSlot = chatSlot
+        do {
+            self.chat = try chatSlot.readJSON(ChatBook.self) ?? ChatBook()
+            self.chatReadable = true
+        } catch {
+            self.chat = ChatBook()
+            self.chatReadable = false
+        }
         self.locationSlot = locationSlot
         self.location = (try? locationSlot.readJSON(LocationState.self)) ?? LocationState()
         let security = SecurityRecorder(slot: securitySlot)
@@ -121,7 +138,7 @@ public actor FamilyNode {
         self.onEvent = onEvent
     }
 
-    public var memberId: String { identity.memberId }
+    public nonisolated var memberId: String { identity.memberId }
 
     // MARK: - Lifecycle
 
@@ -138,6 +155,7 @@ public actor FamilyNode {
                 if !presence.isEmpty { onEvent(.presence(presence)) }
                 onEvent(.sharingPaused(location.paused))
                 if !location.book.latest.isEmpty { onEvent(.locations(location.book.latest)) }
+                onEvent(.chat(chat))
             } else if let pending = try pendingJoinSlot.readJSON(PendingJoin.self) {
                 resumeJoin(pending)
             } else {
@@ -239,6 +257,9 @@ public actor FamilyNode {
         saveLocation()
         onEvent(.locations([:]))
         onEvent(.presence(presence))
+        chat = ChatBook()
+        saveChat()
+        onEvent(.chat(chat))
         setState(.noFamily)
         await reconnect()
     }
@@ -313,6 +334,7 @@ public actor FamilyNode {
             }
         }
         transport.flushPendingQueue()
+        await sendUnsentChat()
         await coordinator?.start()
         await groupChanged()
         // Peers see where we are as soon as we're back, then every 5 minutes at least.
@@ -415,6 +437,13 @@ public actor FamilyNode {
                   location.book.accept(fix) else { return }
             saveLocation()
             onEvent(.locations(location.book.latest))
+        case Topics.chat(memberId: me):
+            await receiveChat(payload)
+        case Topics.chatReceipt(memberId: me), Topics.chatRead(memberId: me):
+            guard let (sender, body) = await engine.openFromPeer(payload),
+                  let receipt = ChatCodec.readReceipt(body), chat.apply(receipt, from: sender.memberId) else { return }
+            saveChat()
+            onEvent(.chat(chat))
         default:
             if let group = await store.current, topic == Topics.groupAck(groupId: group.groupId) {
                 await engine.handleAck(payload: payload)
@@ -552,6 +581,92 @@ public actor FamilyNode {
 
     private func saveLocation() { try? locationSlot.writeJSON(location) }
 
+    // MARK: - Chat (B3)
+
+    /// Sends a message to the family (`to` nil) or privately to one member. Stored first, so a
+    /// message written offline goes out on the next connect.
+    @discardableResult
+    public func sendChat(_ text: String, to memberId: String? = nil) async -> ChatMessage? {
+        let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty, case .member(let group) = state else { return nil }
+        if let memberId, memberId == identity.memberId || group.findMember(byId: memberId) == nil { return nil }
+        let message = ChatCodec.compose(content: content, to: memberId, groupId: group.groupId, identity: identity, now: now())
+        chat.insert(message)
+        saveChat()
+        onEvent(.chat(chat))
+        await deliver(message)
+        return chat.messages[message.messageId]
+    }
+
+    /// The conversation now on screen, or nil. Opening one marks it read and tells the senders.
+    public func openConversation(_ conversationId: String?) async {
+        activeConversation = conversationId
+        guard let conversationId else { return }
+        let unread = chat.markRead(conversationId)
+        guard !unread.isEmpty else { return }
+        saveChat()
+        onEvent(.chat(chat))
+        for message in unread { await sendReceipt(.read, for: message.messageId, to: message.senderId) }
+    }
+
+    /// The conversation id for chatting privately with `memberId`.
+    public func privateConversationId(with memberId: String) -> String {
+        ChatBook.privateConversationId(identity.memberId, memberId)
+    }
+
+    private func receiveChat(_ payload: Data) async {
+        guard case .member(let group) = state, let (sender, body) = await engine.openFromPeer(payload),
+              sender.memberId != identity.memberId else { return }
+        // A bad author signature, or a group message naming another family, is dropped (as on Android, not logged).
+        guard var message = ChatCodec.read(body, sender: sender, me: identity.memberId, groupId: group.groupId) else { return }
+        // Already held: confirm it again, so a sender whose receipt was lost stops retrying (F27).
+        // Only DELIVERED: a re-send says nothing about reading.
+        if chat.contains(message.messageId) {
+            await sendReceipt(.delivered, for: message.messageId, to: sender.memberId)
+            return
+        }
+        message.isRead = activeConversation == message.conversationId
+        chat.insert(message)
+        saveChat()
+        onEvent(.chat(chat))
+        await sendReceipt(message.isRead ? .read : .delivered, for: message.messageId, to: sender.memberId)
+    }
+
+    /// One E2EE copy per recipient: everyone else for group chat, the one person for a private message.
+    private func deliver(_ message: ChatMessage) async {
+        guard case .member(let group) = state, transport.isConnected, let plaintext = try? ChatCodec.plaintext(message) else { return }
+        let recipients = group.members.filter {
+            $0.memberId != identity.memberId && (message.recipientId == nil || $0.memberId == message.recipientId)
+        }
+        var sent = recipients.isEmpty
+        for peer in recipients {
+            guard let sealed = await engine.sealForPeer(plaintext, to: peer) else { continue }
+            if transport.publish(topic: Topics.chat(memberId: peer.memberId), payload: sealed, qos: .qos1) { sent = true }
+        }
+        // A private message to someone who has left can never go; group chat waits for a connect.
+        if message.recipientId != nil && recipients.isEmpty { chat.setStatus(message.messageId, .failed) }
+        else if sent { chat.setStatus(message.messageId, .sent) }
+        saveChat()
+        onEvent(.chat(chat))
+    }
+
+    private func sendUnsentChat() async {
+        for message in chat.unsent { await deliver(message) }
+    }
+
+    private func sendReceipt(_ status: DeliveryStatus, for messageId: String, to memberId: String) async {
+        guard let peer = await store.current?.findMember(byId: memberId),
+              let body = try? ChatCodec.receipt(for: messageId, status: status, me: identity.memberId, now: now()),
+              let sealed = await engine.sealForPeer(body, to: peer) else { return }
+        let topic = status == .read ? Topics.chatRead(memberId: memberId) : Topics.chatReceipt(memberId: memberId)
+        transport.publish(topic: topic, payload: sealed, qos: .qos1)
+    }
+
+    private func saveChat() {
+        guard chatReadable else { return }
+        try? chatSlot.writeJSON(chat)
+    }
+
     // MARK: - Security log
 
     public nonisolated var securityLog: SecurityLog { security.snapshot }
@@ -603,6 +718,12 @@ public actor FamilyNode {
             await reconnect()
         }
         let members = Set(group.members.map(\.memberId))
+        let before = chat
+        chat.prune(now: now(), me: identity.memberId, members: members, groupId: group.groupId)
+        if chat != before {
+            saveChat()
+            onEvent(.chat(chat))
+        }
         if !Set(location.book.latest.keys).subtracting(members).isEmpty {
             location.book.keepOnly(members)
             saveLocation()
