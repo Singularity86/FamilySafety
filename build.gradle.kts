@@ -4,6 +4,7 @@ plugins {
     id("com.google.dagger.hilt.android") version "2.48.1" apply false
     id("com.google.devtools.ksp") version "2.0.21-1.0.25" apply false
     id("org.jetbrains.kotlin.plugin.serialization") version "1.9.10" apply false
+    id("com.github.triplet.play") version "3.12.1" apply false
     alias(libs.plugins.compose.compiler) apply false 
 
 }
