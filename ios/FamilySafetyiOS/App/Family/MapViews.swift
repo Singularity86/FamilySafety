@@ -62,14 +62,18 @@ private struct MapLegend: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
             ForEach(items, id: \.member.memberId) { item in
+                NavigationLink { HistoryView(member: item.member) } label: {
                 HStack(spacing: Spacing.s) {
                     PersonAvatar(name: item.member.displayName, memberId: item.member.memberId, colorHue: item.member.colorHue, size: 20)
-                    Text(item.member.memberId == model.memberId ? "\(item.member.displayName) (you)" : item.member.displayName)
+                    Text(item.member.memberId == model.chatMemberId ? "\(item.member.displayName) (you)" : item.member.displayName)
                         .font(Typeface.small).foregroundStyle(Palette.text)
                     Spacer()
                     RelativeTime(date: item.date)
                         .font(Typeface.small).foregroundStyle(item.stale ? Palette.warningText : Palette.secondaryText)
+                    Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.secondaryText)
                 }
+                }
+                .accessibilityHint("Shows where they've been")
             }
         }
         .padding(Spacing.m)

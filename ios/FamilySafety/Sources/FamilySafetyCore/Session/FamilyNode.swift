@@ -101,6 +101,11 @@ public actor FamilyNode {
     /// Chat history back-fill (B5): announce, request, respond.
     private var replication: ChatReplication
     private var announceTimer: Task<Void, Never>?
+    /// Location history (B6): 30 days of everyone's fixes, and its back-fill.
+    private var history: LocationHistory
+    private let historySlot: SecretSlot
+    private var historySave: Task<Void, Never>?
+    private var locationReplication: LocationReplication
     /// Shared files (B5): the library, and where chunk ciphertext is kept.
     private var library: FileLibrary
     private let librarySlot: SecretSlot
@@ -124,8 +129,10 @@ public actor FamilyNode {
                 inviteSlot: SecretSlot, pendingJoinSlot: SecretSlot, deviceSlot: SecretSlot, ledgerSlot: SecretSlot,
                 presenceSlot: SecretSlot, securitySlot: SecretSlot, locationSlot: SecretSlot,
                 chatSlot: SecretSlot = InMemorySlot(), emergencySlot: SecretSlot = InMemorySlot(),
-                librarySlot: SecretSlot = InMemorySlot(), chunkStore: ChunkStore? = nil,
+                librarySlot: SecretSlot = InMemorySlot(), historySlot: SecretSlot = InMemorySlot(), chunkStore: ChunkStore? = nil,
                 onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
+        self.historySlot = historySlot
+        self.history = (try? historySlot.readJSON(LocationHistory.self)) ?? LocationHistory()
         self.librarySlot = librarySlot
         self.library = (try? librarySlot.readJSON(FileLibrary.self)) ?? FileLibrary()
         self.chunks = chunkStore
@@ -153,6 +160,7 @@ public actor FamilyNode {
         self.identity = try profile.identity()
         self.memberId = identity.memberId
         self.replication = ChatReplication(me: identity.memberId)
+        self.locationReplication = LocationReplication(me: identity.memberId)
         self.credentials = credentials
         self.store = GroupStateStore(localMemberId: identity.memberId, persistence: groupPersistence)
         self.pendingJoinSlot = pendingJoinSlot
@@ -216,6 +224,7 @@ public actor FamilyNode {
         announceTimer = nil
         repairTimer?.cancel()
         repairTimer = nil
+        flushHistory()
         await coordinator?.stop()
         if transport.isConnected, let group = await store.current {
             publishPresence(isOnline: false, group: group)
@@ -308,6 +317,8 @@ public actor FamilyNode {
         for id in library.entries.keys { chunks?.deleteAll(id) }
         library = FileLibrary()
         saveLibrary()
+        history = LocationHistory()
+        flushHistory()
         onEvent(.files(library))
         setState(.noFamily)
         await reconnect()
@@ -489,6 +500,8 @@ public actor FamilyNode {
             guard let (sender, body) = await engine.openFromPeer(payload),
                   let fix = LocationCodec.read(body, sender: sender),
                   location.book.accept(fix) else { return }
+            history.add([fix], now: now())
+            saveHistory()
             saveLocation()
             onEvent(.locations(location.book.latest))
         case Topics.chat(memberId: me):
@@ -628,6 +641,8 @@ public actor FamilyNode {
         }
         location.lastSent = fix
         _ = location.book.accept(fix)
+        history.add([fix], now: now())
+        saveHistory()
         saveLocation()
         onEvent(.locations(location.book.latest))
     }
@@ -739,7 +754,8 @@ public actor FamilyNode {
     private func backfillChat() async {
         guard case .member(let group) = state else { return }
         let peers = group.members.map(\.memberId).filter { $0 != identity.memberId }
-        for (peerId, request) in replication.fullSync(book: chat, peers: peers, groupId: group.groupId, now: now()) {
+        for (peerId, request) in replication.fullSync(book: chat, peers: peers, groupId: group.groupId, now: now())
+            + locationReplication.fullSync(history: history, peers: peers, now: now()) {
             await sendReplication(request, topic: Topics.replicationRequest(memberId: peerId), to: peerId)
         }
         await announceChat()
@@ -755,9 +771,12 @@ public actor FamilyNode {
 
     private func announceChat() async {
         guard case .member(let group) = state, transport.isConnected else { return }
+        let locations = history.summaries()
         for peer in group.members where peer.memberId != identity.memberId {
-            let a = replication.announcement(for: peer.memberId, book: chat, groupId: group.groupId, now: now())
-            guard !a.chatDataSummary.isEmpty else { continue }
+            let chatPart = replication.announcement(for: peer.memberId, book: chat, groupId: group.groupId, now: now())
+            guard !chatPart.chatDataSummary.isEmpty || !locations.isEmpty else { continue }
+            let a = DataAvailabilityAnnouncement(announcerId: identity.memberId, locationDataSummary: locations,
+                                                 chatDataSummary: chatPart.chatDataSummary, timestamp: now())
             await sendReplication(a, topic: Topics.replicationAnnounceInbox(memberId: peer.memberId), to: peer.memberId, qos: .qos0)
         }
     }
@@ -767,34 +786,70 @@ public actor FamilyNode {
               sender.memberId != identity.memberId else { return }
         let data = Data(body.utf8)
         let me = identity.memberId
+        let members = Set(group.members.map(\.memberId))
         switch topic {
         case Topics.replicationAnnounceInbox(memberId: me):
             guard let a = try? JSONDecoder().decode(DataAvailabilityAnnouncement.self, from: data) else { return }
-            for r in replication.handle(a, from: sender.memberId, book: chat, groupId: group.groupId, now: now()) {
+            let asks = replication.handle(a, from: sender.memberId, book: chat, groupId: group.groupId, now: now())
+                + locationReplication.handle(a, from: sender.memberId, history: history, members: members, now: now())
+            for r in asks {
                 await sendReplication(r, topic: Topics.replicationRequest(memberId: sender.memberId), to: sender.memberId)
             }
         case Topics.replicationRequest(memberId: me):
-            guard let r = try? JSONDecoder().decode(ReplicationRequest.self, from: data),
-                  let response = replication.respond(to: r, from: sender.memberId, book: chat, groupId: group.groupId, now: now()) else { return }
+            guard let r = try? JSONDecoder().decode(ReplicationRequest.self, from: data) else { return }
+            let response = r.dataType == .chatMessages
+                ? replication.respond(to: r, from: sender.memberId, book: chat, groupId: group.groupId, now: now())
+                : locationReplication.respond(to: r, from: sender.memberId, history: history, members: members, now: now())
+            guard let response else { return }
             await sendReplication(response, topic: Topics.replicationData(memberId: sender.memberId), to: sender.memberId)
         default:
             guard let response = try? JSONDecoder().decode(ReplicationResponse.self, from: data) else { return }
             var versions: [String: Int] = [:]
-            for m in response.messages where versions[m.senderId] == nil {
-                versions[m.senderId] = await engine.advertisedVersion(of: m.senderId) ?? 0
+            for author in response.messages.map(\.senderId) + response.locations.map(\.memberId) where versions[author] == nil {
+                versions[author] = await engine.advertisedVersion(of: author) ?? 0
             }
-            let got = replication.handle(response, from: sender, roster: group, authorVersion: { versions[$0] }, now: now())
-            var changed = false
-            for m in got.messages { changed = chat.insert(m) || changed }
-            if changed {
-                chat.prune(now: now(), me: identity.memberId, members: Set(group.members.map(\.memberId)), groupId: group.groupId)
-                saveChat()
-                onEvent(.chat(chat))
+            let next: ReplicationRequest?
+            if response.dataType == .locationHistory {
+                let got = locationReplication.handle(response, from: sender, roster: group, authorVersion: { versions[$0] }, now: now())
+                if history.add(got.fixes, now: now()) > 0 { saveHistory() }
+                next = got.next
+            } else {
+                let got = replication.handle(response, from: sender, roster: group, authorVersion: { versions[$0] }, now: now())
+                var changed = false
+                for m in got.messages { changed = chat.insert(m) || changed }
+                if changed {
+                    chat.prune(now: now(), me: identity.memberId, members: members, groupId: group.groupId)
+                    saveChat()
+                    onEvent(.chat(chat))
+                }
+                next = got.next
             }
-            if let next = got.next {
+            if let next {
                 await sendReplication(next, topic: Topics.replicationRequest(memberId: sender.memberId), to: sender.memberId)
             }
         }
+    }
+
+    // MARK: - Location history (B6)
+
+    /// One member's fixes between two times, oldest first (30 days kept).
+    public func history(of memberId: String, from: Int64, to: Int64) -> [LocationUpdate] {
+        history.between(memberId, from: from, to: to)
+    }
+
+    /// Saves at most every 20 seconds; fixes arrive often and the whole history is rewritten.
+    private func saveHistory() {
+        guard historySave == nil else { return }
+        historySave = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            await self?.flushHistory()
+        }
+    }
+
+    private func flushHistory() {
+        historySave?.cancel()
+        historySave = nil
+        try? historySlot.writeJSON(history)
     }
 
     private func sendReplication<T: Encodable>(_ value: T, topic: String, to memberId: String, qos: CocoaMQTTQoS = .qos1) async {
@@ -1133,6 +1188,7 @@ public actor FamilyNode {
         }
         let members = Set(group.members.map(\.memberId))
         library.keepHoldings(of: members)
+        history.prune(now: now(), members: members)
         if let known = knownMembers, !members.subtracting(known).isEmpty { await publishManifest() }
         knownMembers = members
         let before = chat

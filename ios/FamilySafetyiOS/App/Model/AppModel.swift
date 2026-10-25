@@ -190,6 +190,14 @@ final class AppModel: ObservableObject {
     func deleteFile(_ fileId: String) async { await node?.deleteFile(fileId) }
     func setEssential(_ fileId: String, _ essential: Bool) async { await node?.setEssential(fileId, essential) }
 
+    /// One member's positions on one local day, oldest first.
+    func history(of memberId: String, day: Date) async -> [LocationUpdate] {
+        let start = Calendar.current.startOfDay(for: day)
+        let end = Calendar.current.date(byAdding: .day, value: 1, to: start) ?? start
+        return await node?.history(of: memberId, from: Int64(start.timeIntervalSince1970 * 1000),
+                                   to: Int64(end.timeIntervalSince1970 * 1000)) ?? []
+    }
+
     /// A file that isn't downloaded automatically: fetch it.
     func requestFile(_ fileId: String) async { await node?.requestFile(fileId) }
 
@@ -222,6 +230,8 @@ final class AppModel: ObservableObject {
                                   emergencySlot: KeychainSlot(service: "jibaro.familysafety", account: "emergency-outbox"),
                                   librarySlot: SealedFileSlot(url: directory.appendingPathComponent("files.sealed"),
                                                               keySlot: KeychainSlot(service: "jibaro.familysafety", account: "files-key")),
+                                  historySlot: SealedFileSlot(url: directory.appendingPathComponent("history.sealed"),
+                                                              keySlot: KeychainSlot(service: "jibaro.familysafety", account: "history-key")),
                                   chunkStore: ChunkStore(root: directory.appendingPathComponent("files", isDirectory: true),
                                                          viewRoot: FileManager.default.temporaryDirectory.appendingPathComponent("file-views", isDirectory: true))) { [weak self] event in
             Task { @MainActor in self?.handle(event) }
