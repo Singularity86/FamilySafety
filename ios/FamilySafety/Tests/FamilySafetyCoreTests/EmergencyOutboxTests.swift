@@ -79,7 +79,9 @@ final class EmergencyOutboxTests: XCTestCase {
         box.add(m, recipients: ["ben"])
         box.recordAttempt(alertId: m.messageId, recipientId: "ben", now: t0)
         let again = try XCTUnwrap(box.due(now: t0 + 15_000).first?.alert.message)
-        XCTAssertEqual(try ChatCodec.plaintext(again), try ChatCodec.plaintext(m), "same messageId, timestamp and signature")
+        // Compared decoded: JSONEncoder's key order isn't stable between runs.
+        let decode = { (s: String) in try JSONDecoder().decode(ChatMessagePayload.self, from: Data(s.utf8)) }
+        XCTAssertEqual(try decode(ChatCodec.plaintext(again)), try decode(ChatCodec.plaintext(m)), "same messageId, timestamp and signature")
         XCTAssertTrue(try ChatCodec.plaintext(m).contains("\"conversationId\":\"g\""), "an ordinary group chat message on the wire")
     }
 
