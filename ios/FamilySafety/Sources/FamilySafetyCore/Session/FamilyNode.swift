@@ -37,6 +37,10 @@ public enum NodeEvent: Sendable {
     case emergency(EmergencyOutbox)
     /// The family's file library as this phone sees it, after any change (B5).
     case files(FileLibrary)
+    /// This phone's places and alert settings, after any change (B6).
+    case places(PlaceWatch)
+    /// Someone arrived at or left a place, or is driving fast: tell the person holding this phone.
+    case placeAlert(PlaceEvent, memberName: String)
 }
 
 public enum NodeError: Error, Equatable {
@@ -101,6 +105,9 @@ public actor FamilyNode {
     /// Chat history back-fill (B5): announce, request, respond.
     private var replication: ChatReplication
     private var announceTimer: Task<Void, Never>?
+    /// Places and speed alerts (B6), local to this phone.
+    private var placeWatch: PlaceWatch
+    private let placesSlot: SecretSlot
     /// Location history (B6): 30 days of everyone's fixes, and its back-fill.
     private var history: LocationHistory
     private let historySlot: SecretSlot
@@ -130,7 +137,10 @@ public actor FamilyNode {
                 presenceSlot: SecretSlot, securitySlot: SecretSlot, locationSlot: SecretSlot,
                 chatSlot: SecretSlot = InMemorySlot(), emergencySlot: SecretSlot = InMemorySlot(),
                 librarySlot: SecretSlot = InMemorySlot(), historySlot: SecretSlot = InMemorySlot(), chunkStore: ChunkStore? = nil,
+                placesSlot: SecretSlot = InMemorySlot(),
                 onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
+        self.placesSlot = placesSlot
+        self.placeWatch = (try? placesSlot.readJSON(PlaceWatch.self)) ?? PlaceWatch()
         self.historySlot = historySlot
         self.history = (try? historySlot.readJSON(LocationHistory.self)) ?? LocationHistory()
         self.librarySlot = librarySlot
@@ -200,6 +210,7 @@ public actor FamilyNode {
                 onEvent(.chat(chat))
                 onEvent(.emergency(alerts))
                 onEvent(.files(library))
+                onEvent(.places(placeWatch))
             } else if let pending = try pendingJoinSlot.readJSON(PendingJoin.self) {
                 resumeJoin(pending)
             } else {
@@ -500,6 +511,11 @@ public actor FamilyNode {
             guard let (sender, body) = await engine.openFromPeer(payload),
                   let fix = LocationCodec.read(body, sender: sender),
                   location.book.accept(fix) else { return }
+            if sender.memberId != identity.memberId {
+                let events = placeWatch.evaluate(fix, now: now())
+                try? placesSlot.writeJSON(placeWatch)
+                for e in events { onEvent(.placeAlert(e, memberName: sender.displayName)) }
+            }
             history.add([fix], now: now())
             saveHistory()
             saveLocation()
@@ -828,6 +844,29 @@ public actor FamilyNode {
                 await sendReplication(next, topic: Topics.replicationRequest(memberId: sender.memberId), to: sender.memberId)
             }
         }
+    }
+
+    // MARK: - Places (B6)
+
+    public func savePlace(_ place: Place) {
+        placeWatch.save(place)
+        savePlaces()
+    }
+
+    public func removePlace(_ placeId: String) {
+        placeWatch.remove(placeId)
+        savePlaces()
+    }
+
+    public func setSpeedAlerts(on: Bool, thresholdMph: Int) {
+        placeWatch.speedAlertsOn = on
+        placeWatch.speedThresholdMph = min(max(thresholdMph, 20), 150)
+        savePlaces()
+    }
+
+    private func savePlaces() {
+        try? placesSlot.writeJSON(placeWatch)
+        onEvent(.places(placeWatch))
     }
 
     // MARK: - Location history (B6)
@@ -1189,6 +1228,7 @@ public actor FamilyNode {
         let members = Set(group.members.map(\.memberId))
         library.keepHoldings(of: members)
         history.prune(now: now(), members: members)
+        placeWatch.keepOnly(members)
         if let known = knownMembers, !members.subtracting(known).isEmpty { await publishManifest() }
         knownMembers = members
         let before = chat

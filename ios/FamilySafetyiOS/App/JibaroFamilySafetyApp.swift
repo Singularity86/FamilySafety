@@ -6,7 +6,10 @@ struct JibaroFamilySafetyApp: App {
     @StateObject private var model = AppModel()
     @Environment(\.scenePhase) private var scenePhase
 
-    init() { Typeface.registerBundledFonts() }
+    init() {
+        Typeface.registerBundledFonts()
+        Notifier.install()
+    }
 
     var body: some Scene {
         WindowGroup {
