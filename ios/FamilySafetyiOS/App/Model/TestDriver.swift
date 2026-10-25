@@ -15,6 +15,7 @@ import Foundation
 ///   FS_TEST_RENAME=Name           once in a family, rename this person (signed, 3.1)
 ///   FS_TEST_COLOR=Teal            once in a family, choose this palette colour
 ///   FS_TEST_SECURITY_REPORT=<sec> once in a family, print the security report after <sec> seconds
+///   FS_TEST_PLACE=Name,lat,lon,m  once in a family, watch this place (everyone, arrivals and departures)
 ///   FS_TEST_UPLOAD=<path>         once in a family and connected, share this file (a host path the Simulator can read)
 @MainActor
 enum TestDriver {
@@ -24,6 +25,7 @@ enum TestDriver {
     private static var edited = false
     private static var reported = false
     private static var uploaded = false
+    private static var placed = false
 
     static func log(_ line: String) { print("[test] \(line)") }
 
@@ -62,6 +64,12 @@ enum TestDriver {
             Task {
                 try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
                 log("security report:\n\(await model.securityReport() ?? "no node")")
+            }
+        case .member where env["FS_TEST_PLACE"] != nil && !placed:
+            placed = true
+            let f = env["FS_TEST_PLACE"]!.split(separator: ",").map(String.init)
+            if f.count == 4, let lat = Double(f[1]), let lon = Double(f[2]), let r = Double(f[3]) {
+                Task { await model.savePlace(Place(name: f[0], latitude: lat, longitude: lon, radiusMeters: r)); log("place \(f[0]) saved") }
             }
         case .member where env["FS_TEST_UPLOAD"] != nil && !uploaded:
             uploaded = true

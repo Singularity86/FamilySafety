@@ -256,6 +256,16 @@ struct SettingsView: View {
                         }
                         .font(Typeface.body).listRowBackground(Palette.surface)
                     }
+                    if case .member(let group) = model.nodeState {
+                        Section {
+                            NavigationLink { PlacesView(group: group) } label: {
+                                LabeledContent("Places & alerts") {
+                                    Text(model.places.places.isEmpty ? "None" : "\(model.places.places.count)").font(Typeface.small)
+                                }
+                            }
+                        }
+                        .font(Typeface.body).listRowBackground(Palette.surface)
+                    }
                     #if DEBUG
                     Section {
                         Button("Send a test crash alert") { testingAlert = true }.font(Typeface.body)

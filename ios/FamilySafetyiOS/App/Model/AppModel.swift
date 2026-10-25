@@ -38,6 +38,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var emergency = EmergencyOutbox()
     /// The family's shared files as this phone sees them (B5).
     @Published private(set) var files = FileLibrary()
+    /// This phone's places and speed-alert setting (B6).
+    @Published private(set) var places = PlaceWatch()
     @Published private(set) var locationAuthorization: CLAuthorizationStatus = .notDetermined
     private let locationProvider = LocationProvider()
     private var isActive = false
@@ -190,6 +192,16 @@ final class AppModel: ObservableObject {
     func deleteFile(_ fileId: String) async { await node?.deleteFile(fileId) }
     func setEssential(_ fileId: String, _ essential: Bool) async { await node?.setEssential(fileId, essential) }
 
+    func savePlace(_ place: Place) async {
+        Notifier.askOnce()
+        await node?.savePlace(place)
+    }
+    func removePlace(_ id: String) async { await node?.removePlace(id) }
+    func setSpeedAlerts(on: Bool, thresholdMph: Int) async {
+        if on { Notifier.askOnce() }
+        await node?.setSpeedAlerts(on: on, thresholdMph: thresholdMph)
+    }
+
     /// One member's positions on one local day, oldest first.
     func history(of memberId: String, day: Date) async -> [LocationUpdate] {
         let start = Calendar.current.startOfDay(for: day)
@@ -233,7 +245,8 @@ final class AppModel: ObservableObject {
                                   historySlot: SealedFileSlot(url: directory.appendingPathComponent("history.sealed"),
                                                               keySlot: KeychainSlot(service: "jibaro.familysafety", account: "history-key")),
                                   chunkStore: ChunkStore(root: directory.appendingPathComponent("files", isDirectory: true),
-                                                         viewRoot: FileManager.default.temporaryDirectory.appendingPathComponent("file-views", isDirectory: true))) { [weak self] event in
+                                                         viewRoot: FileManager.default.temporaryDirectory.appendingPathComponent("file-views", isDirectory: true)),
+                                  placesSlot: KeychainSlot(service: "jibaro.familysafety", account: "places")) { [weak self] event in
             Task { @MainActor in self?.handle(event) }
         }
         self.node = node
@@ -290,6 +303,12 @@ final class AppModel: ObservableObject {
         case .chat(let book): chat = book
         case .emergency(let box): emergency = box
         case .files(let library): files = library
+        case .places(let watch): places = watch
+        case .placeAlert(let event, let name):
+            Notifier.post(event, memberName: name)
+            #if DEBUG
+            TestDriver.log("PLACE \(name) \(event)")
+            #endif
         case .sharingPaused(let paused):
             sharingPaused = paused
             updateLocationUpdates()
