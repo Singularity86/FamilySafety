@@ -105,6 +105,8 @@ public actor FamilyNode {
     /// Chat history back-fill (B5): announce, request, respond.
     private var replication: ChatReplication
     private var announceTimer: Task<Void, Never>?
+    /// The family vault (B6): container, version mark and document chunks. No code or key is ever kept here.
+    private let vault: VaultStore?
     /// Places and speed alerts (B6), local to this phone.
     private var placeWatch: PlaceWatch
     private let placesSlot: SecretSlot
@@ -137,8 +139,12 @@ public actor FamilyNode {
                 presenceSlot: SecretSlot, securitySlot: SecretSlot, locationSlot: SecretSlot,
                 chatSlot: SecretSlot = InMemorySlot(), emergencySlot: SecretSlot = InMemorySlot(),
                 librarySlot: SecretSlot = InMemorySlot(), historySlot: SecretSlot = InMemorySlot(), chunkStore: ChunkStore? = nil,
-                placesSlot: SecretSlot = InMemorySlot(),
+                placesSlot: SecretSlot = InMemorySlot(), vaultStore: VaultStore? = nil,
                 onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
+        self.vault = vaultStore
+        // On every phone, from first run, whether or not anyone ever uses a vault (spec §6.8).
+        _ = try? vaultStore?.container()
+        vaultStore?.forgetViews()
         self.placesSlot = placesSlot
         self.placeWatch = (try? placesSlot.readJSON(PlaceWatch.self)) ?? PlaceWatch()
         self.historySlot = historySlot
@@ -540,6 +546,8 @@ public actor FamilyNode {
             await serveRepair(payload)
         case Topics.fileRequest(memberId: me):
             await answerFileRequest(payload)
+        case Topics.vaultRepair(memberId: me):
+            await serveVaultRepair(payload)
         case Topics.fileAvailability(memberId: me):
             guard let group = await store.current, let plain = FileCodec.openMessage(payload, group: group),
                   let a = try? JSONDecoder().decode(FileHoldingsAnnouncement.self, from: plain) else { return }
@@ -547,7 +555,11 @@ public actor FamilyNode {
             saveLibrary()
             onEvent(.files(library))
         default:
-            if let group = await store.current, topic == Topics.fileManifest(groupId: group.groupId) {
+            if let group = await store.current, topic == Topics.vaultContainer(groupId: group.groupId) {
+                receiveVaultContainer(payload, group: group)
+            } else if let group = await store.current, topic.hasPrefix(Self.vaultChunkPrefix(group.groupId)) {
+                receiveVaultChunk(topic: topic, payload: payload, group: group)
+            } else if let group = await store.current, topic == Topics.fileManifest(groupId: group.groupId) {
                 await receiveManifest(payload, group: group)
             } else if let group = await store.current, topic.hasPrefix(Self.chunkPrefix(group.groupId)) {
                 await receiveChunk(topic: topic, payload: payload, group: group)
@@ -844,6 +856,156 @@ public actor FamilyNode {
                 await sendReplication(next, topic: Topics.replicationRequest(memberId: sender.memberId), to: sender.memberId)
             }
         }
+    }
+
+    // MARK: - Vault (B6)
+
+    static func vaultChunkPrefix(_ groupId: String) -> String { "familysafe/group/\(groupId)/vault/chunk/" }
+
+    public struct VaultView: Sendable {
+        public let items: [VaultItem]
+        public let removed: [VaultItem]
+    }
+
+    /// The key a code opens, derived off this actor (Argon2id is slow on purpose). Nil outside a family.
+    public nonisolated func vaultKey(code: String) async -> SymmetricKeyBox? {
+        guard let groupId = await store.current?.groupId else { return nil }
+        return try? SymmetricKeyBox(VaultCrypto.key(code: code, groupId: groupId))
+    }
+
+    /// What this key opens: every slot is tried, and an empty result is an ordinary vault.
+    public func openVault(_ key: SymmetricKeyBox) -> VaultView {
+        let all = (try? vault?.container()).flatMap { $0 }.map { VaultCrypto.openAll($0, key: key.key) } ?? []
+        return VaultView(items: all.filter(\.isActive), removed: all.filter { !$0.isActive })
+    }
+
+    /// Adds a document: chunks under a fresh content key that lives only inside the slot, two slots
+    /// sealed, the container published, then the chunks.
+    public func addToVault(_ key: SymmetricKeyBox, fileAt url: URL, name: String, mimeType: String) async throws -> VaultView {
+        guard case .member(let group) = state, let vault else { throw NodeError.notInFamily }
+        guard openVault(key).items.count < VaultCrypto.maxItems else { throw NodeError.storageFull }
+        let fileId = UUID().uuidString.lowercased()
+        let contentKey = SymmetricKey(size: .bits256)
+        var hasher = SHA256()
+        var size = 0
+        var count = 0
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            while let piece = try handle.read(upToCount: VaultStore.chunkSize), !piece.isEmpty {
+                size += piece.count
+                guard size <= VaultStore.maxItemBytes else { throw NodeError.storageFull }
+                hasher.update(data: piece)
+                try vault.writeOwnChunk(fileId: fileId, index: count, ciphertext: try FileCipher.seal(piece, key: contentKey))
+                count += 1
+            }
+        } catch {
+            vault.discard(fileId)
+            throw error as? NodeError ?? NodeError.fileUnreadable
+        }
+        vault.addOwn(fileId: fileId, chunkCount: count)
+        let payload = VaultCrypto.fitName(VaultSlotPayload(
+            fileId: fileId, name: name, mimeType: mimeType, sizeBytes: Int64(size),
+            contentHash: hasher.finalize().map { String(format: "%02x", $0) }.joined(),
+            contentKeyHex: Hex.encode(contentKey.withUnsafeBytes { Array($0) }), chunkCount: count,
+            addedAt: now(), addedBy: identity.memberId))
+        guard let next = try? vault.update({ VaultCrypto.write(payload, into: $0, key: key.key) }) else {
+            vault.discard(fileId)
+            throw NodeError.storageFull
+        }
+        publishVaultContainer(next, group: group)
+        for i in 0..<count { await publishVaultChunk(fileId: fileId, index: i, total: count, group: group) }
+        return openVault(key)
+    }
+
+    /// Removes (recoverably) or puts back: the slot is rewritten with the state flipped, never erased.
+    public func setVaultItem(_ key: SymmetricKeyBox, _ item: VaultItem, active: Bool) -> VaultView {
+        guard case .member(let group) = state, let vault else { return openVault(key) }
+        var p = item.payload
+        p.state = active ? VaultSlotPayload.active : VaultSlotPayload.reclaimed
+        p.revision = now()
+        if let next = try? vault.update({ VaultCrypto.write(VaultCrypto.fitName(p), into: $0, key: key.key, existing: item.slots) }) {
+            publishVaultContainer(next, group: group)
+        }
+        return openVault(key)
+    }
+
+    /// A temporary plaintext copy to view, once every chunk is here and the whole verifies; otherwise
+    /// asks the family for what's missing and returns nil.
+    public func vaultFile(_ item: VaultItem) -> URL? {
+        guard let vault, let raw = Hex.decode(item.payload.contentKeyHex), raw.count == 32 else { return nil }
+        let key = SymmetricKeyBox(SymmetricKey(data: Data(raw)))
+        if vault.blob(item.id)?.isComplete == true,
+           vault.verifiedHash(fileId: item.id, chunkCount: item.payload.chunkCount, key: key) == item.payload.contentHash.lowercased(),
+           let url = try? vault.materialize(fileId: item.id, name: item.payload.name, chunkCount: item.payload.chunkCount, key: key) {
+            return url
+        }
+        requestVaultChunks(item)
+        return nil
+    }
+
+    /// Clears everything decrypted for viewing. Call when a vault closes.
+    public nonisolated func closeVault() { vault?.forgetViews() }
+
+    private func requestVaultChunks(_ item: VaultItem) {
+        guard case .member(let group) = state, let vault else { return }
+        let missing = vault.missing(item.id, chunkCount: item.payload.chunkCount)
+        guard !missing.isEmpty,
+              let body = try? JSONEncoder().encode(VaultChunkRequest(requesterId: identity.memberId, fileId: item.id, missing: missing, timestamp: now()))
+        else { return }
+        for peer in group.members where peer.memberId != identity.memberId {
+            transport.publish(topic: Topics.vaultRepair(memberId: peer.memberId), payload: body, qos: .qos1)
+        }
+    }
+
+    /// Versioned by wall clock, above anything seen; signed over `{version}|{data}`; retained.
+    private func publishVaultContainer(_ bytes: Data, group: GroupDefinition) {
+        guard let vault else { return }
+        let version = max(vault.version + 1, now())
+        vault.setVersion(version)
+        let data = bytes.base64EncodedString()
+        guard let sig = try? AuthorSignatures.sign(VaultContainerMessage.signingPayload(version: version, data: data), identity: identity),
+              let payload = try? JSONEncoder().encode(VaultContainerMessage(version: version, data: data, signerMemberId: identity.memberId, signature: sig))
+        else { return }
+        transport.publish(topic: Topics.vaultContainer(groupId: group.groupId), payload: payload, qos: .qos1, retained: true)
+    }
+
+    /// Taken only when newer than any seen, no more than a day ahead, exactly 131072 bytes, and signed by
+    /// someone in our own roster. An unsigned one would let anyone erase the family's vault.
+    private func receiveVaultContainer(_ payload: Data, group: GroupDefinition) {
+        guard let vault, !payload.isEmpty, let m = try? JSONDecoder().decode(VaultContainerMessage.self, from: payload),
+              m.version > vault.version, m.version <= now() + 86_400_000,
+              !m.signature.isEmpty, let signer = group.findMember(byId: m.signerMemberId),
+              let pub = Hex.decode(signer.ed25519PublicKey), let sig = Hex.decode(m.signature), (try? SodiumRaw.ensureInitialized()) != nil,
+              SodiumRaw.signVerifyDetached(signature: sig, message: Array(VaultContainerMessage.signingPayload(version: m.version, data: m.data).utf8),
+                                           publicKey: pub),
+              let bytes = Data(base64Encoded: m.data), bytes.count == VaultCrypto.containerBytes else { return }
+        if (try? vault.write(bytes)) != nil { vault.setVersion(m.version) }
+    }
+
+    /// Stored without authentication, within bounds: this phone may hold no code that reads it.
+    private func receiveVaultChunk(topic: String, payload: Data, group: GroupDefinition) {
+        let parts = topic.dropFirst(Self.vaultChunkPrefix(group.groupId).count).split(separator: "/").map(String.init)
+        guard let vault, parts.count == 2, let index = Int(parts[1]),
+              let m = try? JSONDecoder().decode(VaultChunkMessage.self, from: payload),
+              m.fileId == parts[0], m.chunkIndex == index, let blob = Data(base64Encoded: m.data) else { return }
+        vault.storeChunk(fileId: m.fileId, index: index, totalChunks: m.totalChunks, ciphertext: blob)
+    }
+
+    /// Answered from the chunk store alone: holding the bytes is the whole qualification.
+    private func serveVaultRepair(_ payload: Data) async {
+        guard case .member(let group) = state, let vault, let r = try? JSONDecoder().decode(VaultChunkRequest.self, from: payload),
+              r.requesterId != identity.memberId, group.containsMember(r.requesterId),
+              let (total, indices) = vault.servable(r) else { return }
+        for i in indices { await publishVaultChunk(fileId: r.fileId, index: i, total: total, group: group) }
+    }
+
+    private func publishVaultChunk(fileId: String, index: Int, total: Int, group: GroupDefinition) async {
+        guard let blob = vault?.readChunk(fileId: fileId, index: index),
+              let body = try? JSONEncoder().encode(VaultChunkMessage(fileId: fileId, chunkIndex: index, totalChunks: total, data: blob.base64EncodedString()))
+        else { return }
+        transport.publish(topic: Topics.vaultChunk(groupId: group.groupId, fileId: fileId, chunkIndex: index), payload: body, qos: .qos1)
+        try? await Task.sleep(nanoseconds: 15_000_000)
     }
 
     // MARK: - Places (B6)

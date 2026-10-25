@@ -9,16 +9,19 @@ struct FilesView: View {
     @State private var preview: URL?
     @State private var picking = false
     @State private var deleting: FileLibrary.Entry?
+    @State private var query = ""
+    /// Set when a submitted search opens a vault; the key never leaves VaultScreen.
+    @State private var vaultCode: String?
 
     var body: some View {
         NavigationStack {
             Screen {
-                if model.files.visible.isEmpty {
+                if model.files.visible.isEmpty && query.isEmpty {
                     Text("Files shared in \(group.groupName) appear here. They're encrypted so only your family can open them.")
                         .font(Typeface.body).foregroundStyle(Palette.secondaryText)
                         .multilineTextAlignment(.center).frame(maxHeight: .infinity)
                 } else {
-                    List(model.files.visible) { entry in
+                    List(filtered) { entry in
                         Button { open(entry) } label: { FileRow(entry: entry, group: group) }
                             .listRowBackground(Palette.background)
                             .contextMenu {
@@ -35,6 +38,17 @@ struct FilesView: View {
             }
             .navigationTitle("Files")
             .navigationBarTitleDisplayMode(.inline)
+            // Search, and the way into the vault. Typing filters; submitting 16+ characters opens a vault
+            // for that text. There is no other prompt anywhere: a prompt would prove a vault exists. Any
+            // such text opens one, so submitting distinguishes nothing (spec §6.8).
+            .searchable(text: $query, prompt: "Search files")
+            .onSubmit(of: .search) {
+                let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                if typed.count >= VaultCrypto.minPassphraseLength { query = ""; vaultCode = typed }
+            }
+            .navigationDestination(isPresented: Binding(get: { vaultCode != nil }, set: { if !$0 { vaultCode = nil } })) {
+                if let code = vaultCode { VaultScreen(code: code) }
+            }
             .quickLookPreview($preview)
             .safeAreaInset(edge: .bottom) {
                 Button("Add a file") { picking = true }.buttonStyle(PrimaryButtonStyle())
@@ -53,6 +67,11 @@ struct FilesView: View {
                 Text("It's removed from every phone in the family, including yours.")
             }
         }
+    }
+
+    private var filtered: [FileLibrary.Entry] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        return q.isEmpty ? model.files.visible : model.files.visible.filter { $0.file.name.localizedCaseInsensitiveContains(q) }
     }
 
     private func open(_ entry: FileLibrary.Entry) {
