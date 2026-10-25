@@ -107,6 +107,50 @@ public struct FileLibrary: Codable, Equatable, Sendable {
         return FileManifest(groupId: groupId, files: files, version: now)
     }
 
+    // MARK: Our own changes
+
+    /// The group storage cap (spec §6.7).
+    public static let maxTotalBytes: Int64 = 500 * 1024 * 1024
+
+    public var usedBytes: Int64 { entries.values.filter { !$0.file.isDeleted }.reduce(0) { $0 + $1.file.sizeBytes } }
+
+    /// A live file with exactly these bytes is already in the library.
+    public func holdsCopy(ofHash hash: String) -> Bool {
+        entries.values.contains { !$0.file.isDeleted && $0.file.contentHash.lowercased() == hash.lowercased() }
+    }
+
+    /// A file this phone just uploaded: it holds every chunk, so it is complete from the start.
+    public mutating func addOwn(_ file: SharedFile, keyVersion: Int) {
+        entries[file.fileId] = Entry(file: file, state: .complete, held: Set(0..<file.chunkCount), blobKeyVersion: keyVersion,
+                                     wanted: false, attempts: 0, nextAttemptAtMs: nil, lastPeerId: nil)
+    }
+
+    /// Deleted here for the whole family: the tombstone in our next manifest deletes it everywhere.
+    @discardableResult
+    public mutating func delete(_ fileId: String, by memberId: String, now: Int64) -> Bool {
+        guard var e = entries[fileId], !e.file.isDeleted else { return false }
+        e.file.isDeleted = true
+        e.file.deletedByMemberId = memberId
+        e.file.deletedAt = now
+        e.held = []
+        e.state = .notDownloaded
+        e.nextAttemptAtMs = nil
+        entries[fileId] = e
+        for m in holdings.keys { holdings[m]?[fileId] = nil }
+        return true
+    }
+
+    /// Pinned (kept on every phone) or not. Anyone may change it; the next manifest carries it.
+    @discardableResult
+    public mutating func setEssential(_ fileId: String, _ essential: Bool, now: Int64) -> Bool {
+        guard var e = entries[fileId], !e.file.isDeleted, e.file.isEssential != essential else { return false }
+        e.file.isEssential = essential
+        if e.shouldFetch { e.state = .downloading; e.attempts = 0; e.nextAttemptAtMs = now }
+        else if e.state != .complete { e.nextAttemptAtMs = nil; if e.held.isEmpty { e.state = .notDownloaded } }
+        entries[fileId] = e
+        return true
+    }
+
     // MARK: Chunks
 
     public enum ChunkOutcome: Equatable, Sendable {

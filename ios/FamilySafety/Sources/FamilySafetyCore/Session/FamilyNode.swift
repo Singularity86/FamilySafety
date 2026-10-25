@@ -1,4 +1,5 @@
 import CocoaMQTT
+import CryptoKit
 import Foundation
 
 /// Where this phone stands with a family.
@@ -39,6 +40,10 @@ public enum NodeEvent: Sendable {
 }
 
 public enum NodeError: Error, Equatable {
+    /// The family's 500 MB of shared files would be exceeded.
+    case storageFull
+    /// The file couldn't be read, or stored on this phone.
+    case fileUnreadable
     case invalidCode
     case alreadyInFamily
     case notInFamily
@@ -101,6 +106,10 @@ public actor FamilyNode {
     private let librarySlot: SecretSlot
     private let chunks: ChunkStore?
     private var repairTimer: Task<Void, Never>?
+    /// The roster last seen, so a newcomer gets a fresh manifest (Android syncNewMember).
+    private var knownMembers: Set<String>?
+    /// When each member last asked us to re-send the file list (`files/request`, unauthenticated).
+    private var fileRequestSeen: [String: Int64] = [:]
     /// Woken in the background for one fix: connect, send it, disconnect (spec §11). No
     /// heartbeat re-stamp on that connect, or it would make the new fix look redundant.
     private var backgroundWake = false
@@ -500,6 +509,8 @@ public actor FamilyNode {
             onEvent(.chat(chat))
         case Topics.fileRepair(memberId: me):
             await serveRepair(payload)
+        case Topics.fileRequest(memberId: me):
+            await answerFileRequest(payload)
         case Topics.fileAvailability(memberId: me):
             guard let group = await store.current, let plain = FileCodec.openMessage(payload, group: group),
                   let a = try? JSONDecoder().decode(FileHoldingsAnnouncement.self, from: plain) else { return }
@@ -901,6 +912,99 @@ public actor FamilyNode {
         saveLibrary()
     }
 
+    /// Shares a file with the family: encrypted chunk by chunk under the current key (version 3),
+    /// stored as ciphertext, listed in the manifest, then published paced. Nothing plaintext is
+    /// written. A file whose exact bytes are already shared is not added twice.
+    public func uploadFile(at url: URL, name: String, mimeType: String, essential: Bool = true) async throws {
+        guard case .member(let group) = state, let chunks else { throw NodeError.notInFamily }
+        let declared = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+        guard library.usedBytes + declared <= FileLibrary.maxTotalBytes else { throw NodeError.storageFull }
+        let (key, keyVersion, kid) = FileKeys.writeKey(group)
+        let fileId = UUID().uuidString.lowercased()
+        var hasher = SHA256()
+        var size: Int64 = 0
+        var count = 0
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            while let piece = try handle.read(upToCount: FileLibrary.chunkSize), !piece.isEmpty {
+                hasher.update(data: piece)
+                try chunks.write(fileId: fileId, index: count, ciphertext: try FileCipher.seal(piece, key: key))
+                size += Int64(piece.count)
+                count += 1
+            }
+        } catch {
+            chunks.deleteAll(fileId)
+            throw NodeError.fileUnreadable
+        }
+        let hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        guard !library.holdsCopy(ofHash: hash) else { chunks.deleteAll(fileId); return }
+        guard library.usedBytes + size <= FileLibrary.maxTotalBytes else { chunks.deleteAll(fileId); throw NodeError.storageFull }
+        let file = SharedFile(fileId: fileId, name: name, mimeType: mimeType, sizeBytes: size, contentHash: hash,
+                              uploaderMemberId: identity.memberId, uploadedAt: now(), chunkCount: count, isEssential: essential, kid: kid)
+        library.addOwn(file, keyVersion: keyVersion)
+        saveLibrary()
+        onEvent(.files(library))
+        // The manifest first, so receivers have the entry before its chunks arrive. A pause, because a
+        // receiver that handles messages concurrently (Android) can otherwise see a chunk before it has
+        // stored the entry, drop it, and leave the whole file to repair.
+        await publishManifest()
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        await publishChunks(file, keyVersion: keyVersion, indices: Array(0..<count), group: group)
+        await publishManifest()
+        await announceFiles(force: true)
+    }
+
+    /// Deletes a file for everyone: the tombstone in the manifest erases it on every phone.
+    public func deleteFile(_ fileId: String) async {
+        guard library.delete(fileId, by: identity.memberId, now: now()) else { return }
+        chunks?.deleteAll(fileId)
+        saveLibrary()
+        onEvent(.files(library))
+        await publishManifest()
+    }
+
+    /// Keep a file on every phone (essential), or only where it's opened.
+    public func setEssential(_ fileId: String, _ essential: Bool) async {
+        guard library.setEssential(fileId, essential, now: now()) else { return }
+        saveLibrary()
+        onEvent(.files(library))
+        await publishManifest()
+        await runRepairs()
+    }
+
+    /// Our whole view of the library, retained, signed and encrypted under the current key.
+    private func publishManifest() async {
+        guard case .member(let group) = state, !library.entries.isEmpty,
+              let payload = try? FileCodec.sealManifest(library.manifest(groupId: group.groupId, now: now()), group: group, identity: identity)
+        else { return }
+        transport.publish(topic: Topics.fileManifest(groupId: group.groupId), payload: payload, qos: .qos1, retained: true)
+    }
+
+    private func publishChunks(_ file: SharedFile, keyVersion: Int, indices: [Int], group: GroupDefinition) async {
+        guard let chunks else { return }
+        for i in indices {
+            guard let blob = chunks.read(fileId: file.fileId, index: i),
+                  let message = try? FileCodec.chunkMessage(fileId: file.fileId, index: i, total: file.chunkCount, ciphertext: blob,
+                                                            keyVersion: keyVersion, kid: file.kid) else { continue }
+            transport.publish(topic: Topics.fileChunk(groupId: group.groupId, fileId: file.fileId, chunkIndex: i), payload: message, qos: .qos1)
+            try? await Task.sleep(nanoseconds: 15_000_000)   // Android's pacing: don't overrun the in-flight window
+        }
+    }
+
+    /// A member asked for the file list again. The request is plaintext and unauthenticated, so this
+    /// only republishes the manifest, at most every 10 minutes per member; chunks come by repair.
+    private func answerFileRequest(_ payload: Data) async {
+        guard let group = await store.current,
+              let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let requester = object["requesterId"] as? String, requester != identity.memberId,
+              group.containsMember(requester) else { return }
+        let t = now()
+        if let last = fileRequestSeen[requester], t - last < 10 * 60_000 { return }
+        fileRequestSeen[requester] = t
+        await publishManifest()
+    }
+
     private func saveLibrary() { try? librarySlot.writeJSON(library) }
 
     // MARK: - Crash alerts (B3)
@@ -1029,6 +1133,8 @@ public actor FamilyNode {
         }
         let members = Set(group.members.map(\.memberId))
         library.keepHoldings(of: members)
+        if let known = knownMembers, !members.subtracting(known).isEmpty { await publishManifest() }
+        knownMembers = members
         let before = chat
         chat.prune(now: now(), me: identity.memberId, members: members, groupId: group.groupId)
         if chat != before {

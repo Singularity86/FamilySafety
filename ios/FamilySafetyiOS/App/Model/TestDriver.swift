@@ -15,6 +15,7 @@ import Foundation
 ///   FS_TEST_RENAME=Name           once in a family, rename this person (signed, 3.1)
 ///   FS_TEST_COLOR=Teal            once in a family, choose this palette colour
 ///   FS_TEST_SECURITY_REPORT=<sec> once in a family, print the security report after <sec> seconds
+///   FS_TEST_UPLOAD=<path>         once in a family and connected, share this file (a host path the Simulator can read)
 @MainActor
 enum TestDriver {
     static let env = ProcessInfo.processInfo.environment
@@ -22,6 +23,7 @@ enum TestDriver {
     private static var acted = false
     private static var edited = false
     private static var reported = false
+    private static var uploaded = false
 
     static func log(_ line: String) { print("[test] \(line)") }
 
@@ -60,6 +62,14 @@ enum TestDriver {
             Task {
                 try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
                 log("security report:\n\(await model.securityReport() ?? "no node")")
+            }
+        case .member where env["FS_TEST_UPLOAD"] != nil && !uploaded:
+            uploaded = true
+            Task {
+                try? await Task.sleep(nanoseconds: 8_000_000_000)   // let it connect and take the retained manifest
+                let path = env["FS_TEST_UPLOAD"]!
+                await model.uploadFile(URL(fileURLWithPath: path))
+                log("uploaded \(path): \(model.lastError ?? "ok")")
             }
         case .member where env["FS_TEST_INVITE"] != nil && !invited:
             invited = true
