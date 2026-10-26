@@ -613,12 +613,7 @@ class VaultRepository @Inject constructor(
             try {
                 val group = groupStateManager.groupDefinition.value ?: return@launch
                 val groupId = group.groupId
-                val raw = String(payload)
-                // Plaintext still accepted from phones that haven't updated; drop that a
-                // release after every family has the sealed sender.
-                val request = json.decodeFromString<VaultChunkRequest>(
-                    FileMessageCipher.open(group, groupId, raw) ?: raw
-                )
+                val request = VaultRepairRequests.parse(group, String(payload)) ?: return@launch
                 val row = vaultBlobDao.get(request.fileId) ?: return@launch
 
                 val wanted = request.missing

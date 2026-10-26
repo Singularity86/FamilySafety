@@ -1590,10 +1590,19 @@ so answering does not imply being able to read it.
 (`keyVersion` 3, `kid` as for files, `data` = AES-GCM under the files subkey of the group key,
 legacy key only in a family without one). In plaintext it told anyone on the broker which vault
 document a phone was fetching, and when. Android seals it with the same code as `files/repair`
-(`FileMessageCipher`). **Receive both** for now: try to open it as an `EncryptedFileMessage`, and
-if that fails parse it as a plaintext `VaultChunkRequest` from a phone that hasn't updated.
-Plaintext acceptance goes in a later release. Until a phone updates, it can't read sealed
-requests, so it won't serve updated phones; updated phones still serve it.
+(`FileMessageCipher`). **Receive both** for now, by these rules (Android `VaultRepairRequests`):
+- An `EncryptedFileMessage` is answered only if it opens under a key you hold. One you can't open
+  is **dropped**, never re-read as plaintext.
+- A plaintext `VaultChunkRequest` is answered only while plaintext is still accepted, for phones
+  that haven't updated. That acceptance goes in a later release.
+- Either way, `requesterId` must be in the current roster.
+
+Until a phone updates, it can't read sealed requests, so it won't serve updated phones; updated
+phones still serve it.
+
+**Residual, accepted for now:** the replies still go to `vault/chunk/{fileId}/{index}` and follow
+the request closely, so the broker can still see *that* a given vault document is being fetched,
+though no longer by whom or which pieces. Hiding that needs opaque chunk topics, a larger change.
 
 A device that was offline when a document was added fetches it the next time someone opens the
 vault **on that device**. It cannot do better: without a code it does not know the blob is
