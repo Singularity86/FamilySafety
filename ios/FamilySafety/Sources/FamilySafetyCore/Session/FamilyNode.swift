@@ -950,8 +950,10 @@ public actor FamilyNode {
     private func requestVaultChunks(_ item: VaultItem) {
         guard case .member(let group) = state, let vault else { return }
         let missing = vault.missing(item.id, chunkCount: item.payload.chunkCount)
+        // Sealed like files/repair, so only the family can read who is fetching what, or trigger a reply.
         guard !missing.isEmpty,
-              let body = try? JSONEncoder().encode(VaultChunkRequest(requesterId: identity.memberId, fileId: item.id, missing: missing, timestamp: now()))
+              let body = try? FileCodec.sealMessage(VaultChunkRequest(requesterId: identity.memberId, fileId: item.id, missing: missing,
+                                                                     timestamp: now()), group: group)
         else { return }
         for peer in group.members where peer.memberId != identity.memberId {
             transport.publish(topic: Topics.vaultRepair(memberId: peer.memberId), payload: body, qos: .qos1)
@@ -994,10 +996,19 @@ public actor FamilyNode {
 
     /// Answered from the chunk store alone: holding the bytes is the whole qualification.
     private func serveVaultRepair(_ payload: Data) async {
-        guard case .member(let group) = state, let vault, let r = try? JSONDecoder().decode(VaultChunkRequest.self, from: payload),
+        guard case .member(let group) = state, let vault, let r = Self.openVaultRequest(payload, group: group),
               r.requesterId != identity.memberId, group.containsMember(r.requesterId),
               let (total, indices) = vault.servable(r) else { return }
         for i in indices { await publishVaultChunk(fileId: r.fileId, index: i, total: total, group: group) }
+    }
+
+    /// A sealed request (an `EncryptedFileMessage`, as files/repair), or, while phones update, a plaintext one.
+    /// Something sealed that won't open is dropped, never read as plaintext.
+    static func openVaultRequest(_ payload: Data, group: GroupDefinition) -> VaultChunkRequest? {
+        if (try? JSONDecoder().decode(EncryptedFileMessage.self, from: payload)) != nil {
+            return FileCodec.openMessage(payload, group: group).flatMap { try? JSONDecoder().decode(VaultChunkRequest.self, from: $0) }
+        }
+        return try? JSONDecoder().decode(VaultChunkRequest.self, from: payload)
     }
 
     private func publishVaultChunk(fileId: String, index: Int, total: Int, group: GroupDefinition) async {

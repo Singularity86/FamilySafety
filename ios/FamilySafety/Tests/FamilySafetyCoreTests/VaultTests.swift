@@ -115,3 +115,32 @@ final class VaultStoreTests: XCTestCase {
 private extension VaultSlotPayload {
     func withPadIgnored(_ pad: String) -> VaultSlotPayload { var p = self; p.pad = pad; return p }
 }
+
+/// `vault/repair` sealed like `files/repair` (agreed 2026-10-26), plaintext still read during the changeover.
+final class VaultRepairSealingTests: XCTestCase {
+    private func group(key: String?) throws -> GroupDefinition {
+        let a = try FamilySafeKeyDerivation.deriveIdentity(seed: Array(SHA512.hash(data: Data("a".utf8))))
+        return GroupDefinition(groupId: "g", groupName: "F", createdAtEpochMs: 1, creatorMemberId: a.memberId,
+                               members: [FamilyMember(memberId: a.memberId, displayName: "a", ed25519PublicKey: a.ed25519PublicKeyHex,
+                                                      x25519PublicKey: a.x25519PublicKeyHex, addedAtEpochMs: 1)],
+                               version: 1, fileEncryptionKey: key)
+    }
+    private let request = VaultChunkRequest(requesterId: "ben", fileId: "f", missing: [1, 2], timestamp: 5)
+
+    func test_sealedRoundTrips_andHidesTheRequest() throws {
+        let g = try group(key: String(repeating: "cd", count: 32))
+        let sealed = try FileCodec.sealMessage(request, group: g)
+        XCTAssertFalse(String(decoding: sealed, as: UTF8.self).contains("ben"))
+        XCTAssertEqual(FamilyNode.openVaultRequest(sealed, group: g), request)
+    }
+
+    func test_plaintextStillReadWhilePhonesUpdate() throws {
+        let g = try group(key: String(repeating: "cd", count: 32))
+        XCTAssertEqual(FamilyNode.openVaultRequest(try JSONEncoder().encode(request), group: g), request)
+    }
+
+    func test_sealedUnderAnotherKeyIsDropped_notReadAsPlaintext() throws {
+        let other = try FileCodec.sealMessage(request, group: try group(key: String(repeating: "ef", count: 32)))
+        XCTAssertNil(FamilyNode.openVaultRequest(other, group: try group(key: String(repeating: "cd", count: 32))))
+    }
+}
