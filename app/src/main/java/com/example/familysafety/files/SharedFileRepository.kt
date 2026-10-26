@@ -825,27 +825,11 @@ class SharedFileRepository @Inject constructor(
     }
 
     /** Encrypt a file-subsystem control message under the group key. */
-    private fun sealFileMessage(groupId: String, plaintext: String): ByteArray? {
-        val (key, keyVersion, kid) = resolveEncryptionKey(groupId)
-        return runCatching {
-            json.encodeToString(
-                EncryptedFileMessage(
-                    keyVersion = keyVersion,
-                    data = Base64.getEncoder().encodeToString(encrypt(plaintext.toByteArray(), key)),
-                    kid = kid
-                )
-            ).toByteArray()
-        }.getOrNull()
-    }
+    private fun sealFileMessage(groupId: String, plaintext: String): ByteArray? =
+        FileMessageCipher.seal(groupStateManager.groupDefinition.value, groupId, plaintext)
 
-    private fun openFileMessage(groupId: String, raw: String): String? {
-        val wrapped = runCatching { json.decodeFromString<EncryptedFileMessage>(raw) }.getOrNull()
-            ?: return null
-        val key = keyForVersion(groupId, wrapped.keyVersion, wrapped.kid) ?: return null
-        return runCatching {
-            String(decrypt(Base64.getDecoder().decode(wrapped.data), key))
-        }.getOrNull()
-    }
+    private fun openFileMessage(groupId: String, raw: String): String? =
+        FileMessageCipher.open(groupStateManager.groupDefinition.value, groupId, raw)
 
     /** Re-broadcast manifest + all file chunks when a peer requests it (e.g. new member). */
     fun handleFileRequest(payload: ByteArray) {

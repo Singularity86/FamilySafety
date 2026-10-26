@@ -6,6 +6,7 @@ import android.content.Context
 import android.net.Uri
 import com.example.familysafety.files.ChunkBitmap
 import com.example.familysafety.files.ChunkedFileStore
+import com.example.familysafety.files.FileMessageCipher
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.group.LazysodiumCryptoProvider
 import com.example.familysafety.storage.VaultBlobDao
@@ -579,9 +580,13 @@ class VaultRepository @Inject constructor(
         val missing = ChunkBitmap.missingIndices(row?.chunkBitmap, item.chunkCount, 256)
         if (missing.isEmpty()) return
 
-        val request = json.encodeToString(
-            VaultChunkRequest(requesterId = me, fileId = item.fileId, missing = missing)
-        ).toByteArray()
+        // Sealed like files/repair: in plaintext it told anyone on the broker which vault
+        // document this phone was fetching, and when.
+        val request = FileMessageCipher.seal(
+            groupDef,
+            groupDef.groupId,
+            json.encodeToString(VaultChunkRequest(requesterId = me, fileId = item.fileId, missing = missing))
+        ) ?: return
 
         groupDef.members.filter { it.memberId != me }.forEach { member ->
             transportProvider.sendMessage(
@@ -606,8 +611,14 @@ class VaultRepository @Inject constructor(
     fun handleChunkRequest(payload: ByteArray) {
         scope.launch {
             try {
-                val groupId = groupStateManager.groupDefinition.value?.groupId ?: return@launch
-                val request = json.decodeFromString<VaultChunkRequest>(String(payload))
+                val group = groupStateManager.groupDefinition.value ?: return@launch
+                val groupId = group.groupId
+                val raw = String(payload)
+                // Plaintext still accepted from phones that haven't updated; drop that a
+                // release after every family has the sealed sender.
+                val request = json.decodeFromString<VaultChunkRequest>(
+                    FileMessageCipher.open(group, groupId, raw) ?: raw
+                )
                 val row = vaultBlobDao.get(request.fileId) ?: return@launch
 
                 val wanted = request.missing
