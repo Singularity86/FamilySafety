@@ -134,3 +134,37 @@ data class FileStatusRow(
         const val STALLED_AFTER_ATTEMPTS = 6
     }
 }
+
+/**
+ * The one-line summary above the file list.
+ *
+ * "On every device" is a claim about safety, so it is made only when every file is here and every
+ * other member has said it holds a copy. It used to be whatever was left after "arriving" and
+ * "only here", which said it of a queued file, and of a file no other phone had reported on.
+ */
+object FilesSummary {
+
+    private val ARRIVING = setOf(
+        FileStatus.QUEUED, FileStatus.DOWNLOADING, FileStatus.WAITING_FOR_PEER, FileStatus.STALLED
+    )
+
+    fun arriving(board: List<FileStatusRow>): Int = board.count { it.status in ARRIVING }
+
+    fun onlyHere(board: List<FileStatusRow>): Int = board.count { it.isKnownToBeOnlyHere }
+
+    fun onEveryDevice(board: List<FileStatusRow>): Boolean = board.all {
+        it.status == FileStatus.AVAILABLE && it.availabilityKnown && it.totalCopies >= it.totalMembers
+    }
+
+    fun line(board: List<FileStatusRow>): String {
+        val arriving = arriving(board)
+        val onlyHere = onlyHere(board)
+        return when {
+            arriving > 0 -> "$arriving file${if (arriving == 1) "" else "s"} still arriving"
+            onlyHere > 0 -> "$onlyHere file${if (onlyHere == 1) " is" else "s are"} only on this phone"
+            onEveryDevice(board) -> "All files are on every device"
+            board.any { it.status == FileStatus.ON_DEMAND } -> "Some files download only when opened"
+            else -> "Waiting for other devices to report in"
+        }
+    }
+}
