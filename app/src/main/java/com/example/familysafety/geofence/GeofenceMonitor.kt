@@ -18,6 +18,7 @@ private const val SPEED_ALERT_COOLDOWN_MS = 5 * 60 * 1000L // 5 minutes
 private const val ZONE_TRANSITION_COOLDOWN_MS = 2 * 60 * 1000L // 2 minutes
 private const val EXIT_HYSTERESIS_MIN_METERS = 25f
 private const val EXIT_HYSTERESIS_RADIUS_FRACTION = 0.15f
+private const val INSIDE_PREFS = "geofence_inside"
 
 @Singleton
 class GeofenceMonitor @Inject constructor(
@@ -32,8 +33,16 @@ class GeofenceMonitor @Inject constructor(
         .stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     // Concurrent maps (F32): these are also read and cleared outside checkLocation's lock.
-    // memberId -> set of geofence IDs the member is currently inside
-    private val memberGeofenceState = ConcurrentHashMap<String, Set<String>>()
+    // memberId -> set of geofence IDs the member is currently inside. Kept across restarts:
+    // held in memory only, a relaunch announced everyone already inside a place as arriving.
+    private val insidePrefs by lazy { context.getSharedPreferences(INSIDE_PREFS, Context.MODE_PRIVATE) }
+    private val memberGeofenceState: ConcurrentHashMap<String, Set<String>> by lazy {
+        ConcurrentHashMap<String, Set<String>>().apply {
+            insidePrefs.all.forEach { (memberId, zones) ->
+                (zones as? Set<*>)?.filterIsInstance<String>()?.let { put(memberId, it.toSet()) }
+            }
+        }
+    }
 
     // memberId:zoneId -> last accepted enter/exit state change
     private val lastZoneTransitionTime = ConcurrentHashMap<String, Long>()
@@ -105,6 +114,12 @@ class GeofenceMonitor @Inject constructor(
         }
 
         memberGeofenceState[location.memberId] = currentlyInside
+        if (currentlyInside != previouslyInside) {
+            insidePrefs.edit().apply {
+                if (currentlyInside.isEmpty()) remove(location.memberId)
+                else putStringSet(location.memberId, HashSet(currentlyInside))
+            }.apply()
+        }
 
         // Speed check: location.speed is in m/s (null if unavailable)
         val speedMs = location.speed ?: return
