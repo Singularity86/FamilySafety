@@ -116,6 +116,23 @@ enum SodiumRaw {
     // MARK: - Randomness
 
     /// randombytes_buf — fills `count` bytes from libsodium's CSPRNG.
+    /// crypto_pwhash with Argon2id 1.3 at INTERACTIVE limits (64 MiB), as Android's vault uses.
+    static func argon2idInteractive(password: [UInt8], salt: [UInt8], outLength: Int) throws -> [UInt8] {
+        precondition(salt.count == Int(crypto_pwhash_saltbytes()))
+        var out = [UInt8](repeating: 0, count: outLength)
+        // A buffer of at least one byte so the pointer is never nil; the length passed is the real one.
+        let buffer = password.isEmpty ? [UInt8(0)] : password
+        let rc = buffer.withUnsafeBytes { pw in
+            crypto_pwhash(&out, UInt64(outLength), pw.baseAddress!.assumingMemoryBound(to: CChar.self),
+                          UInt64(password.count), salt, UInt64(crypto_pwhash_opslimit_interactive()),
+                          crypto_pwhash_memlimit_interactive(), crypto_pwhash_alg_argon2id13())
+        }
+        guard rc == 0 else { throw SodiumError.operationFailed("crypto_pwhash") }
+        return out
+    }
+
+    static var pwhashSaltBytes: Int { Int(crypto_pwhash_saltbytes()) }
+
     static func randomBytes(_ count: Int) -> [UInt8] {
         var bytes = [UInt8](repeating: 0, count: count)
         randombytes_buf(&bytes, count)

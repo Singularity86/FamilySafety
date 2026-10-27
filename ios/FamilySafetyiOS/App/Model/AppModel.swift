@@ -192,6 +192,26 @@ final class AppModel: ObservableObject {
     func deleteFile(_ fileId: String) async { await node?.deleteFile(fileId) }
     func setEssential(_ fileId: String, _ essential: Bool) async { await node?.setEssential(fileId, essential) }
 
+    // MARK: Vault (B6). The key lives in the vault screen's state only, never here.
+
+    func vaultKey(code: String) async -> SymmetricKeyBox? { await node?.vaultKey(code: code) }
+    func openVault(_ key: SymmetricKeyBox) async -> FamilyNode.VaultView? { await node?.openVault(key) }
+    func addToVault(_ key: SymmetricKeyBox, url: URL) async -> FamilyNode.VaultView? {
+        guard let node else { return nil }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let type = (try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType
+        do {
+            return try await node.addToVault(key, fileAt: url, name: url.lastPathComponent,
+                                             mimeType: type?.preferredMIMEType ?? "application/octet-stream")
+        } catch { lastError = Self.message(error); return nil }
+    }
+    func setVaultItem(_ key: SymmetricKeyBox, _ item: VaultItem, active: Bool) async -> FamilyNode.VaultView? {
+        await node?.setVaultItem(key, item, active: active)
+    }
+    func vaultFile(_ item: VaultItem) async -> URL? { await node?.vaultFile(item) }
+    func closeVault() { node?.closeVault() }
+
     func savePlace(_ place: Place) async {
         Notifier.askOnce()
         await node?.savePlace(place)
@@ -246,7 +266,9 @@ final class AppModel: ObservableObject {
                                                               keySlot: KeychainSlot(service: "jibaro.familysafety", account: "history-key")),
                                   chunkStore: ChunkStore(root: directory.appendingPathComponent("files", isDirectory: true),
                                                          viewRoot: FileManager.default.temporaryDirectory.appendingPathComponent("file-views", isDirectory: true)),
-                                  placesSlot: KeychainSlot(service: "jibaro.familysafety", account: "places")) { [weak self] event in
+                                  placesSlot: KeychainSlot(service: "jibaro.familysafety", account: "places"),
+                                  vaultStore: VaultStore(directory: directory.appendingPathComponent("vault", isDirectory: true),
+                                                         viewRoot: FileManager.default.temporaryDirectory.appendingPathComponent("vault-views", isDirectory: true))) { [weak self] event in
             Task { @MainActor in self?.handle(event) }
         }
         self.node = node
