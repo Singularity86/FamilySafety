@@ -86,7 +86,7 @@ class RosterReplyRateLimitTest {
 
     @Test
     fun `a plaintext refresh request naming a member who seals theirs gets no reply`() = runTest {
-        every { e2ee.hasSequenced("bob", any()) } returns true
+        every { e2ee.refusesUnsequenced("bob", any()) } returns true
 
         sync.handleSyncRequestMessage(plainRequest("bob"))
 

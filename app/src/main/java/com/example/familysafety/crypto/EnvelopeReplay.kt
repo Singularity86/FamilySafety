@@ -81,6 +81,9 @@ class EnvelopeReplay(
         /** [senderKey] is the sender's member ID and Ed25519 key; see [senderKey]. */
         fun window(senderKey: String): ReplayWindow?
         fun setWindow(senderKey: String, window: ReplayWindow)
+        /** When this phone first took a sequenced body from [senderKey]; null if never, or before this was kept. */
+        fun firstSequencedAt(senderKey: String): Long? = null
+        fun setFirstSequencedAt(senderKey: String, atMs: Long) {}
     }
 
     /**
@@ -101,9 +104,28 @@ class EnvelopeReplay(
 
     fun seal(plaintext: String, nowMs: Long): String = SequencedBody.encode(nextSeq(nowMs), nowMs, plaintext)
 
-    /** Whether this sender has ever sent us a sequenced body; if so, unsequenced ones are refused. */
+    /** Whether this sender has ever sent us a sequenced body. */
     fun hasSequenced(memberId: String, ed25519Hex: String): Boolean =
         store.window(senderKey(memberId, ed25519Hex)) != null
+
+    /**
+     * Whether an unsequenced body (or plaintext control message) from this sender is now a
+     * downgrade: they have sequenced to us, and not just now.
+     *
+     * Just after someone starts sequencing to us, their earlier unsequenced messages can still
+     * arrive: a member sends a newcomer several at once while learning that the newcomer reads
+     * sequenced bodies, and LAN and broker deliver at different speeds. Refusing those dropped
+     * the join's first messages and called the inviter outdated. A sender first seen sequencing
+     * before this was kept has no time recorded and gets no grace.
+     */
+    fun refusesUnsequenced(memberId: String, ed25519Hex: String, nowMs: Long): Boolean =
+        refusesUnsequenced(senderKey(memberId, ed25519Hex), nowMs)
+
+    private fun refusesUnsequenced(key: String, nowMs: Long): Boolean {
+        if (store.window(key) == null) return false
+        val first = store.firstSequencedAt(key) ?: return true
+        return nowMs - first > SEQUENCING_GRACE_MS
+    }
 
     /**
      * The body of an authenticated envelope's [plaintext] from [senderId], or a
@@ -116,7 +138,7 @@ class EnvelopeReplay(
         val sequenced = SequencedBody.parse(plaintext)
         val window = store.window(key)
         if (sequenced == null) {
-            if (window != null) throw ReplayedEnvelopeException(ReplayVerdict.UNSEQUENCED_AFTER_SEQUENCED)
+            if (refusesUnsequenced(key, nowMs)) throw ReplayedEnvelopeException(ReplayVerdict.UNSEQUENCED_AFTER_SEQUENCED)
             return plaintext
         }
         if (sequenced.ts < nowMs - MAX_AGE_MS) throw ReplayedEnvelopeException(ReplayVerdict.TOO_OLD)
@@ -128,6 +150,7 @@ class EnvelopeReplay(
         val next = (window ?: ReplayWindow.EMPTY).admit(sequenced.seq)
             ?: throw ReplayedEnvelopeException(ReplayVerdict.REPLAY)
         store.setWindow(key, next)
+        if (window == null) store.setFirstSequencedAt(key, nowMs)
         return sequenced.body
     }
 
@@ -137,6 +160,8 @@ class EnvelopeReplay(
         const val SEEN_CAP = 256
         const val MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000L
         const val MAX_SKEW_MS = 24 * 60 * 60 * 1000L
+        /** How long after a sender first sequences to us their unsequenced messages still count. */
+        const val SEQUENCING_GRACE_MS = 10 * 60 * 1000L
 
         /**
          * Windows are kept per member *and key*. The envelope's member ID is a claim checked only
