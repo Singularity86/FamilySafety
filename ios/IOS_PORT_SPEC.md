@@ -1426,6 +1426,13 @@ Peers announce what they hold by publishing a `FileHoldingsAnnouncement`, wrappe
 summary, not an event: it self-heals on the next tick and a member who has just joined gets
 the whole picture at once. Android debounces to at most one announcement per 30 s.
 
+**Since 1.15.8:** announce even when you hold nothing (`"holdings": []`). Receiving one, check
+it against the files **you** shared: one that is complete here, more than 2 minutes old and not
+listed at all means the peer never got the manifest naming it, so publish the manifest again (at
+most once per 10 minutes). A share whose publish went into a connection that had already died
+was otherwise never sent again (Android Auto taking the Wi-Fi, 2026-10-27 test). A file listed
+as `PARTIAL` is known to the peer and its own chunk repair fetches it; don't re-send for those.
+
 Two anti-forgery rules, both worth copying:
 
 - Count a peer as holding a copy only when `state` is `COMPLETE` **and** its `contentHash`

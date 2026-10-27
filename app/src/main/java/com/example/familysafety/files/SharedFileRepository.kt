@@ -74,6 +74,10 @@ class SharedFileRepository @Inject constructor(
     @Volatile
     private var lastAnnouncementAt = 0L
 
+    /** Spacing for manifest re-sends prompted by a peer's holdings; see [handleHoldingsAnnouncement]. */
+    @Volatile
+    private var lastManifestResendAt = 0L
+
     companion object {
         private const val TAG = "SharedFileRepository"
         const val MAX_TOTAL_BYTES = 500L * 1024 * 1024   // 500 MB
@@ -116,6 +120,33 @@ class SharedFileRepository @Inject constructor(
 
         /** Minimum gap between holdings announcements. */
         private const val ANNOUNCE_DEBOUNCE_MS = 30_000L
+
+        /** A share younger than this may simply not have reached the peer's last announcement yet. */
+        const val MANIFEST_RESEND_MIN_AGE_MS = 2 * 60_000L
+
+        /** At most one manifest re-send this often, however many peers prompt it. */
+        const val MANIFEST_RESEND_SPACING_MS = 10 * 60_000L
+
+        /**
+         * Files this phone shared that a peer's holdings don't list at all, so the peer never got
+         * the manifest naming them. A share whose publish went into a connection that had
+         * already died (Android Auto taking the Wi-Fi, in the 2026-10-27 test) was otherwise
+         * never sent again; it reached the other phone only when the next share re-sent the
+         * manifest. Only our own complete uploads: our manifest is what names them, and
+         * re-sending it for someone else's file would overwrite theirs with our view.
+         */
+        fun sharedButUnknownTo(
+            ourFiles: List<SharedFileEntity>,
+            announcedFileIds: Set<String>,
+            myMemberId: String,
+            now: Long
+        ): List<SharedFileEntity> = ourFiles.filter {
+            it.uploaderMemberId == myMemberId &&
+                !it.isDeleted &&
+                it.downloadState == "COMPLETE" &&
+                now - it.uploadedAt >= MANIFEST_RESEND_MIN_AGE_MS &&
+                it.fileId !in announcedFileIds
+        }
 
         /** How long transfer-log entries are kept. Diagnostic, not an audit trail. */
         private const val LOG_RETENTION_MS = 14L * 24 * 60 * 60 * 1000
@@ -557,7 +588,8 @@ class SharedFileRepository @Inject constructor(
                             chunkCount = entity.chunkCount
                         )
                     }
-                if (holdings.isEmpty()) return@launch
+                // Sent even when empty: "I hold nothing" is what tells a peer who shared a
+                // file that we never heard of it, and it lets their status board say so.
 
                 val payload = sealFileMessage(
                     groupDef.groupId,
@@ -612,6 +644,22 @@ class SharedFileRepository @Inject constructor(
                 Timber.d(
                     "$TAG: ${announcement.announcerId.take(8)} holds ${rows.count { it.state == HOLDING_COMPLETE }} complete"
                 )
+
+                val myMemberId = groupStateManager.localMember.value?.memberId ?: return@launch
+                val unknown = sharedButUnknownTo(
+                    sharedFileDao.getAllFiles(),
+                    announcement.holdings.map { it.fileId }.toSet(),
+                    myMemberId,
+                    now
+                )
+                if (unknown.isNotEmpty() && now - lastManifestResendAt >= MANIFEST_RESEND_SPACING_MS) {
+                    lastManifestResendAt = now
+                    Timber.i(
+                        "$TAG: ${announcement.announcerId.take(8)} has never heard of ${unknown.size} " +
+                            "of our files — sending the manifest again"
+                    )
+                    broadcastManifest(groupDef.groupId)
+                }
             } catch (e: Exception) {
                 Timber.e(e, "$TAG: failed to handle holdings announcement")
             }
