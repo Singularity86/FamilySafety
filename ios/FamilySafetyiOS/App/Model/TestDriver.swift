@@ -16,6 +16,8 @@ import Foundation
 ///   FS_TEST_COLOR=Teal            once in a family, choose this palette colour
 ///   FS_TEST_SECURITY_REPORT=<sec> once in a family, print the security report after <sec> seconds
 ///   FS_TEST_PLACE=Name,lat,lon,m  once in a family, watch this place (everyone, arrivals and departures)
+///   FS_TEST_VAULT=<code>|<path>   once in a family and connected, add this file to the vault this code opens,
+///                                 then print what that code and a different one open
 ///   FS_TEST_UPLOAD=<path>         once in a family and connected, share this file (a host path the Simulator can read)
 @MainActor
 enum TestDriver {
@@ -26,6 +28,7 @@ enum TestDriver {
     private static var reported = false
     private static var uploaded = false
     private static var placed = false
+    private static var vaulted = false
 
     static func log(_ line: String) { print("[test] \(line)") }
 
@@ -70,6 +73,20 @@ enum TestDriver {
             let f = env["FS_TEST_PLACE"]!.split(separator: ",").map(String.init)
             if f.count == 4, let lat = Double(f[1]), let lon = Double(f[2]), let r = Double(f[3]) {
                 Task { await model.savePlace(Place(name: f[0], latitude: lat, longitude: lon, radiusMeters: r)); log("place \(f[0]) saved") }
+            }
+        case .member where env["FS_TEST_VAULT"] != nil && !vaulted:
+            vaulted = true
+            Task {
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                let parts = env["FS_TEST_VAULT"]!.components(separatedBy: "|")
+                if parts.count == 2, let key = await model.vaultKey(code: parts[0]) {
+                    if !parts[1].isEmpty { _ = await model.addToVault(key, url: URL(fileURLWithPath: parts[1])) }
+                    let mine = await model.openVault(key)?.items.map(\.payload.name) ?? []
+                    log("vault opens: \(mine) \(model.lastError ?? "")")
+                    if let other = await model.vaultKey(code: parts[0] + " not this one") {
+                        log("other code opens: \(await model.openVault(other)?.items.map(\.payload.name) ?? [])")
+                    }
+                }
             }
         case .member where env["FS_TEST_UPLOAD"] != nil && !uploaded:
             uploaded = true

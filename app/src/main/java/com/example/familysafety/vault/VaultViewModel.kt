@@ -65,8 +65,11 @@ class VaultViewModel @Inject constructor(
      */
     fun openWithCode(code: String) {
         if (_busy.value) return
+        // Set before returning, not in the coroutine: the caller navigates to the vault screen
+        // straight away, and that screen leaves on "no session and not busy". Set any later,
+        // its first frame saw both and popped it before the key was derived.
+        _busy.value = true
         viewModelScope.launch {
-            _busy.value = true
             try {
                 _session.value = repository.open(code)
                 restartTimeout()

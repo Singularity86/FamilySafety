@@ -562,7 +562,7 @@ presence publishes, which are QoS 0 (§4). The presence last-will stays QoS 1.
 | `familysafe/{id}/files/availability` | `EncryptedFileMessage` wrapping `FileHoldingsAnnouncement` | ✅ group key | no |
 | `familysafe/group/{groupId}/vault/container` | `VaultContainerMessage` | container is already opaque; signed | **yes** |
 | `familysafe/group/{groupId}/vault/chunk/{fileId}/{chunkIndex}` | plaintext `VaultChunkMessage` (data field AES-GCM under the item's content key) | contents ✅ (per-item key, not the group key) | no |
-| `familysafe/{id}/vault/repair` | plaintext `VaultChunkRequest` | ❌ (names only an opaque id) | no |
+| `familysafe/{id}/vault/repair` | `EncryptedFileMessage` wrapping `VaultChunkRequest` (since 1.15.7; plaintext before, still accepted for now) | ✅ group key | no |
 | `familysafe/{id}/avatar/request` | **LAN only** (§4.1): `{"hash"}` | inside the LAN session | — |
 | `familysafe/{id}/avatar/data` | **LAN only** (§4.1): `{"hash","jpeg"}` | inside the LAN session | — |
 
@@ -1460,7 +1460,7 @@ support**: a client that ignores it stops vault documents reaching the devices b
 // VaultChunkMessage — on familysafe/group/{groupId}/vault/chunk/{fileId}/{chunkIndex}
 { "fileId": "<uuid>", "chunkIndex": 0, "totalChunks": 0,
   "data": "<base64 of nonce ‖ ciphertext ‖ tag under the item's content key>" }
-// VaultChunkRequest — on familysafe/{peerId}/vault/repair
+// VaultChunkRequest — on familysafe/{peerId}/vault/repair, sealed (below)
 { "requesterId": "...", "fileId": "<uuid>", "missing": [0, 1, 2], "timestamp": 0 }
 // VaultSlotPayload — never on the wire; this is what is sealed into a slot
 { "fileId": "<uuid>", "name": "...", "mimeType": "...", "sizeBytes": 0,
@@ -1510,8 +1510,10 @@ Rules an implementation must not break:
 - **Never store the code, the key, or a hash of either.** A code in the binary would be the F2
   broker-credential mistake again.
 - **Never offer an "enter code" prompt.** The prompt itself proves a vault exists. Android's
-  entry point is the file search box: typing filters the list, submitting (IME "Go", 6+
-  characters) opens a vault. Any string opens one, so submitting distinguishes nothing.
+  entry point is the file search box: typing filters the list, submitting (IME "Go", 16+
+  characters, the passphrase floor below) opens a vault. Shorter submissions only filter: no
+  vault can have a shorter code, and the threshold is the same for every vault, so it reveals
+  nothing. Any string of that length opens one, so submitting distinguishes nothing.
 
 An item appears in `REPLICAS` slots; when several copies of one `fileId` open, the **highest
 `revision` wins**. `state` is `ACTIVE` or `RECLAIMED` — deletion flips the state and keeps the
@@ -1583,6 +1585,24 @@ authenticates every chunk at the moment someone opens the vault; a corrupt chunk
 Serving a `VaultChunkRequest` likewise consults only the blob store. Holding the bytes is the
 entire qualification, and answering reveals nothing — every device holds every vault document,
 so answering does not imply being able to read it.
+
+**The request is sealed** (since 1.15.7) exactly like `files/repair`: an `EncryptedFileMessage`
+(`keyVersion` 3, `kid` as for files, `data` = AES-GCM under the files subkey of the group key,
+legacy key only in a family without one). In plaintext it told anyone on the broker which vault
+document a phone was fetching, and when. Android seals it with the same code as `files/repair`
+(`FileMessageCipher`). **Receive both** for now, by these rules (Android `VaultRepairRequests`):
+- An `EncryptedFileMessage` is answered only if it opens under a key you hold. One you can't open
+  is **dropped**, never re-read as plaintext.
+- A plaintext `VaultChunkRequest` is answered only while plaintext is still accepted, for phones
+  that haven't updated. That acceptance goes in a later release.
+- Either way, `requesterId` must be in the current roster.
+
+Until a phone updates, it can't read sealed requests, so it won't serve updated phones; updated
+phones still serve it.
+
+**Residual, accepted for now:** the replies still go to `vault/chunk/{fileId}/{index}` and follow
+the request closely, so the broker can still see *that* a given vault document is being fetched,
+though no longer by whom or which pieces. Hiding that needs opaque chunk topics, a larger change.
 
 A device that was offline when a document was added fetches it the next time someone opens the
 vault **on that device**. It cannot do better: without a code it does not know the blob is
