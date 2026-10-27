@@ -9,6 +9,49 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.15.7 (48) — Vault fixes, private vault requests, steadier under load
+
+Builds on 1.15.6 (47). Contains #64 (inbound queues), #82 (sealed vault chunk requests), #83
+(vault add and open fixes) and #84 (who is inside a place survives a relaunch). Also on main
+but not in the app: #69 and #73 (Play upload tooling), #78 (security log tests). Not included:
+#67 (R8 shrinking, checklist unfinished).
+
+Wire format: **one change, no `PROTOCOL_VERSION` bump.** `vault/repair` now carries an
+`EncryptedFileMessage` instead of a plaintext `VaultChunkRequest` (agreed with the Mac
+session, 2026-10-26; iOS ships the same in its vault release). Plaintext requests from
+phones on 1.15.6 are still answered; a phone on 1.15.6 can't read sealed ones, so it won't
+send vault pieces to updated phones until it updates.
+
+Database: unchanged (11). Places add a small preferences file, `geofence_inside`, excluded
+from backup and device transfer.
+
+Fixed:
+- **Adding to the vault did nothing.** The document picker stopped the screen, which closed
+  the vault before the file came back.
+- **Opening the vault bounced back about two times in three.** The screen left on its first
+  frame, before the code had become a key.
+- **A relaunch announced everyone already inside a place as arriving.**
+
+#64 handles incoming messages in bounded, ordered lanes per kind of traffic, so a flood (or a
+burst of file pieces) can't stall chat or exhaust the phone.
+
+Checked: full unit suite (861) on main 3dde402; the vault fixes on the Galaxy S9 (the owner
+added a document). **Not yet run between two phones:** chat and file transfer through #64's
+queues. Run them before promoting past internal testing.
+
+### Play copy
+
+```
+Fixes and privacy for the family vault.
+• Adding a document to the vault works
+• The vault opens on the first try
+• A phone's requests for vault documents are now encrypted
+• Reopening the app no longer announces everyone already at a place as just arriving
+• Smoother when lots of messages or file pieces arrive at once
+```
+
+---
+
 ## 1.15.6 (47) — Local Wi-Fi security, presence for big families, security log
 
 Builds on 1.15.5 (46). Contains #49 (catch-up on a stale roster), #50 (4.1 authenticated LAN),
