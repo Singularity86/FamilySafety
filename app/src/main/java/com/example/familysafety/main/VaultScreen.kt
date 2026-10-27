@@ -67,24 +67,31 @@ fun VaultScreen(
         onDispose { activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
     }
 
+    // Our own document picker covers this screen and stops the activity. Closing then dropped
+    // the key before the picked file came back, so adding did nothing. The idle timeout still
+    // runs while the picker is up.
+    val picking = remember { mutableStateOf(false) }
+
     // Backgrounding the app closes the vault. Leaving it open behind a home press is the
     // realistic way this leaks, not an attack.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) viewModel.close()
+            if (event == Lifecycle.Event.ON_STOP && !picking.value) viewModel.close()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // The session going away — by timeout, by stop, by the user leaving — is what closes the
-    // screen. There is no separate "locked" state to get out of step with the key.
-    LaunchedEffect(session) {
-        if (session == null) onBack()
+    // screen. There is no separate "locked" state to get out of step with the key. While a
+    // code is still being derived there is no session yet either, and that is not a close.
+    LaunchedEffect(session, busy) {
+        if (session == null && !busy) onBack()
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        picking.value = false
         uri ?: return@rememberLauncherForActivityResult
         val name = context.contentResolver
             .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
@@ -138,7 +145,7 @@ fun VaultScreen(
         },
         floatingActionButton = {
             if (!busy) {
-                FloatingActionButton(onClick = { picker.launch("*/*") }, shape = CircleShape) {
+                FloatingActionButton(onClick = { picking.value = true; picker.launch("*/*") }, shape = CircleShape) {
                     Icon(Icons.Default.Add, contentDescription = "Add")
                 }
             }
