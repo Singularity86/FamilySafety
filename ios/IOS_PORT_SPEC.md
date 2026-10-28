@@ -1190,6 +1190,13 @@ two non-empty parts, else null (group chat).
 - Announce to peer P only conversations with `mayShare(conv, P)`. Act on a received summary only
   if `mayShare(conv, us)` and `mayShare(conv, sender)`. Refuse a request for a conversation the
   requester may not hold. Filter received `messages` the same way (both us and sender).
+- **Location history is this family's only (since 1.15.8).** Put only current roster members in
+  `locationDataSummary`, ignore summary entries for anyone else, and refuse a `LOCATION_HISTORY`
+  request whose `targetMemberId` isn't in the roster. A phone that moved families still holds the
+  old family's history: it announced it, and served it page after page to the new family, whose
+  phones could only drop it (no key to check the author signatures). That was both a leak and
+  about 54 wasted request and response pairs on one reconnect (2026-10-27 test). Chat was already
+  scoped by `mayShare`.
 - Never send a backup copy of a private message to third parties.
 - **No push replication.** A `ReplicationResponse` is only ever an answer to a
   `ReplicationRequest`. Never push one unsolicited, whether to back up a message you sent or to
