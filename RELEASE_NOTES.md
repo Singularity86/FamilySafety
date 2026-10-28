@@ -9,6 +9,51 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.15.8 (49) — Fixes from the first two-phone test
+
+Builds on 1.15.7 (48). Contains #86 (replay newcomer grace), #87 (manifest re-send), #88 (Files
+summary), #89 (location history scoped to the family) and #90 (reconnect on network change), all
+from bugs found in the 2026-10-27 two-phone test. Not included: #67 (R8).
+
+Wire format: **no message format change, no `PROTOCOL_VERSION` bump.** Behaviour other phones
+see:
+- Holdings announcements are now also sent when empty.
+- Location history is announced, requested and served only for current family members.
+
+Phones on 1.15.7 work with both. iOS should match #86, #87 and #89 (spec updated).
+
+Database: unchanged (11). `ReplayGuard` keeps a first-sequenced time per sender (`f:` keys in its
+existing preferences file).
+
+Fixed:
+- **Joining:** the new member's phone refused the inviter's first messages and showed the inviter
+  as "needs to update" (8 dropped in the test).
+- **A file shared as the connection dropped** never reached the other phones until the next share.
+- **"All files are on every device"** showed while a file was missing.
+- **Privacy:** a phone that had moved families sent the old family's location history to the new
+  one.
+- **Network switches** (wireless Android Auto, Wi-Fi to mobile data and back): the app now
+  reconnects at once instead of after the 120 s keep-alive and backoff. The first version hung on
+  `disconnectForcibly(0, 0)`; caught on the S9 before merge.
+
+Checked: full unit suite (883) on main 32e6155; the network switch on the S9 (Wi-Fi off:
+reconnected on mobile data in about 1 s; Wi-Fi on: switched in 1.7 s). **Not yet run:** a join
+between two phones on this build, and a real wireless Android Auto drive. Do both on the internal
+testing build before promoting.
+
+### Play copy
+
+```
+Reliability and privacy fixes.
+• New family members get the first messages from the person who invited them
+• A file shared just as your signal drops still reaches the family
+• The Files screen only says a file is on every device when it really is
+• The app reconnects right away when your phone switches networks, like when Android Auto starts
+• Location history from a previous family is never shared with a new one
+```
+
+---
+
 ## 1.15.7 (48) — Vault fixes, private vault requests, steadier under load
 
 Builds on 1.15.6 (47). Contains #64 (inbound queues), #82 (sealed vault chunk requests), #83
