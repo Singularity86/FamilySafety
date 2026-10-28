@@ -293,6 +293,9 @@ class MqttTransport @Inject constructor(
          * until the 120 s keep-alive gave up, then waited out the reconnect backoff, while
          * mobile data was up the whole time (2026-10-27 two-phone test). Pure for testing.
          */
+        /** At most this long to drop a client we are abandoning; see [dropClient]. */
+        const val DROP_CLIENT_TIMEOUT_MS = 1_000L
+
         fun <N> movedOffConnectionNetwork(connectedOn: N?, newDefault: N?, connected: Boolean): Boolean =
             connected && connectedOn != null && newDefault != null && newDefault != connectedOn
     }
@@ -1040,14 +1043,28 @@ class MqttTransport @Inject constructor(
         reconnectAttempts = 0
         connectedNetwork = null
         _connectionState.value = ConnectionState.Disconnected
-        try {
-            mqttClient?.disconnectForcibly(0, 0)
-        } catch (e: Exception) {
-            Timber.d("$TAG: could not drop the old connection: ${e.message}")
+        connectMutex.withLock {
+            mqttClient?.let { old ->
+                mqttClient = null
+                dropClient(old)
+            }
         }
         val id = memberId ?: return
         val gId = groupId ?: return
         initialize(id, emptyList(), gId)
+    }
+
+    /**
+     * Abandon [client] without waiting on it. Paho reads a disconnect timeout of 0 as "wait
+     * forever": `disconnectForcibly(0, 0)` hung the network-switch reconnect on the S9 with the
+     * phone left offline (2026-10-27). Callbacks first, so its late "connection lost" can't
+     * schedule a reconnect over the new one.
+     */
+    private suspend fun dropClient(client: MqttAsyncClient) = withContext(Dispatchers.IO) {
+        runCatching { client.setCallback(null) }
+        runCatching { client.disconnectForcibly(0, DROP_CLIENT_TIMEOUT_MS) }
+            .onFailure { Timber.d("$TAG: could not drop the old connection: ${it.message}") }
+        runCatching { client.close(true) }
     }
 
     private fun scheduleReconnect() {
@@ -1089,8 +1106,9 @@ class MqttTransport @Inject constructor(
                 // makes Paho fail the pending connect, which resumes the stuck coroutine and
                 // releases connectMutex so the initialize() below can proceed.
                 Timber.w("$TAG: Connecting state stale — aborting wedged attempt")
+                // Bounded: a timeout of 0 is "wait forever" to Paho (see dropClient).
                 try {
-                    mqttClient?.disconnectForcibly(0, 0)
+                    mqttClient?.disconnectForcibly(0, DROP_CLIENT_TIMEOUT_MS)
                 } catch (e: Exception) {
                     Timber.d("$TAG: could not abort wedged client: ${e.message}")
                 }
