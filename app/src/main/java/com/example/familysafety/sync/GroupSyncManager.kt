@@ -986,7 +986,7 @@ class GroupSyncManager @Inject constructor(
         }
         val message = json.decodeFromString<T>(payload)
         val named = group.findMemberById(claimedSender(message)) ?: return null
-        if (e2eeManager.hasSequenced(named.memberId, named.ed25519PublicKey)) {
+        if (e2eeManager.refusesUnsequenced(named.memberId, named.ed25519PublicKey)) {
             Timber.w("Plaintext $what naming ${named.memberId.take(8)}, who seals theirs — ignoring")
             SecurityRecorder.record(SecurityEventKind.FORGED_CONTROL_MESSAGE, named.memberId, T::class.simpleName)
             return null

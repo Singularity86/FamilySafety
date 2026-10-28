@@ -56,6 +56,14 @@ class ReplayGuard @Inject constructor(
             dirty.add(senderKey)
             scheduleFlush()
         }
+
+        override fun firstSequencedAt(senderKey: String): Long? =
+            prefs.getLong(FIRST_PREFIX + senderKey, 0L).takeIf { it > 0 }
+
+        // Once per sender, so written straight away rather than with the windows.
+        override fun setFirstSequencedAt(senderKey: String, atMs: Long) {
+            prefs.edit().putLong(FIRST_PREFIX + senderKey, atMs).apply()
+        }
     }
 
     private val replay = EnvelopeReplay(store) { sightings.snapshot()[it]?.protocolVersion }
@@ -75,6 +83,10 @@ class ReplayGuard @Inject constructor(
     fun seal(plaintext: String): String = replay.seal(plaintext, System.currentTimeMillis())
 
     fun hasSequenced(memberId: String, ed25519Hex: String): Boolean = replay.hasSequenced(memberId, ed25519Hex)
+
+    /** Whether this member's unsequenced or plaintext messages are now refused; see [EnvelopeReplay.refusesUnsequenced]. */
+    fun refusesUnsequenced(memberId: String, ed25519Hex: String): Boolean =
+        replay.refusesUnsequenced(memberId, ed25519Hex, System.currentTimeMillis())
 
     /** Whether [memberId] advertises protocol 4: they sign all their history (3.2) and sequence. */
     fun advertisesSequenced(memberId: String): Boolean =
@@ -136,6 +148,7 @@ class ReplayGuard @Inject constructor(
         const val PREFS_NAME = "familysafety_replay_guard"
         const val KEY_LAST_SEQ = "last_seq"
         const val WINDOW_PREFIX = "w:"
+        const val FIRST_PREFIX = "f:"
         const val FLUSH_DELAY_MS = 1_000L
     }
 }

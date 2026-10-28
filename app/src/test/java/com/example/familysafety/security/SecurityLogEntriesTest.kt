@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import com.example.familysafety.core.NetworkMonitor
 import com.example.familysafety.crypto.E2EEManager
 import com.example.familysafety.crypto.EncryptionException
+import com.example.familysafety.crypto.EnvelopeReplay
 import com.example.familysafety.crypto.RecipientKeys
 import com.example.familysafety.crypto.ReplayGuard
 import com.example.familysafety.crypto.ReplayedEnvelopeException
@@ -141,6 +142,9 @@ class SecurityLogEntriesTest {
         val now = System.currentTimeMillis()
 
         guard.open("bob", bobKey, SequencedBody.encode(seq = now * 1000, ts = now, body = "hi"))
+        // Past the newcomer grace: Bob first sequenced to us 11 minutes ago.
+        context.getSharedPreferences("familysafety_replay_guard", 0).edit()
+            .putLong("f:bob:$bobKey", now - EnvelopeReplay.SEQUENCING_GRACE_MS - 60_000).apply()
         assertThrows(ReplayedEnvelopeException::class.java) { guard.open("bob", bobKey, "plain") }
         assertOnlyEntry(SecurityEventKind.DOWNGRADE, "bob", null)
     }
@@ -172,7 +176,7 @@ class SecurityLogEntriesTest {
     @Test
     fun `a plaintext ack in the name of a member who seals theirs is a forged control message`() = runTest {
         val e2ee = mockk<E2EEManager>(relaxed = true)
-        every { e2ee.hasSequenced("bob", any()) } returns true
+        every { e2ee.refusesUnsequenced("bob", any()) } returns true
         val ack = GroupUpdateAck(groupId = "group_123", version = 3L, memberId = "bob", timestamp = 0L)
 
         syncManager(e2ee).handleAckMessage(json.encodeToString(ack))

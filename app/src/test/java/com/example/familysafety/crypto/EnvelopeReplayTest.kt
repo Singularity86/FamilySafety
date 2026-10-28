@@ -13,11 +13,16 @@ class EnvelopeReplayTest {
     private class MemoryStore : EnvelopeReplay.Store {
         var last = 0L
         val windows = mutableMapOf<String, ReplayWindow>()
+        val firsts = mutableMapOf<String, Long>()
         override fun lastSeq() = last
         override fun setLastSeq(seq: Long) { last = seq }
         override fun window(senderKey: String) = windows[senderKey]
         override fun setWindow(senderKey: String, window: ReplayWindow) { windows[senderKey] = window }
+        override fun firstSequencedAt(senderKey: String) = firsts[senderKey]
+        override fun setFirstSequencedAt(senderKey: String, atMs: Long) { firsts[senderKey] = atMs }
     }
+
+    private val grace = EnvelopeReplay.SEQUENCING_GRACE_MS
 
     private val now = 1_800_000_000_000L
     private val bobKey = "b".repeat(64)
@@ -132,7 +137,7 @@ class EnvelopeReplayTest {
     }
 
     @Test
-    fun `an unsequenced body is taken until the sender has sequenced`() {
+    fun `an unsequenced body is taken until the sender has sequenced, and refused once the grace has passed`() {
         val r = replay()
         assertEquals("""{"a":1}""", r.open("bob", bobKey, """{"a":1}""", now))
 
@@ -140,7 +145,41 @@ class EnvelopeReplayTest {
 
         assertEquals(
             ReplayVerdict.UNSEQUENCED_AFTER_SEQUENCED,
-            refused { r.open("bob", bobKey, """{"a":1}""", now) }
+            refused { r.open("bob", bobKey, """{"a":1}""", now + grace + 1) }
+        )
+    }
+
+    @Test
+    fun `a newcomer's earlier unsequenced messages arriving just after a sequenced one are still taken`() {
+        val r = replay()
+        // The inviter's sequenced message overtakes the unsequenced ones it sent a moment before.
+        r.open("bob", bobKey, SequencedBody.encode(now * 1000, now, "{}"), now)
+
+        assertEquals("""{"a":1}""", r.open("bob", bobKey, """{"a":1}""", now + 1_000))
+        assertEquals("""{"a":2}""", r.open("bob", bobKey, """{"a":2}""", now + grace))
+        assertFalse(r.refusesUnsequenced("bob", bobKey, now + grace))
+        assertTrue(r.refusesUnsequenced("bob", bobKey, now + grace + 1))
+    }
+
+    @Test
+    fun `a sender first seen sequencing before the time was kept gets no grace`() {
+        val store = MemoryStore()
+        // A window saved by an earlier build: no first-sequenced time alongside it.
+        store.windows[EnvelopeReplay.senderKey("bob", bobKey)] = ReplayWindow(0L, setOf(now * 1000))
+
+        assertTrue(replay(store).refusesUnsequenced("bob", bobKey, now))
+        assertEquals(ReplayVerdict.UNSEQUENCED_AFTER_SEQUENCED, refused { replay(store).open("bob", bobKey, "{}", now) })
+    }
+
+    @Test
+    fun `the grace runs from the first sequenced message, across a restart, and later ones don't extend it`() {
+        val store = MemoryStore()
+        replay(store).open("bob", bobKey, SequencedBody.encode(now * 1000, now, "{}"), now)
+        replay(store).open("bob", bobKey, SequencedBody.encode((now + grace) * 1000, now + grace, "{}"), now + grace)
+
+        assertEquals(
+            ReplayVerdict.UNSEQUENCED_AFTER_SEQUENCED,
+            refused { replay(store).open("bob", bobKey, "{}", now + grace + 1) }
         )
     }
 

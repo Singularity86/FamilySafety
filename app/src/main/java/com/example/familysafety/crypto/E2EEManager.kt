@@ -207,9 +207,12 @@ class E2EEManager @Inject constructor(
     fun peerSequences(memberId: String, ed25519Hex: String): Boolean =
         replayGuard.sequenceFor(memberId, ed25519Hex)
 
-    /** Whether this member has sent us sequenced envelopes; their plaintext control messages are then forgeries. */
-    fun hasSequenced(memberId: String, ed25519Hex: String): Boolean =
-        replayGuard.hasSequenced(memberId, ed25519Hex)
+    /**
+     * Whether this member's plaintext control messages are now forgeries: they have sent us
+     * sequenced envelopes, and not just now (a newcomer's first seconds race; see ReplayGuard).
+     */
+    fun refusesUnsequenced(memberId: String, ed25519Hex: String): Boolean =
+        replayGuard.refusesUnsequenced(memberId, ed25519Hex)
 
     /** Whether this member advertises protocol 4, and so signs all the history they write (3.2). */
     fun advertisesProtocol4(memberId: String): Boolean = replayGuard.advertisesSequenced(memberId)

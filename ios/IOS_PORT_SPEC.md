@@ -294,7 +294,7 @@ their traffic. Verdicts (Android `ReplayVerdict`, iOS `ReplayWindow.swift`):
 | `tooOld` | `ts < now − 7 days` |
 | `fromTheFuture` | `ts > now + 24 h` or `seq > (now + 24 h) × 1000` (receiver clock). A badly wrong sender clock fails at once instead of pushing their window ahead for months. |
 | `replay` | `seq ≤ floor`, or `seq` already in `seen` |
-| `unsequencedAfterSequenced` | a bare (unsequenced) body from a sender whose window exists. Surface the member as "needs to update". |
+| `unsequencedAfterSequenced` | a bare (unsequenced) body from a sender whose window exists, **more than 10 minutes after** you first accepted a sequenced body from them (the newcomer grace, below). Surface the member as "needs to update". |
 | `accept` | otherwise: add `seq` to `seen`; past **256** entries evict the smallest and set `floor` to it. Deliver `body`. |
 
 A refused envelope is authentic: don't treat it as a decrypt failure (no roster refresh).
@@ -302,6 +302,18 @@ Persist `floor` and `seen` (not only the highest `seq`): MQTT orders per topic o
 sender's group sync can overtake its chat, and a restart in between must still take the chat. A
 duplicate delivery (LAN and broker, QoS 1 redelivery) is now refused as `replay`; that is
 intended.
+
+**Newcomer grace (since 1.15.8).** When a sender's window is created (their first accepted
+sequenced body), also save the time, by your own clock. For **10 minutes** from then, a bare body
+from them is still accepted (not refused, not logged). It fixes a join: the inviter sends the
+newcomer several messages at once while learning that the newcomer reads sequenced bodies, LAN and
+broker deliver at different speeds, and a sequenced one overtook bare ones sent a moment earlier.
+Strict refusal dropped 8 of the inviter's first messages in the 2026-10-27 two-phone test and
+showed the inviter as "needs to update". The grace runs from the first sequenced body only (later
+ones don't extend it), survives a restart, and a window saved before this has no time and gets
+no grace. The same check decides whether a plaintext control message naming that member is a
+forgery (sealed control messages, §6.4). Android: `EnvelopeReplay.refusesUnsequenced`,
+`SEQUENCING_GRACE_MS`.
 
 ---
 
@@ -982,8 +994,9 @@ with no priority flag on the wire. What differs is the sender's obligation:
 (has `senderMemberId`, `nonce`, `ciphertext`, `signature`) or the bare JSON. An envelope must
 decrypt from a roster member, pass the replay window (§3.1), and name that member
 (`memberId` / `requesterMemberId` = the envelope's sender). Take a plaintext one only if it names
-a roster member who has **never** sent you a sequenced body; once they have, a plaintext one in
-their name is a forgery or a replay. Plaintext naming a non-member is ignored.
+a roster member who has **never** sent you a sequenced body, or whose first one was within the
+last 10 minutes (the newcomer grace, §3.1); after that, a plaintext one in their name is a
+forgery or a replay. Plaintext naming a non-member is ignored.
 **Replies are rate-limited (since Android PR #25, F16).** A peer MAY rate-limit the roster
 broadcasts it sends in reply to refresh requests or to stale versions (Android: 10 per minute
 in total). The limit must be global, never keyed only by `requesterMemberId`, which is unsigned.
