@@ -9,6 +9,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -57,6 +58,27 @@ class NetworkMonitor @Inject constructor(
     /**
      * Check if currently connected
      */
+    /**
+     * The network the system sends traffic over by default, as it changes; null while there is
+     * none. [isNetworkAvailable] can't see a switch: with mobile data up throughout, "some
+     * network is available" stays true while the Wi-Fi a connection was using goes away.
+     */
+    val defaultNetwork: Flow<Network?> = callbackFlow {
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                trySend(network)
+            }
+
+            override fun onLost(network: Network) {
+                trySend(null)
+            }
+        }
+        connectivityManager.registerDefaultNetworkCallback(callback)
+        awaitClose { connectivityManager.unregisterNetworkCallback(callback) }
+    }.distinctUntilChanged()
+
+    fun activeNetwork(): Network? = connectivityManager.activeNetwork
+
     fun isCurrentlyConnected(): Boolean {
         val network = connectivityManager.activeNetwork ?: return false
         val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
