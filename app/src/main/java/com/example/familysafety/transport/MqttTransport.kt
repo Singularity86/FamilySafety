@@ -72,6 +72,10 @@ class MqttTransport @Inject constructor(
     private val pendingBulkMessages = ConcurrentLinkedQueue<PendingMessage>()
     private var familyMemberKeys = mutableMapOf<String, RecipientKeys>()
     private var networkObserverJob: Job? = null
+    private var defaultNetworkJob: Job? = null
+
+    /** The default network when the current connection was made; see [movedOffConnectionNetwork]. */
+    @Volatile private var connectedNetwork: android.net.Network? = null
 
     /**
      * Members from whom a validly signed presence update has been seen. Once a member is
@@ -280,6 +284,17 @@ class MqttTransport @Inject constructor(
         fun isConnectingStale(connectingSinceMs: Long, nowMs: Long): Boolean =
             connectingSinceMs > 0L &&
                 nowMs - connectingSinceMs > 3 * CONNECT_ATTEMPT_TIMEOUT_MS + 10_000L
+
+        /**
+         * Whether a change of default network means our connection is on the wrong one.
+         *
+         * A socket stays on the network it was opened on. When wireless Android Auto took the
+         * phone's Wi-Fi for the car (no internet there), the connection sat on that dead route
+         * until the 120 s keep-alive gave up, then waited out the reconnect backoff, while
+         * mobile data was up the whole time (2026-10-27 two-phone test). Pure for testing.
+         */
+        fun <N> movedOffConnectionNetwork(connectedOn: N?, newDefault: N?, connected: Boolean): Boolean =
+            connected && connectedOn != null && newDefault != null && newDefault != connectedOn
     }
 
     sealed class ConnectionState {
@@ -464,6 +479,7 @@ class MqttTransport @Inject constructor(
                     }
                     _connectionState.value = ConnectionState.Connected
                     connectedAt = System.currentTimeMillis()
+                    connectedNetwork = networkMonitor.activeNetwork()
                     startKeyWatch()
                     reconnectAttempts = 0
 
@@ -984,6 +1000,17 @@ class MqttTransport @Inject constructor(
 
     private fun startNetworkMonitoring() {
         ensureActiveScope()
+        if (defaultNetworkJob?.isActive != true) {
+            defaultNetworkJob = scope.launch {
+                networkMonitor.defaultNetwork.collect { network ->
+                    val connected = _connectionState.value == ConnectionState.Connected
+                    if (movedOffConnectionNetwork(connectedNetwork, network, connected)) {
+                        Timber.i("$TAG: default network changed — reconnecting on the new one")
+                        reconnectOnNewNetwork()
+                    }
+                }
+            }
+        }
         if (networkObserverJob?.isActive == true) return
         networkObserverJob = scope.launch {
             var wasAvailable = networkMonitor.isCurrentlyConnected()
@@ -1001,6 +1028,26 @@ class MqttTransport @Inject constructor(
                 wasAvailable = isAvailable
             }
         }
+    }
+
+    /**
+     * Drop a connection left on a network the system no longer uses and connect again straight
+     * away. Forcibly: a polite DISCONNECT would have to cross the dead route first.
+     */
+    private suspend fun reconnectOnNewNetwork() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+        reconnectAttempts = 0
+        connectedNetwork = null
+        _connectionState.value = ConnectionState.Disconnected
+        try {
+            mqttClient?.disconnectForcibly(0, 0)
+        } catch (e: Exception) {
+            Timber.d("$TAG: could not drop the old connection: ${e.message}")
+        }
+        val id = memberId ?: return
+        val gId = groupId ?: return
+        initialize(id, emptyList(), gId)
     }
 
     private fun scheduleReconnect() {
@@ -1433,6 +1480,8 @@ class MqttTransport @Inject constructor(
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         reconnectJob = null
         networkObserverJob = null
+        defaultNetworkJob = null
+        connectedNetwork = null
         reconnectAttempts = 0
         _connectionState.value = ConnectionState.Disconnected
     }
@@ -1442,6 +1491,7 @@ class MqttTransport @Inject constructor(
             scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
             reconnectJob = null
             networkObserverJob = null
+            defaultNetworkJob = null
         }
     }
 }
