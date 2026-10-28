@@ -437,10 +437,15 @@ class InviteManager @Inject constructor(
                 val approval = JoinApprovalMessage(
                     inviterEd25519PublicKey = cryptoProvider.getLocalEd25519PublicKey(),
                     inviterX25519PublicKey = cryptoProvider.getLocalX25519PublicKey(),
+                    // Sequenced for a v2 joiner, who reads them (both arrived in 1.15.5) but
+                    // isn't known to us yet. Bare, it was refused as a downgrade by a phone that
+                    // already held a window for us from an earlier identity, and the joiner
+                    // waited for ever on a retained approval (2026-10-27 test).
                     encryptedGroupDefinition = e2eeManager.encryptMessage(
                         plaintext = groupDefJson,
                         recipientMemberId = request.requesterId,
-                        recipientX25519PublicKey = request.x25519PublicKey
+                        recipientX25519PublicKey = request.x25519PublicKey,
+                        sequenced = request.inviteId != null
                     )
                 )
                 val approvalPayload = json.encodeToString(approval).toByteArray(Charsets.UTF_8)

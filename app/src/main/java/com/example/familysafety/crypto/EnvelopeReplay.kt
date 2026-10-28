@@ -132,13 +132,25 @@ class EnvelopeReplay(
      * [ReplayedEnvelopeException] if the window refuses it. Call only after the signature has
      * verified under [senderEd25519Hex].
      */
+    /**
+     * @param allowUnsequenced take a bare body even from a sender who sequences to us. Only for
+     *   a message authenticated another way that a replay can't harm; see the join approval.
+     */
     @Synchronized
-    fun open(senderId: String, senderEd25519Hex: String, plaintext: String, nowMs: Long): String {
+    fun open(
+        senderId: String,
+        senderEd25519Hex: String,
+        plaintext: String,
+        nowMs: Long,
+        allowUnsequenced: Boolean = false
+    ): String {
         val key = senderKey(senderId, senderEd25519Hex)
         val sequenced = SequencedBody.parse(plaintext)
         val window = store.window(key)
         if (sequenced == null) {
-            if (refusesUnsequenced(key, nowMs)) throw ReplayedEnvelopeException(ReplayVerdict.UNSEQUENCED_AFTER_SEQUENCED)
+            if (!allowUnsequenced && refusesUnsequenced(key, nowMs)) {
+                throw ReplayedEnvelopeException(ReplayVerdict.UNSEQUENCED_AFTER_SEQUENCED)
+            }
             return plaintext
         }
         if (sequenced.ts < nowMs - MAX_AGE_MS) throw ReplayedEnvelopeException(ReplayVerdict.TOO_OLD)
