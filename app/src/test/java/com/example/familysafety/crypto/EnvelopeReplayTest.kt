@@ -162,6 +162,22 @@ class EnvelopeReplayTest {
     }
 
     @Test
+    fun `a join approval may be bare even from a sender who sequences to us, without moving the window`() {
+        // A phone rejoining under a new identity keeps its windows; an inviter before 1.15.8
+        // sends the approval bare (2026-10-27 test).
+        val store = MemoryStore()
+        store.windows[EnvelopeReplay.senderKey("bob", bobKey)] = ReplayWindow(0L, setOf(now * 1000))
+        val before = store.windows.toMap()
+
+        assertEquals("approval", replay(store).open("bob", bobKey, "approval", now, allowUnsequenced = true))
+        assertEquals(before, store.windows)
+        assertEquals(
+            ReplayVerdict.UNSEQUENCED_AFTER_SEQUENCED,
+            refused { replay(store).open("bob", bobKey, "anything else", now) }
+        )
+    }
+
+    @Test
     fun `a sender first seen sequencing before the time was kept gets no grace`() {
         val store = MemoryStore()
         // A window saved by an earlier build: no first-sequenced time alongside it.

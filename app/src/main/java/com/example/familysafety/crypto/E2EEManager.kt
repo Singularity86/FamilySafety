@@ -54,19 +54,22 @@ class E2EEManager @Inject constructor(
     /**
      * @param recipientEd25519Hex the recipient's roster key, if known; lets a recipient who has
      *   already sent us sequenced envelopes get them back before their presence is seen (3.4)
+     * @param sequenced sequence it whatever we know of the recipient, because the caller knows
+     *   they read sequenced bodies (a v2 joiner, see the join approval)
      */
     fun encryptMessage(
         plaintext: String,
         recipientMemberId: String,
         recipientX25519PublicKey: ByteArray,
-        recipientEd25519Hex: String? = null
+        recipientEd25519Hex: String? = null,
+        sequenced: Boolean = false
     ): String {
         val sharedSecret = getOrComputeSharedSecret(recipientMemberId, recipientX25519PublicKey)
 
         val nonce = lazySodium.randomBytesBuf(SecretBox.NONCEBYTES)
 
         // Sequenced only for a peer that can read it (3.4); older builds would fail to parse it.
-        val body = if (replayGuard.sequenceFor(recipientMemberId, recipientEd25519Hex)) {
+        val body = if (sequenced || replayGuard.sequenceFor(recipientMemberId, recipientEd25519Hex)) {
             replayGuard.seal(plaintext)
         } else plaintext
         val plaintextBytes = body.toByteArray(Charsets.UTF_8)
@@ -97,10 +100,12 @@ class E2EEManager @Inject constructor(
         return Json.encodeToString(encryptedMessage)
     }
 
+    /** @param allowUnsequenced see [EnvelopeReplay.open]; only the join approval uses it. */
     fun decryptMessage(
         encryptedMessageJson: String,
         senderX25519PublicKey: ByteArray,
-        senderEd25519PublicKey: ByteArray
+        senderEd25519PublicKey: ByteArray,
+        allowUnsequenced: Boolean = false
     ): String {
         val encryptedMessage = try {
             Json.decodeFromString<EncryptedMessage>(encryptedMessageJson)
@@ -152,7 +157,8 @@ class E2EEManager @Inject constructor(
         return replayGuard.open(
             senderId = encryptedMessage.senderMemberId,
             senderEd25519Hex = senderEd25519PublicKey.toHex(),
-            plaintext = String(plaintext, Charsets.UTF_8)
+            plaintext = String(plaintext, Charsets.UTF_8),
+            allowUnsequenced = allowUnsequenced
         )
     }
 

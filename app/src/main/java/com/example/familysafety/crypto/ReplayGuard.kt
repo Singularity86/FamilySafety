@@ -95,11 +95,11 @@ class ReplayGuard @Inject constructor(
     /** For the security log only: a LAN + broker duplicate isn't worth an entry. */
     private val recentlyAccepted = RecentSequences()
 
-    fun open(senderId: String, senderEd25519Hex: String, plaintext: String): String {
+    fun open(senderId: String, senderEd25519Hex: String, plaintext: String, allowUnsequenced: Boolean = false): String {
         val now = System.currentTimeMillis()
         val key = EnvelopeReplay.senderKey(senderId, senderEd25519Hex)
         return try {
-            replay.open(senderId, senderEd25519Hex, plaintext, now)
+            replay.open(senderId, senderEd25519Hex, plaintext, now, allowUnsequenced)
                 .also {
                     if (senderId in _downgradedMembers.value) _downgradedMembers.update { it - senderId }
                     SequencedBody.parse(plaintext)?.let { recentlyAccepted.accepted(key, it.seq, now) }
@@ -144,11 +144,30 @@ class ReplayGuard @Inject constructor(
         }, FLUSH_DELAY_MS, TimeUnit.MILLISECONDS)
     }
 
-    private companion object {
-        const val PREFS_NAME = "familysafety_replay_guard"
-        const val KEY_LAST_SEQ = "last_seq"
-        const val WINDOW_PREFIX = "w:"
-        const val FIRST_PREFIX = "f:"
-        const val FLUSH_DELAY_MS = 1_000L
+    companion object {
+        /**
+         * Call when this phone takes on the identity [ownerEd25519Hex]. Windows describe what one
+         * identity was sent; if they were kept for another (or for one not recorded, before
+         * this), they are dropped. Kept, a previous identity's windows refused the family's first
+         * bare messages to the new one as downgrades, approval included, and the newcomer waited
+         * for ever (2026-10-27 test). The same identity restored from its phrase keeps them, and
+         * our own counter always stays: it must keep rising.
+         */
+        fun belongTo(context: Context, ownerEd25519Hex: String) {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            if (prefs.getString(KEY_OWNER, null).equals(ownerEd25519Hex, ignoreCase = true)) return
+            val editor = prefs.edit()
+            prefs.all.keys
+                .filter { it.startsWith(WINDOW_PREFIX) || it.startsWith(FIRST_PREFIX) }
+                .forEach { editor.remove(it) }
+            editor.putString(KEY_OWNER, ownerEd25519Hex.lowercase()).commit()
+        }
+
+        private const val PREFS_NAME = "familysafety_replay_guard"
+        private const val KEY_LAST_SEQ = "last_seq"
+        private const val KEY_OWNER = "owner"
+        private const val WINDOW_PREFIX = "w:"
+        private const val FIRST_PREFIX = "f:"
+        private const val FLUSH_DELAY_MS = 1_000L
     }
 }
