@@ -9,11 +9,13 @@ each entry fits; everything under it is for us.
 
 ---
 
-## 1.15.8 (49) — Fixes from the first two-phone test
+## 1.15.8 (50) — Fixes from the first two-phone test
 
 Builds on 1.15.7 (48). Contains #86 (replay newcomer grace), #87 (manifest re-send), #88 (Files
 summary), #89 (location history scoped to the family) and #90 (reconnect on network change), all
-from bugs found in the 2026-10-27 two-phone test. Not included: #67 (R8).
+from bugs found in the 2026-10-27 two-phone test, and #92 (join approval), found in this
+release's own check. Build 49 went to internal testing only, without #92, and was never
+promoted. Not included: #67 (R8).
 
 Wire format: **no message format change, no `PROTOCOL_VERSION` bump.** Behaviour other phones
 see:
@@ -22,8 +24,8 @@ see:
 
 Phones on 1.15.7 work with both. iOS should match #86, #87 and #89 (spec updated).
 
-Database: unchanged (11). `ReplayGuard` keeps a first-sequenced time per sender (`f:` keys in its
-existing preferences file).
+Database: unchanged (11). `ReplayGuard` keeps a first-sequenced time per sender (`f:` keys) and
+the identity its windows belong to (`owner`), in its existing preferences file.
 
 Fixed:
 - **Joining:** the new member's phone refused the inviter's first messages and showed the inviter
@@ -35,17 +37,23 @@ Fixed:
 - **Network switches** (wireless Android Auto, Wi-Fi to mobile data and back): the app now
   reconnects at once instead of after the 120 s keep-alive and backoff. The first version hung on
   `disconnectForcibly(0, 0)`; caught on the S9 before merge.
+- **Rejoining stuck on "Waiting for approval" (#92):** a phone that took on a new identity kept
+  the old one's replay windows and refused its own approval as a downgrade, for good, since the
+  approval is retained. Approvals are now sent sequenced, a joiner accepts a bare one from older
+  inviters, and windows are dropped when the identity changes.
 
-Checked: full unit suite (883) on main 32e6155; the network switch on the S9 (Wi-Fi off:
-reconnected on mobile data in about 1 s; Wi-Fi on: switched in 1.7 s). **Not yet run:** a join
-between two phones on this build, and a real wireless Android Auto drive. Do both on the internal
-testing build before promoting.
+Checked: full unit suite (887) on main 767acfe. On the S9 and the owner's XCover (debug builds of
+this code): the stuck XCover joined once it had #92; chat both ways with no refusals; a file shared
+from the XCover arrived and verified on the S9; the network switch on the S9 (Wi-Fi off:
+reconnected on mobile data in about 1 s; Wi-Fi on: switched in 1.7 s). **Not yet run:** a real
+wireless Android Auto drive. Promoted to all users on the owner's instruction.
 
 ### Play copy
 
 ```
 Reliability and privacy fixes.
 • New family members get the first messages from the person who invited them
+• Rejoining a family no longer gets stuck waiting for approval
 • A file shared just as your signal drops still reaches the family
 • The Files screen only says a file is on every device when it really is
 • The app reconnects right away when your phone switches networks, like when Android Auto starts
