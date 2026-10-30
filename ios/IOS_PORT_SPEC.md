@@ -287,7 +287,11 @@ a **sequenced body** wrapping the message:
 sequenced if it is a JSON object with integer `seq`, integer `ts` and string `body`. Keep a
 window per **(sender memberId, sender Ed25519 key)** — never per ID alone: a join request brings
 its own key, and keyed by ID a joiner naming a member could push that member's window past all
-their traffic. Verdicts (Android `ReplayVerdict`, iOS `ReplayWindow.swift`):
+their traffic. **Windows belong to this phone's identity (since Android 1.15.8, #92):** record
+the Ed25519 key they were kept for, and drop them on taking on a different identity, or if they
+were saved before the owner was recorded. The same identity restored from its phrase keeps them;
+your own sequence counter always stays. Android `ReplayGuard.belongTo`, iOS
+`ProtocolLedger.belong(to:)`. Verdicts (Android `ReplayVerdict`, iOS `ReplayWindow.swift`):
 
 | Verdict | When |
 |---|---|
@@ -2095,6 +2099,13 @@ inviter approving "Dana" would encrypt the family, file key included, to the out
 { "inviterEd25519PublicKey": "<hex>", "inviterX25519PublicKey": "<hex>",
   "encryptedGroupDefinition": "<Envelope JSON (§3) wrapping the GroupDefinition JSON>" }
 ```
+   **Since Android 1.15.8 (#92)**, the envelope's plaintext for a **v2** joiner is a sequenced
+   body (§3.1) wrapping the GroupDefinition JSON: v2 joins and sequencing both arrived in 1.15.5.
+   Bare, it was refused as a downgrade by a phone still holding a window for the inviter from an
+   earlier identity, and the joiner waited for ever on a retained approval. The **joiner** takes
+   either form, even from an inviter who sequences to it (inviters before this send bare): the
+   approval is already pinned to the scanned invite, signed by the inviter and sealed to the
+   joiner's keys, so a replay of it can't harm. iOS: `InviterDesk.approve`, `JoinFlow.evaluate`.
 5. Broadcast `MEMBER_ADDED` group sync to existing members + refresh request.
 
 Rejection: same topic, retained, distinct field names:

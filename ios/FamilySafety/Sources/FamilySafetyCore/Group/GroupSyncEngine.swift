@@ -96,7 +96,9 @@ public actor GroupSyncEngine {
     ) {
         self.ledgerSlot = ledgerSlot
         self.security = security
-        self.ledger = (try? ledgerSlot?.readJSON(ProtocolLedger.self)) ?? ProtocolLedger(observingSinceMs: now())
+        var ledger = (try? ledgerSlot?.readJSON(ProtocolLedger.self)) ?? ProtocolLedger(observingSinceMs: now())
+        if ledger.belong(to: identity.ed25519PublicKeyHex) { try? ledgerSlot?.writeJSON(ledger) }
+        self.ledger = ledger
         self.identity = identity
         self.crypto = E2EECrypto(
             localMemberId: identity.memberId,
@@ -372,6 +374,18 @@ public actor GroupSyncEngine {
         seal(plaintext, to: peer)
     }
 
+    /// The join approval for a v2 joiner, sealed sequenced: they read sequenced bodies (v2 joins
+    /// and sequencing both arrived in Android 1.15.5) but aren't known to us yet. Bare, it was
+    /// refused as a downgrade by a phone still holding a window for us (Android #92).
+    public func sealSequenced(_ plaintext: String, recipientMemberId: String, recipientX25519: [UInt8]) -> Data? {
+        let t = now()
+        let seq = ledger.counter.next(nowMs: t)
+        guard saveLedger(),
+              let json = try? JSONEncoder().encode(SequencedBody(seq: seq, ts: t, body: plaintext)),
+              let wrapped = String(data: json, encoding: .utf8) else { return nil }
+        return try? crypto.encrypt(plaintext: wrapped, recipientMemberId: recipientMemberId, recipientX25519PublicKey: recipientX25519)
+    }
+
     /// Opens an envelope from a roster member through the replay window (§3.1). Returns the
     /// authenticated sender and the body, or nil (and logs anything suspicious).
     public func openFromPeer(_ payload: Data) async -> (sender: FamilyMember, body: String)? {
@@ -457,7 +471,8 @@ public actor GroupSyncEngine {
 
     /// A refresh request or ack from a roster member, or nil. Sealed, the member it names must
     /// be the envelope's sender. Plaintext proves nothing, so it's taken only while the member it
-    /// names has never sent us a sequenced body; once they have, it's a forgery or a replay.
+    /// names has never sent us a sequenced body, or did first within the newcomer grace; after
+    /// that, it's a forgery or a replay.
     private func openControl<T: Decodable>(_ type: T.Type, _ payload: Data, roster: GroupDefinition,
                                            claimedSender: (T) -> String) -> T? {
         if EncryptedEnvelope.peekSenderMemberId(json: payload) != nil {
@@ -468,7 +483,7 @@ public actor GroupSyncEngine {
         }
         guard let message = try? JSONDecoder().decode(T.self, from: payload),
               let named = roster.findMember(byId: claimedSender(message)) else { return nil }
-        guard !ledger.window.hasSequenced(ProtocolLedger.windowKey(named)) else {
+        guard !ledger.window.refusesUnsequenced(ProtocolLedger.windowKey(named), nowMs: now()) else {
             security?.record(.forgedControlMessage, memberId: named.memberId, detail: "\(T.self)")
             return nil
         }

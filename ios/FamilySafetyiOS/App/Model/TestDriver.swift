@@ -1,4 +1,5 @@
 #if DEBUG
+import CryptoKit
 import FamilySafetyCore
 import Foundation
 
@@ -17,7 +18,8 @@ import Foundation
 ///   FS_TEST_SECURITY_REPORT=<sec> once in a family, print the security report after <sec> seconds
 ///   FS_TEST_PLACE=Name,lat,lon,m  once in a family, watch this place (everyone, arrivals and departures)
 ///   FS_TEST_VAULT=<code>|<path>   once in a family and connected, add this file to the vault this code opens,
-///                                 then print what that code and a different one open
+///                                 then print what that code and a different one open, and each document's
+///                                 SHA-256 once its chunks are here (an empty path only opens)
 ///   FS_TEST_UPLOAD=<path>         once in a family and connected, share this file (a host path the Simulator can read)
 @MainActor
 enum TestDriver {
@@ -83,6 +85,19 @@ enum TestDriver {
                     if !parts[1].isEmpty { _ = await model.addToVault(key, url: URL(fileURLWithPath: parts[1])) }
                     let mine = await model.openVault(key)?.items.map(\.payload.name) ?? []
                     log("vault opens: \(mine) \(model.lastError ?? "")")
+                    // Each document's bytes, once every chunk is here (repaired if need be), for 2 minutes.
+                    for _ in 0..<12 {
+                        let items = await model.openVault(key)?.items.filter(\.isActive) ?? []
+                        var lines: [String] = []
+                        for item in items {
+                            let digest = await model.vaultFile(item).flatMap { try? Data(contentsOf: $0) }
+                                .map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() }
+                            lines.append("\(item.payload.name): \(digest ?? "not yet")")
+                        }
+                        log("vault documents: \(lines)")
+                        if !lines.contains(where: { $0.hasSuffix("not yet") }) { break }
+                        try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    }
                     if let other = await model.vaultKey(code: parts[0] + " not this one") {
                         log("other code opens: \(await model.openVault(other)?.items.map(\.payload.name) ?? [])")
                     }

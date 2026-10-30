@@ -101,7 +101,10 @@ public enum JoinFlow {
                   let json = try? crypto.decrypt(envelopeJSON: Data(approval.encryptedGroupDefinition.utf8),
                                                  senderMemberId: pending.inviterMemberId,
                                                  senderX25519PublicKey: inviterX, senderEd25519PublicKey: inviterEd),
-                  let group = try? decoder.decode(GroupDefinition.self, from: Data(json.utf8)) else {
+                  // Sequenced from an inviter on Android 1.15.8+ (#92), bare from earlier ones. Either
+                  // is taken: the approval is pinned to the scanned invite, signed by the inviter and
+                  // sealed to our keys, so a replay of it can do no harm.
+                  let group = try? decoder.decode(GroupDefinition.self, from: Data((SequencedBody.parse(json)?.body ?? json).utf8)) else {
                 return .ignore("approval failed decryption or signature")
             }
             guard group.groupId == pending.groupId else { return .ignore("group ID does not match the invite") }

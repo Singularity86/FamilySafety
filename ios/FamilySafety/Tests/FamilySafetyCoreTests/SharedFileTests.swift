@@ -187,9 +187,9 @@ final class SharedFileTests: XCTestCase {
     func test_announcement_isDebounced_andOnlyMembersCount() {
         var lib = FileLibrary()
         _ = lib.apply(FileManifest(groupId: "g-1", files: [file("a")], version: 1), groupId: "g-1", now: 0)
-        XCTAssertNil(lib.announcement(me: "me", now: 0), "nothing held, nothing to say")
+        XCTAssertEqual(lib.announcement(me: "me", now: 0)?.holdings, [], "nothing held is said too (since 1.15.8)")
         _ = lib.recordChunk(fileId: "a", index: 0, keyVersion: 3, now: 0)
-        XCTAssertEqual(lib.announcement(me: "me", now: 0)?.holdings.first?.state, "PARTIAL")
+        XCTAssertEqual(lib.announcement(me: "me", now: 0, force: true)?.holdings.first?.state, "PARTIAL")
         XCTAssertNil(lib.announcement(me: "me", now: 29_999))
         XCTAssertNotNil(lib.announcement(me: "me", now: 29_999, force: true))
         lib.record(FileHoldingsAnnouncement(announcerId: "eve", holdings: [], timestamp: 0), from: "eve", members: ["ben"])

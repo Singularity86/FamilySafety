@@ -51,24 +51,50 @@ public struct ReplayWindow: Codable, Equatable, Sendable {
         /// decision, 2026-10-14).
         case fromTheFuture
         case replay
-        /// A plain body after a sequenced one from the same sender (a downgrade). Surface it.
+        /// A plain body after a sequenced one from the same sender, past the newcomer grace (a
+        /// downgrade). Surface it.
         case unsequencedAfterSequenced
     }
 
     public static let maxAgeMs: Int64 = 7 * 24 * 60 * 60 * 1000
     public static let maxAheadMs: Int64 = 24 * 60 * 60 * 1000
     public static let seenCap = 256
+    /// How long after a sender's first sequenced body their bare ones still count (since 1.15.8).
+    public static let sequencingGraceMs: Int64 = 10 * 60 * 1000
 
     private var floor: [String: Int64] = [:]
     private var seen: [String: [Int64]] = [:]
     public private(set) var hwm: [String: Int64] = [:]
+    /// When we first accepted a sequenced body from each sender, by our clock. A window saved
+    /// before this was kept has none, and gets no grace.
+    private var firstSequencedAt: [String: Int64] = [:]
 
     public init() {}
 
+    private enum CodingKeys: String, CodingKey { case floor, seen, hwm, firstSequencedAt }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        floor = try c.decodeIfPresent([String: Int64].self, forKey: .floor) ?? [:]
+        seen = try c.decodeIfPresent([String: [Int64]].self, forKey: .seen) ?? [:]
+        hwm = try c.decodeIfPresent([String: Int64].self, forKey: .hwm) ?? [:]
+        firstSequencedAt = try c.decodeIfPresent([String: Int64].self, forKey: .firstSequencedAt) ?? [:]
+    }
+
     public func hasSequenced(_ sender: String) -> Bool { hwm[sender] != nil }
 
+    /// Whether a bare body (or plaintext control message) from this sender is now a downgrade:
+    /// they have sequenced to us, and not just now. Right after a member starts sequencing to a
+    /// newcomer, bare messages they sent a moment earlier can still arrive (LAN and broker
+    /// deliver at different speeds); refusing those dropped a join's first messages (§3.1).
+    public func refusesUnsequenced(_ sender: String, nowMs: Int64) -> Bool {
+        guard hasSequenced(sender) else { return false }
+        guard let first = firstSequencedAt[sender] else { return true }
+        return nowMs - first > Self.sequencingGraceMs
+    }
+
     public mutating func check(sender: String, body: SequencedBody?, nowMs: Int64) -> Verdict {
-        guard let body else { return hasSequenced(sender) ? .unsequencedAfterSequenced : .accept }
+        guard let body else { return refusesUnsequenced(sender, nowMs: nowMs) ? .unsequencedAfterSequenced : .accept }
         if body.ts < nowMs - Self.maxAgeMs { return .tooOld }
         if body.ts > nowMs + Self.maxAheadMs || body.seq > (nowMs + Self.maxAheadMs) &* 1000 { return .fromTheFuture }
         var window = seen[sender] ?? []
@@ -81,6 +107,7 @@ public struct ReplayWindow: Codable, Equatable, Sendable {
             floor[sender] = max(floor[sender] ?? evicted, evicted)
         }
         seen[sender] = window
+        if hwm[sender] == nil { firstSequencedAt[sender] = nowMs }
         hwm[sender] = max(hwm[sender] ?? body.seq, body.seq)
         return .accept
     }
