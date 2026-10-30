@@ -21,6 +21,7 @@ import Foundation
 ///                                 then print what that code and a different one open, and each document's
 ///                                 SHA-256 once its chunks are here (an empty path only opens)
 ///   FS_TEST_UPLOAD=<path>         once in a family and connected, share this file (a host path the Simulator can read)
+///   FS_TEST_TAB=0…4               open on this tab: Map, Family, Files, Chat, Settings (read in FamilyRoot)
 @MainActor
 enum TestDriver {
     static let env = ProcessInfo.processInfo.environment

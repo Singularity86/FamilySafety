@@ -493,10 +493,7 @@ public actor FamilyNode {
             switch await desk.handle(payload: payload) {
             case .prompted: await publishPrompts()
             case .dropped(let reason):
-                // A member's ID with someone else's keys is an impersonation attempt; the rest
-                // are failed checks (a spent, expired or forged invite).
-                security.record(reason == "member ID with different keys" ? .impersonatedJoin : .joinRequestRejected,
-                                memberId: nil, detail: reason)
+                security.record(InviterDesk.securityKind(forDropped: reason), memberId: nil, detail: reason)
             default: break
             }
             if let group = await store.current, case .member = state { setState(.member(group)) }
