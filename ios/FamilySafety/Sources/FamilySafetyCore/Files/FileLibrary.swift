@@ -265,7 +265,22 @@ public struct FileLibrary: Codable, Equatable, Sendable {
         holdings = holdings.filter { members.contains($0.key) }
     }
 
-    /// Our own holdings, or nil while debounced or when there is nothing to say.
+    public static let manifestResendMinAgeMs: Int64 = 2 * 60_000
+    public static let manifestResendSpacingMs: Int64 = 10 * 60_000
+
+    /// Files we shared that are complete here, over 2 minutes old, and not listed at all in a
+    /// peer's holdings: they never got the manifest naming them. Only our own uploads (our
+    /// manifest is what names them). One listed as PARTIAL is known; its repair fetches it.
+    public func sharedButUnknown(to a: FileHoldingsAnnouncement, me: String, now: Int64) -> [String] {
+        let listed = Set(a.holdings.map(\.fileId))
+        return entries.values.filter {
+            $0.file.uploaderMemberId == me && !$0.file.isDeleted && $0.state == .complete &&
+                now - $0.file.uploadedAt >= Self.manifestResendMinAgeMs && !listed.contains($0.file.fileId)
+        }.map(\.file.fileId).sorted()
+    }
+
+    /// Our own holdings, or nil while debounced. Sent even when empty (since 1.15.8), so a peer
+    /// can tell we never heard of a file it shared.
     public mutating func announcement(me: String, now: Int64, force: Bool = false) -> FileHoldingsAnnouncement? {
         if !force, let last = lastAnnouncedAtMs, now - last < Self.announceDebounceMs { return nil }
         let held = entries.values.filter { !$0.file.isDeleted && $0.file.chunkCount > 0 && !$0.held.isEmpty }
@@ -273,7 +288,6 @@ public struct FileLibrary: Codable, Equatable, Sendable {
             .map { FileHolding(fileId: $0.file.fileId, contentHash: $0.file.contentHash,
                                state: $0.state == .complete ? FileHolding.complete : FileHolding.partial,
                                chunksHeld: $0.chunksHeld, chunkCount: $0.file.chunkCount) }
-        guard !held.isEmpty else { return nil }
         lastAnnouncedAtMs = now
         return FileHoldingsAnnouncement(announcerId: me, holdings: held, timestamp: now)
     }

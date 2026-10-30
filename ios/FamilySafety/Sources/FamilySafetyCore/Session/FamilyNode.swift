@@ -554,6 +554,14 @@ public actor FamilyNode {
             library.record(a, from: a.announcerId, members: Set(group.members.map(\.memberId)).subtracting([me]))
             saveLibrary()
             onEvent(.files(library))
+            // A peer who has never heard of a file we shared missed its manifest: a share published
+            // into a connection that had already died was otherwise never sent again (since 1.15.8).
+            let t = now()
+            if group.containsMember(a.announcerId), !library.sharedButUnknown(to: a, me: me, now: t).isEmpty,
+               lastManifestResendAtMs.map({ t - $0 >= FileLibrary.manifestResendSpacingMs }) ?? true {
+                lastManifestResendAtMs = t
+                await publishManifest()
+            }
         default:
             if let group = await store.current, topic == Topics.vaultContainer(groupId: group.groupId) {
                 receiveVaultContainer(payload, group: group)
@@ -799,7 +807,9 @@ public actor FamilyNode {
 
     private func announceChat() async {
         guard case .member(let group) = state, transport.isConnected else { return }
-        let locations = history.summaries()
+        // This family's only: a phone that moved families still holds the old one's (since 1.15.8).
+        let roster = Set(group.members.map(\.memberId))
+        let locations = history.summaries().filter { roster.contains($0.memberId) }
         for peer in group.members where peer.memberId != identity.memberId {
             let chatPart = replication.announcement(for: peer.memberId, book: chat, groupId: group.groupId, now: now())
             guard !chatPart.chatDataSummary.isEmpty || !locations.isEmpty else { continue }
@@ -1271,6 +1281,9 @@ public actor FamilyNode {
         fileRequestSeen[requester] = t
         await publishManifest()
     }
+
+    /// When the manifest was last sent again for a peer who'd never heard of one of our files.
+    private var lastManifestResendAtMs: Int64?
 
     private func saveLibrary() { try? librarySlot.writeJSON(library) }
 

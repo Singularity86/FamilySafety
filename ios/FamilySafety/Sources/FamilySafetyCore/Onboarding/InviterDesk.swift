@@ -143,7 +143,16 @@ public actor InviterDesk {
             throw JoinDeskError.storage
         }
         let json = String(decoding: try JSONEncoder().encode(group), as: UTF8.self)
-        let envelope = try crypto.encrypt(plaintext: json, recipientMemberId: request.requesterId, recipientX25519PublicKey: Array(x))
+        let envelope: Data
+        if inviteId != nil {
+            // A v2 joiner reads sequenced bodies (Android #92).
+            guard let sealed = await engine.sealSequenced(json, recipientMemberId: request.requesterId, recipientX25519: Array(x)) else {
+                throw JoinDeskError.storage
+            }
+            envelope = sealed
+        } else {
+            envelope = try crypto.encrypt(plaintext: json, recipientMemberId: request.requesterId, recipientX25519PublicKey: Array(x))
+        }
         let approval = JoinApprovalMessage(inviterEd25519PublicKey: identity.ed25519PublicKeyHex,
                                            inviterX25519PublicKey: identity.x25519PublicKeyHex,
                                            encryptedGroupDefinition: String(decoding: envelope, as: UTF8.self))

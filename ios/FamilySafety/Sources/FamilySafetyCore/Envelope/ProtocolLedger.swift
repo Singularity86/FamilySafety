@@ -10,8 +10,25 @@ public struct ProtocolLedger: Codable, Equatable, Sendable {
     public var observingSinceMs: Int64
     public var counter = SequenceCounter()
     public var window = ReplayWindow()
+    /// The Ed25519 key (hex) of the identity the replay windows belong to; nil if saved before
+    /// this was kept.
+    public private(set) var owner: String?
 
     public init(observingSinceMs: Int64) { self.observingSinceMs = observingSinceMs }
+
+    /// Call when this phone takes on `ed25519Hex`. Windows describe what one identity has been
+    /// sent, so another identity's (or ones saved before owners were kept) are dropped: a phone
+    /// rejoining under a new identity otherwise refused its inviter's bare approval for good
+    /// (Android #92). The same identity restored from its phrase keeps them; the counter always
+    /// stays. Returns whether anything changed.
+    @discardableResult
+    public mutating func belong(to ed25519Hex: String) -> Bool {
+        let key = ed25519Hex.lowercased()
+        guard owner != key else { return false }
+        window = ReplayWindow()
+        owner = key
+        return true
+    }
 
     /// The replay window is per (member, Ed25519 key), never per ID alone (§3.1).
     public static func windowKey(_ member: FamilyMember) -> String {
