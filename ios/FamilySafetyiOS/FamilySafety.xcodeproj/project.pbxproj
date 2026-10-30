@@ -186,6 +186,8 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Jibaro Family Safety";
 				INFOPLIST_KEY_NSCameraUsageDescription = "The camera scans a family member's invite code. Nothing it sees leaves your phone.";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID confirms it's you before your recovery phrase is shown.";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "With Always, your family keeps seeing where you are after you close the app: this phone wakes when you've moved about 150 m and sends one encrypted position, readable only by your family. No server ever sees it. Pause sharing any time in Settings.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Your family sees where you are while the app is open: your position is encrypted on this phone and only your family can read it. No server ever sees it. You can pause sharing in Settings.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
@@ -214,6 +216,8 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Jibaro Family Safety";
 				INFOPLIST_KEY_NSCameraUsageDescription = "The camera scans a family member's invite code. Nothing it sees leaves your phone.";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID confirms it's you before your recovery phrase is shown.";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "With Always, your family keeps seeing where you are after you close the app: this phone wakes when you've moved about 150 m and sends one encrypted position, readable only by your family. No server ever sees it. Pause sharing any time in Settings.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Your family sees where you are while the app is open: your position is encrypted on this phone and only your family can read it. No server ever sees it. You can pause sharing in Settings.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;

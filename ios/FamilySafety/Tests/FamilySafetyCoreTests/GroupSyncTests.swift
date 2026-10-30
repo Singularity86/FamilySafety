@@ -232,18 +232,18 @@ final class GroupSyncTests: XCTestCase {
     private func pair() async throws -> (alice: FamilySafeIdentity, bob: FamilySafeIdentity, base: GroupDefinition,
                                           aliceEngine: GroupSyncEngine, bobEngine: GroupSyncEngine,
                                           aliceStore: GroupStateStore, bobStore: GroupStateStore,
-                                          aliceOut: CapturingOutbox, bobOut: CapturingOutbox) {
+                                          aliceOut: CapturingOutbox, bobOut: CapturingOutbox, clock: ManualClock) {
         let alice = try identity("alice"), bob = try identity("bob")
         let base = group([member(alice, "A"), member(bob, "B")], creator: alice, version: 2)
         let aliceStore = GroupStateStore(localMemberId: alice.memberId, persistence: InMemoryGroupStatePersistence(initial: base))
         let bobStore = GroupStateStore(localMemberId: bob.memberId, persistence: InMemoryGroupStatePersistence(initial: base))
         try await aliceStore.load(); try await bobStore.load()
         let aliceOut = CapturingOutbox(), bobOut = CapturingOutbox()
-        let clock: @Sendable () -> Int64 = { 1_800_000_000_000 }
+        let clock = ManualClock(1_800_000_000_000)
         return (alice, bob, base,
-                GroupSyncEngine(identity: alice, store: aliceStore, outbox: aliceOut, now: clock),
-                GroupSyncEngine(identity: bob, store: bobStore, outbox: bobOut, now: clock),
-                aliceStore, bobStore, aliceOut, bobOut)
+                GroupSyncEngine(identity: alice, store: aliceStore, outbox: aliceOut, now: { clock.ms }),
+                GroupSyncEngine(identity: bob, store: bobStore, outbox: bobOut, now: { clock.ms }),
+                aliceStore, bobStore, aliceOut, bobOut, clock)
     }
 
     func test_engine_broadcastIsAppliedByPeerAndAcked() async throws {
@@ -380,7 +380,9 @@ final class GroupSyncTests: XCTestCase {
         await p.aliceEngine.handleAck(payload: sealedAcks[0])
         let acked = await p.aliceEngine.acks[3]
         XCTAssertEqual(acked, [p.bob.memberId])
-        // Once Bob has sequenced to Alice, a plaintext ack or request in his name is refused.
+        // Once Bob has sequenced to Alice, and the newcomer grace is over, a plaintext ack or
+        // request in his name is refused.
+        p.clock.ms += ReplayWindow.sequencingGraceMs + 1
         let forgedAck = try JSONEncoder().encode(GroupUpdateAck(groupId: "g-1", version: 9, memberId: p.bob.memberId, timestamp: 1))
         await p.aliceEngine.handleAck(payload: forgedAck)
         let forged = await p.aliceEngine.acks[9]
@@ -405,8 +407,9 @@ final class GroupSyncTests: XCTestCase {
         await p.aliceEngine.broadcast(v3, changeType: .nameChanged)
         let sealed = await p.aliceOut.to(Topics.groupSyncInbox(memberId: p.bob.memberId))
         _ = await p.bobEngine.handleGroupSync(payload: sealed[0])
+        p.clock.ms += ReplayWindow.sequencingGraceMs + 1
         // Alice's next update arrives unsequenced (a phone gone back to an older build, or a replay).
-        let legacyAlice = GroupSyncEngine(identity: p.alice, store: p.aliceStore, outbox: p.aliceOut, now: { 1_800_000_000_000 })
+        let legacyAlice = GroupSyncEngine(identity: p.alice, store: p.aliceStore, outbox: p.aliceOut, now: { p.clock.ms })
         let v4 = v3.with(groupName: "Two", version: 4, previousStateHash: .some(v3.computeStateHash()))
         await legacyAlice.broadcast(v4, changeType: .nameChanged)
         let bare = await p.aliceOut.to(Topics.groupSyncInbox(memberId: p.bob.memberId))
@@ -525,5 +528,16 @@ final class GroupSyncTests: XCTestCase {
         for _ in 0..<5 { _ = await p.bobEngine.handleGroupSync(payload: old) }
         let rebroadcasts = await p.bobOut.to(Topics.groupSyncInbox(memberId: p.alice.memberId))
         XCTAssertEqual(rebroadcasts.count, 1)
+    }
+}
+
+/// A clock tests move forward by hand.
+final class ManualClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int64
+    init(_ ms: Int64) { value = ms }
+    var ms: Int64 {
+        get { lock.lock(); defer { lock.unlock() }; return value }
+        set { lock.lock(); value = newValue; lock.unlock() }
     }
 }

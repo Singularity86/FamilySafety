@@ -1,4 +1,5 @@
 #if DEBUG
+import CryptoKit
 import FamilySafetyCore
 import Foundation
 
@@ -15,6 +16,11 @@ import Foundation
 ///   FS_TEST_RENAME=Name           once in a family, rename this person (signed, 3.1)
 ///   FS_TEST_COLOR=Teal            once in a family, choose this palette colour
 ///   FS_TEST_SECURITY_REPORT=<sec> once in a family, print the security report after <sec> seconds
+///   FS_TEST_PLACE=Name,lat,lon,m  once in a family, watch this place (everyone, arrivals and departures)
+///   FS_TEST_VAULT=<code>|<path>   once in a family and connected, add this file to the vault this code opens,
+///                                 then print what that code and a different one open, and each document's
+///                                 SHA-256 once its chunks are here (an empty path only opens)
+///   FS_TEST_UPLOAD=<path>         once in a family and connected, share this file (a host path the Simulator can read)
 @MainActor
 enum TestDriver {
     static let env = ProcessInfo.processInfo.environment
@@ -22,6 +28,9 @@ enum TestDriver {
     private static var acted = false
     private static var edited = false
     private static var reported = false
+    private static var uploaded = false
+    private static var placed = false
+    private static var vaulted = false
 
     static func log(_ line: String) { print("[test] \(line)") }
 
@@ -60,6 +69,47 @@ enum TestDriver {
             Task {
                 try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
                 log("security report:\n\(await model.securityReport() ?? "no node")")
+            }
+        case .member where env["FS_TEST_PLACE"] != nil && !placed:
+            placed = true
+            let f = env["FS_TEST_PLACE"]!.split(separator: ",").map(String.init)
+            if f.count == 4, let lat = Double(f[1]), let lon = Double(f[2]), let r = Double(f[3]) {
+                Task { await model.savePlace(Place(name: f[0], latitude: lat, longitude: lon, radiusMeters: r)); log("place \(f[0]) saved") }
+            }
+        case .member where env["FS_TEST_VAULT"] != nil && !vaulted:
+            vaulted = true
+            Task {
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                let parts = env["FS_TEST_VAULT"]!.components(separatedBy: "|")
+                if parts.count == 2, let key = await model.vaultKey(code: parts[0]) {
+                    if !parts[1].isEmpty { _ = await model.addToVault(key, url: URL(fileURLWithPath: parts[1])) }
+                    let mine = await model.openVault(key)?.items.map(\.payload.name) ?? []
+                    log("vault opens: \(mine) \(model.lastError ?? "")")
+                    // Each document's bytes, once every chunk is here (repaired if need be), for 2 minutes.
+                    for _ in 0..<12 {
+                        let items = await model.openVault(key)?.items.filter(\.isActive) ?? []
+                        var lines: [String] = []
+                        for item in items {
+                            let digest = await model.vaultFile(item).flatMap { try? Data(contentsOf: $0) }
+                                .map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() }
+                            lines.append("\(item.payload.name): \(digest ?? "not yet")")
+                        }
+                        log("vault documents: \(lines)")
+                        if !lines.contains(where: { $0.hasSuffix("not yet") }) { break }
+                        try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    }
+                    if let other = await model.vaultKey(code: parts[0] + " not this one") {
+                        log("other code opens: \(await model.openVault(other)?.items.map(\.payload.name) ?? [])")
+                    }
+                }
+            }
+        case .member where env["FS_TEST_UPLOAD"] != nil && !uploaded:
+            uploaded = true
+            Task {
+                try? await Task.sleep(nanoseconds: 8_000_000_000)   // let it connect and take the retained manifest
+                let path = env["FS_TEST_UPLOAD"]!
+                await model.uploadFile(URL(fileURLWithPath: path))
+                log("uploaded \(path): \(model.lastError ?? "ok")")
             }
         case .member where env["FS_TEST_INVITE"] != nil && !invited:
             invited = true

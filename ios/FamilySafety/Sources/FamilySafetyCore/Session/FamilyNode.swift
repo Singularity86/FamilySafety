@@ -1,4 +1,5 @@
 import CocoaMQTT
+import CryptoKit
 import Foundation
 
 /// Where this phone stands with a family.
@@ -26,9 +27,27 @@ public enum NodeEvent: Sendable {
     case needsUpdate(Set<String>)
     /// The security log changed (intrusion detection, phase 1).
     case securityLog(SecurityLog)
+    /// The newest known location per member, ours included (B2).
+    case locations([String: LocationUpdate])
+    /// Whether "Share my location" is off.
+    case sharingPaused(Bool)
+    /// Every chat message held, after any change (B3).
+    case chat(ChatBook)
+    /// Crash alerts this phone raised and each member's copy, after any change (B3).
+    case emergency(EmergencyOutbox)
+    /// The family's file library as this phone sees it, after any change (B5).
+    case files(FileLibrary)
+    /// This phone's places and alert settings, after any change (B6).
+    case places(PlaceWatch)
+    /// Someone arrived at or left a place, or is driving fast: tell the person holding this phone.
+    case placeAlert(PlaceEvent, memberName: String)
 }
 
 public enum NodeError: Error, Equatable {
+    /// The family's 500 MB of shared files would be exceeded.
+    case storageFull
+    /// The file couldn't be read, or stored on this phone.
+    case fileUnreadable
     case invalidCode
     case alreadyInFamily
     case notInFamily
@@ -70,6 +89,46 @@ public actor FamilyNode {
     private var presenceBook: PresenceBook
     private let presenceSlot: SecretSlot
     private let security: SecurityRecorder
+    private var location: LocationState
+    private let locationSlot: SecretSlot
+    private var heartbeat: Task<Void, Never>?
+    private var chat: ChatBook
+    private let chatSlot: SecretSlot
+    /// False when saved chat couldn't be read: nothing is then saved over it (F14).
+    private let chatReadable: Bool
+    /// The conversation open on screen: what arrives there is read at once.
+    private var activeConversation: String?
+    private var alerts: EmergencyOutbox
+    private let emergencySlot: SecretSlot
+    /// Wakes when the next alert copy falls due.
+    private var alertTimer: Task<Void, Never>?
+    /// Chat history back-fill (B5): announce, request, respond.
+    private var replication: ChatReplication
+    private var announceTimer: Task<Void, Never>?
+    /// The family vault (B6): container, version mark and document chunks. No code or key is ever kept here.
+    private let vault: VaultStore?
+    /// Places and speed alerts (B6), local to this phone.
+    private var placeWatch: PlaceWatch
+    private let placesSlot: SecretSlot
+    /// Location history (B6): 30 days of everyone's fixes, and its back-fill.
+    private var history: LocationHistory
+    private let historySlot: SecretSlot
+    private var historySave: Task<Void, Never>?
+    private var locationReplication: LocationReplication
+    /// Shared files (B5): the library, and where chunk ciphertext is kept.
+    private var library: FileLibrary
+    private let librarySlot: SecretSlot
+    private let chunks: ChunkStore?
+    private var repairTimer: Task<Void, Never>?
+    /// The roster last seen, so a newcomer gets a fresh manifest (Android syncNewMember).
+    private var knownMembers: Set<String>?
+    /// When each member last asked us to re-send the file list (`files/request`, unauthenticated).
+    private var fileRequestSeen: [String: Int64] = [:]
+    /// Woken in the background for one fix: connect, send it, disconnect (spec §11). No
+    /// heartbeat re-stamp on that connect, or it would make the new fix look redundant.
+    private var backgroundWake = false
+    /// Android re-stamps and re-sends the last fix every 5 minutes so freshness itself is news.
+    static let locationHeartbeatSeconds: UInt64 = 5 * 60
     private var lastNeedsUpdate: Set<String> = []
     private var inbound: AsyncStream<(String, Data, Bool)>.Continuation?
     private var bridge: TransportBridge?
@@ -77,8 +136,35 @@ public actor FamilyNode {
 
     public init(profile: LocalProfile, credentials: BrokerCredentials, groupPersistence: GroupStatePersistence,
                 inviteSlot: SecretSlot, pendingJoinSlot: SecretSlot, deviceSlot: SecretSlot, ledgerSlot: SecretSlot,
-                presenceSlot: SecretSlot, securitySlot: SecretSlot,
+                presenceSlot: SecretSlot, securitySlot: SecretSlot, locationSlot: SecretSlot,
+                chatSlot: SecretSlot = InMemorySlot(), emergencySlot: SecretSlot = InMemorySlot(),
+                librarySlot: SecretSlot = InMemorySlot(), historySlot: SecretSlot = InMemorySlot(), chunkStore: ChunkStore? = nil,
+                placesSlot: SecretSlot = InMemorySlot(), vaultStore: VaultStore? = nil,
                 onEvent: @escaping @Sendable (NodeEvent) -> Void) throws {
+        self.vault = vaultStore
+        // On every phone, from first run, whether or not anyone ever uses a vault (spec §6.8).
+        _ = try? vaultStore?.container()
+        vaultStore?.forgetViews()
+        self.placesSlot = placesSlot
+        self.placeWatch = (try? placesSlot.readJSON(PlaceWatch.self)) ?? PlaceWatch()
+        self.historySlot = historySlot
+        self.history = (try? historySlot.readJSON(LocationHistory.self)) ?? LocationHistory()
+        self.librarySlot = librarySlot
+        self.library = (try? librarySlot.readJSON(FileLibrary.self)) ?? FileLibrary()
+        self.chunks = chunkStore
+        chunkStore?.clearViews()
+        self.emergencySlot = emergencySlot
+        self.alerts = (try? emergencySlot.readJSON(EmergencyOutbox.self)) ?? EmergencyOutbox()
+        self.chatSlot = chatSlot
+        do {
+            self.chat = try chatSlot.readJSON(ChatBook.self) ?? ChatBook()
+            self.chatReadable = true
+        } catch {
+            self.chat = ChatBook()
+            self.chatReadable = false
+        }
+        self.locationSlot = locationSlot
+        self.location = (try? locationSlot.readJSON(LocationState.self)) ?? LocationState()
         let security = SecurityRecorder(slot: securitySlot)
         security.onChange = { onEvent(.securityLog($0)) }
         self.security = security
@@ -88,6 +174,9 @@ public actor FamilyNode {
         self.presence = book.statuses
         self.profile = profile
         self.identity = try profile.identity()
+        self.memberId = identity.memberId
+        self.replication = ChatReplication(me: identity.memberId)
+        self.locationReplication = LocationReplication(me: identity.memberId)
         self.credentials = credentials
         self.store = GroupStateStore(localMemberId: identity.memberId, persistence: groupPersistence)
         self.pendingJoinSlot = pendingJoinSlot
@@ -107,7 +196,7 @@ public actor FamilyNode {
         self.onEvent = onEvent
     }
 
-    public var memberId: String { identity.memberId }
+    public nonisolated let memberId: String
 
     // MARK: - Lifecycle
 
@@ -122,6 +211,12 @@ public actor FamilyNode {
                 // The last known presence, until the broker says otherwise (no retained replay
                 // when it kept our session, §4).
                 if !presence.isEmpty { onEvent(.presence(presence)) }
+                onEvent(.sharingPaused(location.paused))
+                if !location.book.latest.isEmpty { onEvent(.locations(location.book.latest)) }
+                onEvent(.chat(chat))
+                onEvent(.emergency(alerts))
+                onEvent(.files(library))
+                onEvent(.places(placeWatch))
             } else if let pending = try pendingJoinSlot.readJSON(PendingJoin.self) {
                 resumeJoin(pending)
             } else {
@@ -138,6 +233,15 @@ public actor FamilyNode {
     /// Disconnects cleanly (peers see "offline" at once). Call when the app goes to the background.
     public func stop() async {
         running = false
+        heartbeat?.cancel()
+        heartbeat = nil
+        alertTimer?.cancel()
+        alertTimer = nil
+        announceTimer?.cancel()
+        announceTimer = nil
+        repairTimer?.cancel()
+        repairTimer = nil
+        flushHistory()
         await coordinator?.stop()
         if transport.isConnected, let group = await store.current {
             publishPresence(isOnline: false, group: group)
@@ -214,7 +318,25 @@ public actor FamilyNode {
         presence = [:]
         presenceBook = PresenceBook()
         try? presenceSlot.delete()
+        // Keep only the pause choice: it's this person's, not the family's.
+        let paused = location.paused
+        location = LocationState()
+        location.paused = paused
+        saveLocation()
+        onEvent(.locations([:]))
         onEvent(.presence(presence))
+        chat = ChatBook()
+        saveChat()
+        onEvent(.chat(chat))
+        alerts = EmergencyOutbox()
+        saveAlerts()
+        onEvent(.emergency(alerts))
+        for id in library.entries.keys { chunks?.deleteAll(id) }
+        library = FileLibrary()
+        saveLibrary()
+        history = LocationHistory()
+        flushHistory()
+        onEvent(.files(library))
         setState(.noFamily)
         await reconnect()
     }
@@ -289,8 +411,19 @@ public actor FamilyNode {
             }
         }
         transport.flushPendingQueue()
+        await sendUnsentChat()
+        // Every copy still owed goes at once on a reconnect (§6.3).
+        await flushAlerts(everything: true)
+        await backfillChat()
+        await announceFiles(force: true)
+        await runRepairs()
         await coordinator?.start()
         await groupChanged()
+        // Peers see where we are as soon as we're back, then every 5 minutes at least.
+        if !backgroundWake {
+            await sendHeartbeatFix()
+            startHeartbeat()
+        }
     }
 
     /// The last-will is fixed at connect, so a new family (or a new key) needs a new session.
@@ -380,8 +513,65 @@ public actor FamilyNode {
             _ = await engine.handleRefreshRequest(payload: payload)
         case Topics.groupAckInbox(memberId: me):
             await engine.handleAck(payload: payload)
+        case Topics.locationInbox(memberId: me):
+            guard let (sender, body) = await engine.openFromPeer(payload),
+                  let fix = LocationCodec.read(body, sender: sender),
+                  location.book.accept(fix) else { return }
+            if sender.memberId != identity.memberId {
+                let events = placeWatch.evaluate(fix, now: now())
+                try? placesSlot.writeJSON(placeWatch)
+                for e in events { onEvent(.placeAlert(e, memberName: sender.displayName)) }
+            }
+            history.add([fix], now: now())
+            saveHistory()
+            saveLocation()
+            onEvent(.locations(location.book.latest))
+        case Topics.chat(memberId: me):
+            await receiveChat(payload)
+        case Topics.replicationAnnounceInbox(memberId: me), Topics.replicationRequest(memberId: me), Topics.replicationData(memberId: me):
+            await handleReplication(topic: topic, payload: payload)
+        case Topics.chatReceipt(memberId: me), Topics.chatRead(memberId: me):
+            guard let (sender, body) = await engine.openFromPeer(payload),
+                  let receipt = ChatCodec.readReceipt(body) else { return }
+            // A crash alert owed to this member: only their own signed receipt settles their copy.
+            if receipt.recipientId == sender.memberId, receipt.status == .delivered || receipt.status == .read,
+               alerts.markDelivered(alertId: receipt.messageId, by: sender.memberId, now: now()) {
+                saveAlerts()
+                onEvent(.emergency(alerts))
+            }
+            guard chat.apply(receipt, from: sender.memberId) else { return }
+            saveChat()
+            onEvent(.chat(chat))
+        case Topics.fileRepair(memberId: me):
+            await serveRepair(payload)
+        case Topics.fileRequest(memberId: me):
+            await answerFileRequest(payload)
+        case Topics.vaultRepair(memberId: me):
+            await serveVaultRepair(payload)
+        case Topics.fileAvailability(memberId: me):
+            guard let group = await store.current, let plain = FileCodec.openMessage(payload, group: group),
+                  let a = try? JSONDecoder().decode(FileHoldingsAnnouncement.self, from: plain) else { return }
+            library.record(a, from: a.announcerId, members: Set(group.members.map(\.memberId)).subtracting([me]))
+            saveLibrary()
+            onEvent(.files(library))
+            // A peer who has never heard of a file we shared missed its manifest: a share published
+            // into a connection that had already died was otherwise never sent again (since 1.15.8).
+            let t = now()
+            if group.containsMember(a.announcerId), !library.sharedButUnknown(to: a, me: me, now: t).isEmpty,
+               lastManifestResendAtMs.map({ t - $0 >= FileLibrary.manifestResendSpacingMs }) ?? true {
+                lastManifestResendAtMs = t
+                await publishManifest()
+            }
         default:
-            if let group = await store.current, topic == Topics.groupAck(groupId: group.groupId) {
+            if let group = await store.current, topic == Topics.vaultContainer(groupId: group.groupId) {
+                receiveVaultContainer(payload, group: group)
+            } else if let group = await store.current, topic.hasPrefix(Self.vaultChunkPrefix(group.groupId)) {
+                receiveVaultChunk(topic: topic, payload: payload, group: group)
+            } else if let group = await store.current, topic == Topics.fileManifest(groupId: group.groupId) {
+                await receiveManifest(payload, group: group)
+            } else if let group = await store.current, topic.hasPrefix(Self.chunkPrefix(group.groupId)) {
+                await receiveChunk(topic: topic, payload: payload, group: group)
+            } else if let group = await store.current, topic == Topics.groupAck(groupId: group.groupId) {
                 await engine.handleAck(payload: payload)
             } else if let group = await store.current, let sender = PresenceTopics.sender(of: topic, groupId: group.groupId) {
                 // Either presence topic (4.2); the same update may come on both mid-switch.
@@ -429,6 +619,746 @@ public actor FamilyNode {
                 onEvent(.presence(presence))
             }
         }
+    }
+
+    // MARK: - Location (B2)
+
+    /// A new fix from this phone's CoreLocation. Sent to every member unless sharing is paused or
+    /// it adds nothing over the last one sent (Android LocationPublishPolicy).
+    public func shareLocation(_ fix: LocationUpdate) async {
+        guard !location.paused, case .member = state else { return }
+        if let last = location.lastSent, LocationPublishPolicy.isRedundant(previous: last, next: fix) { return }
+        await publishLocation(fix)
+    }
+
+    /// "Share my location": off stops publishing at once and on every relaunch until it's on again.
+    public func setSharingPaused(_ paused: Bool) async {
+        location.paused = paused
+        saveLocation()
+        onEvent(.sharingPaused(paused))
+        if paused { heartbeat?.cancel(); heartbeat = nil } else { await sendHeartbeatFix(); startHeartbeat() }
+    }
+
+    public nonisolated var sharingPausedAtLaunch: Bool { (try? locationSlot.readJSON(LocationState.self))?.paused ?? false }
+
+    /// The last fix this phone shared, or nil if it has never shared in its current family (and
+    /// after leaving). Background wake-ups are armed around it, even before the node starts.
+    public nonisolated var savedLastFix: LocationUpdate? { (try? locationSlot.readJSON(LocationState.self))?.lastSent }
+
+    /// A fix CoreLocation delivered while the app is in the background: connect if needed, send
+    /// it, and disconnect again if we weren't already running. The caller holds a background task.
+    public func shareFromBackground(_ fix: LocationUpdate) async {
+        let wasRunning = running
+        if !wasRunning {
+            backgroundWake = true
+            await start()
+        }
+        await shareLocation(fix)
+        if !wasRunning {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)   // let the QoS 0 publishes leave
+            backgroundWake = false
+            await stop()
+        }
+    }
+
+    private func publishLocation(_ fix: LocationUpdate) async {
+        guard case .member(let group) = state, transport.isConnected,
+              let plaintext = try? LocationCodec.plaintext(for: fix, identity: identity) else {
+            // Not connected: keep it; the next connect sends it, re-stamped.
+            location.lastSent = location.lastSent.map { $0.timestamp > fix.timestamp ? $0 : fix } ?? fix
+            if location.book.accept(fix) { onEvent(.locations(location.book.latest)) }
+            saveLocation()
+            return
+        }
+        for peer in group.members where peer.memberId != identity.memberId {
+            guard let sealed = await engine.sealForPeer(plaintext, to: peer) else { continue }
+            // QoS 0: a position supersedes itself, so redelivery only wastes in-flight slots (§4).
+            transport.publish(topic: Topics.locationInbox(memberId: peer.memberId), payload: sealed, qos: .qos0, retained: false)
+        }
+        location.lastSent = fix
+        _ = location.book.accept(fix)
+        history.add([fix], now: now())
+        saveHistory()
+        saveLocation()
+        onEvent(.locations(location.book.latest))
+    }
+
+    /// The heartbeat re-stamps the last fix with the current time, and so re-signs it (§6.2).
+    private func sendHeartbeatFix() async {
+        guard !location.paused, let last = location.lastSent else { return }
+        await publishLocation(LocationUpdate(memberId: last.memberId, latitude: last.latitude, longitude: last.longitude,
+                                             accuracy: last.accuracy, timestamp: max(now(), last.timestamp + 1),
+                                             speed: last.speed, bearing: last.bearing))
+    }
+
+    private func startHeartbeat() {
+        guard heartbeat == nil, !location.paused else { return }
+        heartbeat = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.locationHeartbeatSeconds * 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                await self?.heartbeatTick()
+            }
+        }
+    }
+
+    private func heartbeatTick() async {
+        guard let last = location.lastSent, now() - last.timestamp >= LocationPublishPolicy.maxSilenceMs - 60_000 else { return }
+        await sendHeartbeatFix()
+    }
+
+    private func saveLocation() { try? locationSlot.writeJSON(location) }
+
+    // MARK: - Chat (B3)
+
+    /// Sends a message to the family (`to` nil) or privately to one member. Stored first, so a
+    /// message written offline goes out on the next connect.
+    @discardableResult
+    public func sendChat(_ text: String, to memberId: String? = nil) async -> ChatMessage? {
+        let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty, case .member(let group) = state else { return nil }
+        if let memberId, memberId == identity.memberId || group.findMember(byId: memberId) == nil { return nil }
+        let message = ChatCodec.compose(content: content, to: memberId, groupId: group.groupId, identity: identity, now: now())
+        chat.insert(message)
+        saveChat()
+        onEvent(.chat(chat))
+        await deliver(message)
+        return chat.messages[message.messageId]
+    }
+
+    /// The conversation now on screen, or nil. Opening one marks it read and tells the senders.
+    public func openConversation(_ conversationId: String?) async {
+        activeConversation = conversationId
+        guard let conversationId else { return }
+        let unread = chat.markRead(conversationId)
+        guard !unread.isEmpty else { return }
+        saveChat()
+        onEvent(.chat(chat))
+        for message in unread { await sendReceipt(.read, for: message.messageId, to: message.senderId) }
+    }
+
+    /// The conversation id for chatting privately with `memberId`.
+    public func privateConversationId(with memberId: String) -> String {
+        ChatBook.privateConversationId(identity.memberId, memberId)
+    }
+
+    private func receiveChat(_ payload: Data) async {
+        guard case .member(let group) = state, let (sender, body) = await engine.openFromPeer(payload),
+              sender.memberId != identity.memberId else { return }
+        // A bad author signature, or a group message naming another family, is dropped (as on Android, not logged).
+        guard var message = ChatCodec.read(body, sender: sender, me: identity.memberId, groupId: group.groupId) else { return }
+        // Already held: confirm it again, so a sender whose receipt was lost stops retrying (F27).
+        // Only DELIVERED: a re-send says nothing about reading.
+        if chat.contains(message.messageId) {
+            await sendReceipt(.delivered, for: message.messageId, to: sender.memberId)
+            return
+        }
+        message.isRead = activeConversation == message.conversationId
+        chat.insert(message)
+        saveChat()
+        onEvent(.chat(chat))
+        await sendReceipt(message.isRead ? .read : .delivered, for: message.messageId, to: sender.memberId)
+    }
+
+    /// One E2EE copy per recipient: everyone else for group chat, the one person for a private message.
+    private func deliver(_ message: ChatMessage) async {
+        guard case .member(let group) = state, transport.isConnected, let plaintext = try? ChatCodec.plaintext(message) else { return }
+        let recipients = group.members.filter {
+            $0.memberId != identity.memberId && (message.recipientId == nil || $0.memberId == message.recipientId)
+        }
+        var sent = recipients.isEmpty
+        for peer in recipients {
+            guard let sealed = await engine.sealForPeer(plaintext, to: peer) else { continue }
+            if transport.publish(topic: Topics.chat(memberId: peer.memberId), payload: sealed, qos: .qos1) { sent = true }
+        }
+        // A private message to someone who has left can never go; group chat waits for a connect.
+        if message.recipientId != nil && recipients.isEmpty { chat.setStatus(message.messageId, .failed) }
+        else if sent { chat.setStatus(message.messageId, .sent) }
+        saveChat()
+        onEvent(.chat(chat))
+    }
+
+    private func sendUnsentChat() async {
+        // Crash alerts have their own per-member resends.
+        for message in chat.unsent where !alerts.isAlert(message.messageId) { await deliver(message) }
+    }
+
+    // MARK: - Chat history back-fill (B5)
+
+    /// On connect: ask for anything newer in the conversations we hold, then tell everyone what we
+    /// hold so they can ask us. Then announce every 30 minutes while running.
+    private func backfillChat() async {
+        guard case .member(let group) = state else { return }
+        let peers = group.members.map(\.memberId).filter { $0 != identity.memberId }
+        for (peerId, request) in replication.fullSync(book: chat, peers: peers, groupId: group.groupId, now: now())
+            + locationReplication.fullSync(history: history, peers: peers, now: now()) {
+            await sendReplication(request, topic: Topics.replicationRequest(memberId: peerId), to: peerId)
+        }
+        await announceChat()
+        guard announceTimer == nil else { return }
+        announceTimer = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(ChatReplication.announceIntervalMs) * 1_000_000)
+                guard !Task.isCancelled else { return }
+                await self?.announceChat()
+            }
+        }
+    }
+
+    private func announceChat() async {
+        guard case .member(let group) = state, transport.isConnected else { return }
+        // This family's only: a phone that moved families still holds the old one's (since 1.15.8).
+        let roster = Set(group.members.map(\.memberId))
+        let locations = history.summaries().filter { roster.contains($0.memberId) }
+        for peer in group.members where peer.memberId != identity.memberId {
+            let chatPart = replication.announcement(for: peer.memberId, book: chat, groupId: group.groupId, now: now())
+            guard !chatPart.chatDataSummary.isEmpty || !locations.isEmpty else { continue }
+            let a = DataAvailabilityAnnouncement(announcerId: identity.memberId, locationDataSummary: locations,
+                                                 chatDataSummary: chatPart.chatDataSummary, timestamp: now())
+            await sendReplication(a, topic: Topics.replicationAnnounceInbox(memberId: peer.memberId), to: peer.memberId, qos: .qos0)
+        }
+    }
+
+    private func handleReplication(topic: String, payload: Data) async {
+        guard case .member(let group) = state, let (sender, body) = await engine.openFromPeer(payload),
+              sender.memberId != identity.memberId else { return }
+        let data = Data(body.utf8)
+        let me = identity.memberId
+        let members = Set(group.members.map(\.memberId))
+        switch topic {
+        case Topics.replicationAnnounceInbox(memberId: me):
+            guard let a = try? JSONDecoder().decode(DataAvailabilityAnnouncement.self, from: data) else { return }
+            let asks = replication.handle(a, from: sender.memberId, book: chat, groupId: group.groupId, now: now())
+                + locationReplication.handle(a, from: sender.memberId, history: history, members: members, now: now())
+            for r in asks {
+                await sendReplication(r, topic: Topics.replicationRequest(memberId: sender.memberId), to: sender.memberId)
+            }
+        case Topics.replicationRequest(memberId: me):
+            guard let r = try? JSONDecoder().decode(ReplicationRequest.self, from: data) else { return }
+            let response = r.dataType == .chatMessages
+                ? replication.respond(to: r, from: sender.memberId, book: chat, groupId: group.groupId, now: now())
+                : locationReplication.respond(to: r, from: sender.memberId, history: history, members: members, now: now())
+            guard let response else { return }
+            await sendReplication(response, topic: Topics.replicationData(memberId: sender.memberId), to: sender.memberId)
+        default:
+            guard let response = try? JSONDecoder().decode(ReplicationResponse.self, from: data) else { return }
+            var versions: [String: Int] = [:]
+            for author in response.messages.map(\.senderId) + response.locations.map(\.memberId) where versions[author] == nil {
+                versions[author] = await engine.advertisedVersion(of: author) ?? 0
+            }
+            let next: ReplicationRequest?
+            if response.dataType == .locationHistory {
+                let got = locationReplication.handle(response, from: sender, roster: group, authorVersion: { versions[$0] }, now: now())
+                if history.add(got.fixes, now: now()) > 0 { saveHistory() }
+                next = got.next
+            } else {
+                let got = replication.handle(response, from: sender, roster: group, authorVersion: { versions[$0] }, now: now())
+                var changed = false
+                for m in got.messages { changed = chat.insert(m) || changed }
+                if changed {
+                    chat.prune(now: now(), me: identity.memberId, members: members, groupId: group.groupId)
+                    saveChat()
+                    onEvent(.chat(chat))
+                }
+                next = got.next
+            }
+            if let next {
+                await sendReplication(next, topic: Topics.replicationRequest(memberId: sender.memberId), to: sender.memberId)
+            }
+        }
+    }
+
+    // MARK: - Vault (B6)
+
+    static func vaultChunkPrefix(_ groupId: String) -> String { "familysafe/group/\(groupId)/vault/chunk/" }
+
+    public struct VaultView: Sendable {
+        public let items: [VaultItem]
+        public let removed: [VaultItem]
+    }
+
+    /// The key a code opens, derived off this actor (Argon2id is slow on purpose). Nil outside a family.
+    public nonisolated func vaultKey(code: String) async -> SymmetricKeyBox? {
+        guard let groupId = await store.current?.groupId else { return nil }
+        return try? SymmetricKeyBox(VaultCrypto.key(code: code, groupId: groupId))
+    }
+
+    /// What this key opens: every slot is tried, and an empty result is an ordinary vault.
+    public func openVault(_ key: SymmetricKeyBox) -> VaultView {
+        let all = (try? vault?.container()).flatMap { $0 }.map { VaultCrypto.openAll($0, key: key.key) } ?? []
+        return VaultView(items: all.filter(\.isActive), removed: all.filter { !$0.isActive })
+    }
+
+    /// Adds a document: chunks under a fresh content key that lives only inside the slot, two slots
+    /// sealed, the container published, then the chunks.
+    public func addToVault(_ key: SymmetricKeyBox, fileAt url: URL, name: String, mimeType: String) async throws -> VaultView {
+        guard case .member(let group) = state, let vault else { throw NodeError.notInFamily }
+        guard openVault(key).items.count < VaultCrypto.maxItems else { throw NodeError.storageFull }
+        let fileId = UUID().uuidString.lowercased()
+        let contentKey = SymmetricKey(size: .bits256)
+        var hasher = SHA256()
+        var size = 0
+        var count = 0
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            while let piece = try handle.read(upToCount: VaultStore.chunkSize), !piece.isEmpty {
+                size += piece.count
+                guard size <= VaultStore.maxItemBytes else { throw NodeError.storageFull }
+                hasher.update(data: piece)
+                try vault.writeOwnChunk(fileId: fileId, index: count, ciphertext: try FileCipher.seal(piece, key: contentKey))
+                count += 1
+            }
+        } catch {
+            vault.discard(fileId)
+            throw error as? NodeError ?? NodeError.fileUnreadable
+        }
+        vault.addOwn(fileId: fileId, chunkCount: count)
+        let payload = VaultCrypto.fitName(VaultSlotPayload(
+            fileId: fileId, name: name, mimeType: mimeType, sizeBytes: Int64(size),
+            contentHash: hasher.finalize().map { String(format: "%02x", $0) }.joined(),
+            contentKeyHex: Hex.encode(contentKey.withUnsafeBytes { Array($0) }), chunkCount: count,
+            addedAt: now(), addedBy: identity.memberId))
+        guard let next = try? vault.update({ VaultCrypto.write(payload, into: $0, key: key.key) }) else {
+            vault.discard(fileId)
+            throw NodeError.storageFull
+        }
+        publishVaultContainer(next, group: group)
+        for i in 0..<count { await publishVaultChunk(fileId: fileId, index: i, total: count, group: group) }
+        return openVault(key)
+    }
+
+    /// Removes (recoverably) or puts back: the slot is rewritten with the state flipped, never erased.
+    public func setVaultItem(_ key: SymmetricKeyBox, _ item: VaultItem, active: Bool) -> VaultView {
+        guard case .member(let group) = state, let vault else { return openVault(key) }
+        var p = item.payload
+        p.state = active ? VaultSlotPayload.active : VaultSlotPayload.reclaimed
+        p.revision = now()
+        if let next = try? vault.update({ VaultCrypto.write(VaultCrypto.fitName(p), into: $0, key: key.key, existing: item.slots) }) {
+            publishVaultContainer(next, group: group)
+        }
+        return openVault(key)
+    }
+
+    /// A temporary plaintext copy to view, once every chunk is here and the whole verifies; otherwise
+    /// asks the family for what's missing and returns nil.
+    public func vaultFile(_ item: VaultItem) -> URL? {
+        guard let vault, let raw = Hex.decode(item.payload.contentKeyHex), raw.count == 32 else { return nil }
+        let key = SymmetricKeyBox(SymmetricKey(data: Data(raw)))
+        if vault.blob(item.id)?.isComplete == true,
+           vault.verifiedHash(fileId: item.id, chunkCount: item.payload.chunkCount, key: key) == item.payload.contentHash.lowercased(),
+           let url = try? vault.materialize(fileId: item.id, name: item.payload.name, chunkCount: item.payload.chunkCount, key: key) {
+            return url
+        }
+        requestVaultChunks(item)
+        return nil
+    }
+
+    /// Clears everything decrypted for viewing. Call when a vault closes.
+    public nonisolated func closeVault() { vault?.forgetViews() }
+
+    private func requestVaultChunks(_ item: VaultItem) {
+        guard case .member(let group) = state, let vault else { return }
+        let missing = vault.missing(item.id, chunkCount: item.payload.chunkCount)
+        // Sealed like files/repair, so only the family can read who is fetching what, or trigger a reply.
+        guard !missing.isEmpty,
+              let body = try? FileCodec.sealMessage(VaultChunkRequest(requesterId: identity.memberId, fileId: item.id, missing: missing,
+                                                                     timestamp: now()), group: group)
+        else { return }
+        for peer in group.members where peer.memberId != identity.memberId {
+            transport.publish(topic: Topics.vaultRepair(memberId: peer.memberId), payload: body, qos: .qos1)
+        }
+    }
+
+    /// Versioned by wall clock, above anything seen; signed over `{version}|{data}`; retained.
+    private func publishVaultContainer(_ bytes: Data, group: GroupDefinition) {
+        guard let vault else { return }
+        let version = max(vault.version + 1, now())
+        vault.setVersion(version)
+        let data = bytes.base64EncodedString()
+        guard let sig = try? AuthorSignatures.sign(VaultContainerMessage.signingPayload(version: version, data: data), identity: identity),
+              let payload = try? JSONEncoder().encode(VaultContainerMessage(version: version, data: data, signerMemberId: identity.memberId, signature: sig))
+        else { return }
+        transport.publish(topic: Topics.vaultContainer(groupId: group.groupId), payload: payload, qos: .qos1, retained: true)
+    }
+
+    /// Taken only when newer than any seen, no more than a day ahead, exactly 131072 bytes, and signed by
+    /// someone in our own roster. An unsigned one would let anyone erase the family's vault.
+    private func receiveVaultContainer(_ payload: Data, group: GroupDefinition) {
+        guard let vault, !payload.isEmpty, let m = try? JSONDecoder().decode(VaultContainerMessage.self, from: payload),
+              m.version > vault.version, m.version <= now() + 86_400_000,
+              !m.signature.isEmpty, let signer = group.findMember(byId: m.signerMemberId),
+              let pub = Hex.decode(signer.ed25519PublicKey), let sig = Hex.decode(m.signature), (try? SodiumRaw.ensureInitialized()) != nil,
+              SodiumRaw.signVerifyDetached(signature: sig, message: Array(VaultContainerMessage.signingPayload(version: m.version, data: m.data).utf8),
+                                           publicKey: pub),
+              let bytes = Data(base64Encoded: m.data), bytes.count == VaultCrypto.containerBytes else { return }
+        if (try? vault.write(bytes)) != nil { vault.setVersion(m.version) }
+    }
+
+    /// Stored without authentication, within bounds: this phone may hold no code that reads it.
+    private func receiveVaultChunk(topic: String, payload: Data, group: GroupDefinition) {
+        let parts = topic.dropFirst(Self.vaultChunkPrefix(group.groupId).count).split(separator: "/").map(String.init)
+        guard let vault, parts.count == 2, let index = Int(parts[1]),
+              let m = try? JSONDecoder().decode(VaultChunkMessage.self, from: payload),
+              m.fileId == parts[0], m.chunkIndex == index, let blob = Data(base64Encoded: m.data) else { return }
+        vault.storeChunk(fileId: m.fileId, index: index, totalChunks: m.totalChunks, ciphertext: blob)
+    }
+
+    /// Answered from the chunk store alone: holding the bytes is the whole qualification.
+    private func serveVaultRepair(_ payload: Data) async {
+        guard case .member(let group) = state, let vault, let r = Self.openVaultRequest(payload, group: group),
+              r.requesterId != identity.memberId, group.containsMember(r.requesterId),
+              let (total, indices) = vault.servable(r) else { return }
+        for i in indices { await publishVaultChunk(fileId: r.fileId, index: i, total: total, group: group) }
+    }
+
+    /// A sealed request (an `EncryptedFileMessage`, as files/repair), or, while phones update, a plaintext one.
+    /// Something sealed that won't open is dropped, never read as plaintext.
+    static func openVaultRequest(_ payload: Data, group: GroupDefinition) -> VaultChunkRequest? {
+        if (try? JSONDecoder().decode(EncryptedFileMessage.self, from: payload)) != nil {
+            return FileCodec.openMessage(payload, group: group).flatMap { try? JSONDecoder().decode(VaultChunkRequest.self, from: $0) }
+        }
+        return try? JSONDecoder().decode(VaultChunkRequest.self, from: payload)
+    }
+
+    private func publishVaultChunk(fileId: String, index: Int, total: Int, group: GroupDefinition) async {
+        guard let blob = vault?.readChunk(fileId: fileId, index: index),
+              let body = try? JSONEncoder().encode(VaultChunkMessage(fileId: fileId, chunkIndex: index, totalChunks: total, data: blob.base64EncodedString()))
+        else { return }
+        transport.publish(topic: Topics.vaultChunk(groupId: group.groupId, fileId: fileId, chunkIndex: index), payload: body, qos: .qos1)
+        try? await Task.sleep(nanoseconds: 15_000_000)
+    }
+
+    // MARK: - Places (B6)
+
+    public func savePlace(_ place: Place) {
+        placeWatch.save(place)
+        savePlaces()
+    }
+
+    public func removePlace(_ placeId: String) {
+        placeWatch.remove(placeId)
+        savePlaces()
+    }
+
+    public func setSpeedAlerts(on: Bool, thresholdMph: Int) {
+        placeWatch.speedAlertsOn = on
+        placeWatch.speedThresholdMph = min(max(thresholdMph, 20), 150)
+        savePlaces()
+    }
+
+    private func savePlaces() {
+        try? placesSlot.writeJSON(placeWatch)
+        onEvent(.places(placeWatch))
+    }
+
+    // MARK: - Location history (B6)
+
+    /// One member's fixes between two times, oldest first (30 days kept).
+    public func history(of memberId: String, from: Int64, to: Int64) -> [LocationUpdate] {
+        history.between(memberId, from: from, to: to)
+    }
+
+    /// Saves at most every 20 seconds; fixes arrive often and the whole history is rewritten.
+    private func saveHistory() {
+        guard historySave == nil else { return }
+        historySave = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            await self?.flushHistory()
+        }
+    }
+
+    private func flushHistory() {
+        historySave?.cancel()
+        historySave = nil
+        try? historySlot.writeJSON(history)
+    }
+
+    private func sendReplication<T: Encodable>(_ value: T, topic: String, to memberId: String, qos: CocoaMQTTQoS = .qos1) async {
+        guard let peer = await store.current?.findMember(byId: memberId),
+              let json = try? JSONEncoder().encode(value), let plaintext = String(data: json, encoding: .utf8),
+              let sealed = await engine.sealForPeer(plaintext, to: peer) else { return }
+        transport.publish(topic: topic, payload: sealed, qos: qos)
+    }
+
+    // MARK: - Shared files (B5)
+
+    static func chunkPrefix(_ groupId: String) -> String { "familysafe/group/\(groupId)/files/chunk/" }
+
+    /// Fetch a file that isn't kept automatically (opened by someone).
+    public func requestFile(_ fileId: String) async {
+        library.want(fileId, now: now())
+        saveLibrary()
+        onEvent(.files(library))
+        await runRepairs()
+    }
+
+    /// A temporary plaintext copy to show, if the file is complete here. Cleared on next launch.
+    public func openFile(_ fileId: String) async -> URL? {
+        guard let group = await store.current, let e = library.entries[fileId], e.state == .complete, let chunks,
+              let key = FileKeys.key(group, keyVersion: e.blobKeyVersion, kid: e.file.kid) else { return nil }
+        return try? chunks.materialize(fileId: fileId, name: e.file.name, chunkCount: e.file.chunkCount, key: key)
+    }
+
+    private func receiveManifest(_ payload: Data, group: GroupDefinition) async {
+        guard !payload.isEmpty, let manifest = FileCodec.openManifest(payload, group: group) else { return }
+        let outcome = library.apply(manifest, groupId: group.groupId, now: now())
+        guard outcome.changed else { return }
+        for id in outcome.erase { chunks?.deleteAll(id) }
+        saveLibrary()
+        onEvent(.files(library))
+        await runRepairs()
+    }
+
+    private func receiveChunk(topic: String, payload: Data, group: GroupDefinition) async {
+        let parts = topic.dropFirst(Self.chunkPrefix(group.groupId).count).split(separator: "/").map(String.init)
+        guard parts.count == 2, let index = Int(parts[1]), let chunks, library.accepts(fileId: parts[0]),
+              let entry = library.entries[parts[0]],
+              case .accept(let ciphertext, let keyVersion) = FileCodec.checkChunk(payload, topicFileId: parts[0], topicIndex: index,
+                                                                                   file: entry.file, group: group),
+              entry.blobKeyVersion == 0 || entry.blobKeyVersion == keyVersion, !entry.held.contains(index) else { return }
+        guard (try? chunks.write(fileId: parts[0], index: index, ciphertext: ciphertext)) != nil else { return }
+        guard case .stored(let complete) = library.recordChunk(fileId: parts[0], index: index, keyVersion: keyVersion, now: now()) else { return }
+        if complete { await finishFile(parts[0], group: group) }
+        saveLibrary()
+        onEvent(.files(library))
+        scheduleRepairs()
+    }
+
+    /// Every chunk is in: decrypt in order and compare with the manifest's hash before calling it complete.
+    private func finishFile(_ fileId: String, group: GroupDefinition) async {
+        guard let e = library.entries[fileId], let chunks,
+              let key = FileKeys.key(group, keyVersion: e.blobKeyVersion, kid: e.file.kid) else { return }
+        if chunks.verifiedHash(fileId: fileId, chunkCount: e.file.chunkCount, key: key) == e.file.contentHash.lowercased() {
+            library.markComplete(fileId)
+            await announceFiles(force: true)
+        } else {
+            chunks.deleteAll(fileId)
+            library.discard(fileId, now: now())
+        }
+    }
+
+    /// Asks one peer for what's missing of each due file, then sleeps until the next is due.
+    private func runRepairs() async {
+        defer { scheduleRepairs() }
+        guard case .member(let group) = state, transport.isConnected else { return }
+        let peers = group.members.map(\.memberId).filter { $0 != identity.memberId }
+        for fileId in library.due(now: now()) {
+            guard let (peer, request) = library.repairRequest(fileId, me: identity.memberId, peers: peers, now: now()),
+                  let sealed = try? FileCodec.sealMessage(request, group: group) else { continue }
+            transport.publish(topic: Topics.fileRepair(memberId: peer), payload: sealed, qos: .qos1)
+        }
+        saveLibrary()
+        onEvent(.files(library))
+    }
+
+    private func scheduleRepairs() {
+        repairTimer?.cancel()
+        repairTimer = nil
+        guard running, let next = library.nextDueAtMs() else { return }
+        let wait = UInt64(max(next - now(), 0)) * 1_000_000
+        repairTimer = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: wait)
+            guard !Task.isCancelled else { return }
+            await self?.runRepairs()
+        }
+    }
+
+    /// A peer asked for chunks of a file we hold whole: re-serve the stored ciphertext verbatim, to the
+    /// ordinary group chunk topic (any device with the same gap picks it up), paced.
+    private func serveRepair(_ payload: Data) async {
+        guard let group = await store.current, let chunks, let plain = FileCodec.openMessage(payload, group: group),
+              let r = try? JSONDecoder().decode(ChunkRepairRequest.self, from: plain), r.requesterId != identity.memberId,
+              group.containsMember(r.requesterId), let (file, keyVersion, indices) = library.serve(r, from: r.requesterId) else { return }
+        for i in indices {
+            guard let blob = chunks.read(fileId: file.fileId, index: i),
+                  let message = try? FileCodec.chunkMessage(fileId: file.fileId, index: i, total: file.chunkCount, ciphertext: blob,
+                                                            keyVersion: keyVersion, kid: file.kid) else { continue }
+            transport.publish(topic: Topics.fileChunk(groupId: group.groupId, fileId: file.fileId, chunkIndex: i), payload: message, qos: .qos1)
+            try? await Task.sleep(nanoseconds: 15_000_000)   // Android's pacing: don't overrun the in-flight window
+        }
+    }
+
+    private func announceFiles(force: Bool) async {
+        guard case .member(let group) = state, transport.isConnected,
+              let a = library.announcement(me: identity.memberId, now: now(), force: force),
+              let sealed = try? FileCodec.sealMessage(a, group: group) else { return }
+        for peer in group.members where peer.memberId != identity.memberId {
+            transport.publish(topic: Topics.fileAvailability(memberId: peer.memberId), payload: sealed, qos: .qos1)
+        }
+        saveLibrary()
+    }
+
+    /// Shares a file with the family: encrypted chunk by chunk under the current key (version 3),
+    /// stored as ciphertext, listed in the manifest, then published paced. Nothing plaintext is
+    /// written. A file whose exact bytes are already shared is not added twice.
+    public func uploadFile(at url: URL, name: String, mimeType: String, essential: Bool = true) async throws {
+        guard case .member(let group) = state, let chunks else { throw NodeError.notInFamily }
+        let declared = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+        guard library.usedBytes + declared <= FileLibrary.maxTotalBytes else { throw NodeError.storageFull }
+        let (key, keyVersion, kid) = FileKeys.writeKey(group)
+        let fileId = UUID().uuidString.lowercased()
+        var hasher = SHA256()
+        var size: Int64 = 0
+        var count = 0
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            while let piece = try handle.read(upToCount: FileLibrary.chunkSize), !piece.isEmpty {
+                hasher.update(data: piece)
+                try chunks.write(fileId: fileId, index: count, ciphertext: try FileCipher.seal(piece, key: key))
+                size += Int64(piece.count)
+                count += 1
+            }
+        } catch {
+            chunks.deleteAll(fileId)
+            throw NodeError.fileUnreadable
+        }
+        let hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        guard !library.holdsCopy(ofHash: hash) else { chunks.deleteAll(fileId); return }
+        guard library.usedBytes + size <= FileLibrary.maxTotalBytes else { chunks.deleteAll(fileId); throw NodeError.storageFull }
+        let file = SharedFile(fileId: fileId, name: name, mimeType: mimeType, sizeBytes: size, contentHash: hash,
+                              uploaderMemberId: identity.memberId, uploadedAt: now(), chunkCount: count, isEssential: essential, kid: kid)
+        library.addOwn(file, keyVersion: keyVersion)
+        saveLibrary()
+        onEvent(.files(library))
+        // The manifest first, so receivers have the entry before its chunks arrive. A pause, because a
+        // receiver that handles messages concurrently (Android) can otherwise see a chunk before it has
+        // stored the entry, drop it, and leave the whole file to repair.
+        await publishManifest()
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        await publishChunks(file, keyVersion: keyVersion, indices: Array(0..<count), group: group)
+        await publishManifest()
+        await announceFiles(force: true)
+    }
+
+    /// Deletes a file for everyone: the tombstone in the manifest erases it on every phone.
+    public func deleteFile(_ fileId: String) async {
+        guard library.delete(fileId, by: identity.memberId, now: now()) else { return }
+        chunks?.deleteAll(fileId)
+        saveLibrary()
+        onEvent(.files(library))
+        await publishManifest()
+    }
+
+    /// Keep a file on every phone (essential), or only where it's opened.
+    public func setEssential(_ fileId: String, _ essential: Bool) async {
+        guard library.setEssential(fileId, essential, now: now()) else { return }
+        saveLibrary()
+        onEvent(.files(library))
+        await publishManifest()
+        await runRepairs()
+    }
+
+    /// Our whole view of the library, retained, signed and encrypted under the current key.
+    private func publishManifest() async {
+        guard case .member(let group) = state, !library.entries.isEmpty,
+              let payload = try? FileCodec.sealManifest(library.manifest(groupId: group.groupId, now: now()), group: group, identity: identity)
+        else { return }
+        transport.publish(topic: Topics.fileManifest(groupId: group.groupId), payload: payload, qos: .qos1, retained: true)
+    }
+
+    private func publishChunks(_ file: SharedFile, keyVersion: Int, indices: [Int], group: GroupDefinition) async {
+        guard let chunks else { return }
+        for i in indices {
+            guard let blob = chunks.read(fileId: file.fileId, index: i),
+                  let message = try? FileCodec.chunkMessage(fileId: file.fileId, index: i, total: file.chunkCount, ciphertext: blob,
+                                                            keyVersion: keyVersion, kid: file.kid) else { continue }
+            transport.publish(topic: Topics.fileChunk(groupId: group.groupId, fileId: file.fileId, chunkIndex: i), payload: message, qos: .qos1)
+            try? await Task.sleep(nanoseconds: 15_000_000)   // Android's pacing: don't overrun the in-flight window
+        }
+    }
+
+    /// A member asked for the file list again. The request is plaintext and unauthenticated, so this
+    /// only republishes the manifest, at most every 10 minutes per member; chunks come by repair.
+    private func answerFileRequest(_ payload: Data) async {
+        guard let group = await store.current,
+              let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let requester = object["requesterId"] as? String, requester != identity.memberId,
+              group.containsMember(requester) else { return }
+        let t = now()
+        if let last = fileRequestSeen[requester], t - last < 10 * 60_000 { return }
+        fileRequestSeen[requester] = t
+        await publishManifest()
+    }
+
+    /// When the manifest was last sent again for a peer who'd never heard of one of our files.
+    private var lastManifestResendAtMs: Int64?
+
+    private func saveLibrary() { try? librarySlot.writeJSON(library) }
+
+    // MARK: - Crash alerts (B3)
+
+    /// Raises a crash alert to everyone else in the family and returns its id. It is stored before
+    /// the first send, then sent to each member until their phone confirms, for up to 24 hours.
+    @discardableResult
+    public func raiseEmergencyAlert(_ content: String) async -> String? {
+        guard case .member(let group) = state else { return nil }
+        let message = ChatCodec.compose(content: content, to: nil, groupId: group.groupId, identity: identity, now: now())
+        alerts.add(message, recipients: group.members.map(\.memberId).filter { $0 != identity.memberId })
+        saveAlerts()
+        chat.insert(message)
+        saveChat()
+        onEvent(.chat(chat))
+        onEvent(.emergency(alerts))
+        await flushAlerts(everything: false)
+        return message.messageId
+    }
+
+    /// Sends every copy that's due (or, on a reconnect, every one still owed). Each resend reuses
+    /// the original messageId and timestamp, so receivers keep one copy.
+    private func flushAlerts(everything: Bool) async {
+        defer { scheduleAlertTimer() }
+        guard case .member(let group) = state, transport.isConnected else { return }
+        let t = now()
+        let due = alerts.due(now: t, everything: everything)
+        guard !due.isEmpty else { return }
+        for (alert, recipientId) in due {
+            guard let peer = group.findMember(byId: recipientId) else {
+                alerts.markLeft(alertId: alert.id, recipientId: recipientId)
+                continue
+            }
+            guard let plaintext = try? ChatCodec.plaintext(alert.message),
+                  let sealed = await engine.sealForPeer(plaintext, to: peer) else { continue }
+            transport.publish(topic: Topics.chat(memberId: peer.memberId), payload: sealed, qos: .qos1)
+            alerts.recordAttempt(alertId: alert.id, recipientId: recipientId, now: t)
+            // PENDING → SENT only; a receipt may already have moved it further.
+            if chat.messages[alert.id]?.status == .pending { chat.setStatus(alert.id, .sent) }
+        }
+        saveAlerts()
+        saveChat()
+        onEvent(.emergency(alerts))
+        onEvent(.chat(chat))
+    }
+
+    private func scheduleAlertTimer() {
+        alertTimer?.cancel()
+        alertTimer = nil
+        guard running, let next = alerts.nextDueAtMs(now: now()) else { return }
+        let wait = UInt64(max(next - now(), 0)) * 1_000_000
+        alertTimer = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: wait)
+            guard !Task.isCancelled else { return }
+            await self?.flushAlerts(everything: false)
+        }
+    }
+
+    private func saveAlerts() {
+        alerts.prune(now: now())
+        try? emergencySlot.writeJSON(alerts)
+    }
+
+    private func sendReceipt(_ status: DeliveryStatus, for messageId: String, to memberId: String) async {
+        guard let peer = await store.current?.findMember(byId: memberId),
+              let body = try? ChatCodec.receipt(for: messageId, status: status, me: identity.memberId, now: now()),
+              let sealed = await engine.sealForPeer(body, to: peer) else { return }
+        let topic = status == .read ? Topics.chatRead(memberId: memberId) : Topics.chatReceipt(memberId: memberId)
+        transport.publish(topic: topic, payload: sealed, qos: .qos1)
+    }
+
+    private func saveChat() {
+        guard chatReadable else { return }
+        try? chatSlot.writeJSON(chat)
     }
 
     // MARK: - Security log
@@ -482,6 +1412,22 @@ public actor FamilyNode {
             await reconnect()
         }
         let members = Set(group.members.map(\.memberId))
+        library.keepHoldings(of: members)
+        history.prune(now: now(), members: members)
+        placeWatch.keepOnly(members)
+        if let known = knownMembers, !members.subtracting(known).isEmpty { await publishManifest() }
+        knownMembers = members
+        let before = chat
+        chat.prune(now: now(), me: identity.memberId, members: members, groupId: group.groupId)
+        if chat != before {
+            saveChat()
+            onEvent(.chat(chat))
+        }
+        if !Set(location.book.latest.keys).subtracting(members).isEmpty {
+            location.book.keepOnly(members)
+            saveLocation()
+            onEvent(.locations(location.book.latest))
+        }
         if Set(presenceBook.statuses.keys).subtracting(members).isEmpty == false {
             presenceBook.keepOnly(members)
             presence = presenceBook.statuses

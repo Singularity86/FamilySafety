@@ -123,6 +123,9 @@ class AndroidKeyStoreLocalKeyStore(
             .putInt(KEY_ACCOUNT_INDEX, accountIndex)
             .commit()
 
+        // Replay windows are per identity; a different one starts with none.
+        com.example.familysafety.crypto.ReplayGuard.belongTo(context, keys.signingKeyPair.publicKey.toHex())
+
         // Update cache
         cachedEd25519Seed = keys.signingKeyPair.privateKey.copyOf()
         cachedEd25519Public = keys.signingKeyPair.publicKey.copyOf()

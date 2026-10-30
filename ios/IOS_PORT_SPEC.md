@@ -287,14 +287,18 @@ a **sequenced body** wrapping the message:
 sequenced if it is a JSON object with integer `seq`, integer `ts` and string `body`. Keep a
 window per **(sender memberId, sender Ed25519 key)** — never per ID alone: a join request brings
 its own key, and keyed by ID a joiner naming a member could push that member's window past all
-their traffic. Verdicts (Android `ReplayVerdict`, iOS `ReplayWindow.swift`):
+their traffic. **Windows belong to this phone's identity (since Android 1.15.8, #92):** record
+the Ed25519 key they were kept for, and drop them on taking on a different identity, or if they
+were saved before the owner was recorded. The same identity restored from its phrase keeps them;
+your own sequence counter always stays. Android `ReplayGuard.belongTo`, iOS
+`ProtocolLedger.belong(to:)`. Verdicts (Android `ReplayVerdict`, iOS `ReplayWindow.swift`):
 
 | Verdict | When |
 |---|---|
 | `tooOld` | `ts < now − 7 days` |
 | `fromTheFuture` | `ts > now + 24 h` or `seq > (now + 24 h) × 1000` (receiver clock). A badly wrong sender clock fails at once instead of pushing their window ahead for months. |
 | `replay` | `seq ≤ floor`, or `seq` already in `seen` |
-| `unsequencedAfterSequenced` | a bare (unsequenced) body from a sender whose window exists. Surface the member as "needs to update". |
+| `unsequencedAfterSequenced` | a bare (unsequenced) body from a sender whose window exists, **more than 10 minutes after** you first accepted a sequenced body from them (the newcomer grace, below). Surface the member as "needs to update". |
 | `accept` | otherwise: add `seq` to `seen`; past **256** entries evict the smallest and set `floor` to it. Deliver `body`. |
 
 A refused envelope is authentic: don't treat it as a decrypt failure (no roster refresh).
@@ -302,6 +306,18 @@ Persist `floor` and `seen` (not only the highest `seq`): MQTT orders per topic o
 sender's group sync can overtake its chat, and a restart in between must still take the chat. A
 duplicate delivery (LAN and broker, QoS 1 redelivery) is now refused as `replay`; that is
 intended.
+
+**Newcomer grace (since 1.15.8).** When a sender's window is created (their first accepted
+sequenced body), also save the time, by your own clock. For **10 minutes** from then, a bare body
+from them is still accepted (not refused, not logged). It fixes a join: the inviter sends the
+newcomer several messages at once while learning that the newcomer reads sequenced bodies, LAN and
+broker deliver at different speeds, and a sequenced one overtook bare ones sent a moment earlier.
+Strict refusal dropped 8 of the inviter's first messages in the 2026-10-27 two-phone test and
+showed the inviter as "needs to update". The grace runs from the first sequenced body only (later
+ones don't extend it), survives a restart, and a window saved before this has no time and gets
+no grace. The same check decides whether a plaintext control message naming that member is a
+forgery (sealed control messages, §6.4). Android: `EnvelopeReplay.refusesUnsequenced`,
+`SEQUENCING_GRACE_MS`.
 
 ---
 
@@ -562,7 +578,7 @@ presence publishes, which are QoS 0 (§4). The presence last-will stays QoS 1.
 | `familysafe/{id}/files/availability` | `EncryptedFileMessage` wrapping `FileHoldingsAnnouncement` | ✅ group key | no |
 | `familysafe/group/{groupId}/vault/container` | `VaultContainerMessage` | container is already opaque; signed | **yes** |
 | `familysafe/group/{groupId}/vault/chunk/{fileId}/{chunkIndex}` | plaintext `VaultChunkMessage` (data field AES-GCM under the item's content key) | contents ✅ (per-item key, not the group key) | no |
-| `familysafe/{id}/vault/repair` | plaintext `VaultChunkRequest` | ❌ (names only an opaque id) | no |
+| `familysafe/{id}/vault/repair` | `EncryptedFileMessage` wrapping `VaultChunkRequest` (since 1.15.7; plaintext before, still accepted for now) | ✅ group key | no |
 | `familysafe/{id}/avatar/request` | **LAN only** (§4.1): `{"hash"}` | inside the LAN session | — |
 | `familysafe/{id}/avatar/data` | **LAN only** (§4.1): `{"hash","jpeg"}` | inside the LAN session | — |
 
@@ -982,8 +998,9 @@ with no priority flag on the wire. What differs is the sender's obligation:
 (has `senderMemberId`, `nonce`, `ciphertext`, `signature`) or the bare JSON. An envelope must
 decrypt from a roster member, pass the replay window (§3.1), and name that member
 (`memberId` / `requesterMemberId` = the envelope's sender). Take a plaintext one only if it names
-a roster member who has **never** sent you a sequenced body; once they have, a plaintext one in
-their name is a forgery or a replay. Plaintext naming a non-member is ignored.
+a roster member who has **never** sent you a sequenced body, or whose first one was within the
+last 10 minutes (the newcomer grace, §3.1); after that, a plaintext one in their name is a
+forgery or a replay. Plaintext naming a non-member is ignored.
 **Replies are rate-limited (since Android PR #25, F16).** A peer MAY rate-limit the roster
 broadcasts it sends in reply to refresh requests or to stale versions (Android: 10 per minute
 in total). The limit must be global, never keyed only by `requesterMemberId`, which is unsigned.
@@ -1190,6 +1207,13 @@ two non-empty parts, else null (group chat).
 - Announce to peer P only conversations with `mayShare(conv, P)`. Act on a received summary only
   if `mayShare(conv, us)` and `mayShare(conv, sender)`. Refuse a request for a conversation the
   requester may not hold. Filter received `messages` the same way (both us and sender).
+- **Location history is this family's only (since 1.15.8).** Put only current roster members in
+  `locationDataSummary`, ignore summary entries for anyone else, and refuse a `LOCATION_HISTORY`
+  request whose `targetMemberId` isn't in the roster. A phone that moved families still holds the
+  old family's history: it announced it, and served it page after page to the new family, whose
+  phones could only drop it (no key to check the author signatures). That was both a leak and
+  about 54 wasted request and response pairs on one reconnect (2026-10-27 test). Chat was already
+  scoped by `mayShare`.
 - Never send a backup copy of a private message to third parties.
 - **No push replication.** A `ReplicationResponse` is only ever an answer to a
   `ReplicationRequest`. Never push one unsolicited, whether to back up a message you sent or to
@@ -1426,6 +1450,13 @@ Peers announce what they hold by publishing a `FileHoldingsAnnouncement`, wrappe
 summary, not an event: it self-heals on the next tick and a member who has just joined gets
 the whole picture at once. Android debounces to at most one announcement per 30 s.
 
+**Since 1.15.8:** announce even when you hold nothing (`"holdings": []`). Receiving one, check
+it against the files **you** shared: one that is complete here, more than 2 minutes old and not
+listed at all means the peer never got the manifest naming it, so publish the manifest again (at
+most once per 10 minutes). A share whose publish went into a connection that had already died
+was otherwise never sent again (Android Auto taking the Wi-Fi, 2026-10-27 test). A file listed
+as `PARTIAL` is known to the peer and its own chunk repair fetches it; don't re-send for those.
+
 Two anti-forgery rules, both worth copying:
 
 - Count a peer as holding a copy only when `state` is `COMPLETE` **and** its `contentHash`
@@ -1460,7 +1491,7 @@ support**: a client that ignores it stops vault documents reaching the devices b
 // VaultChunkMessage — on familysafe/group/{groupId}/vault/chunk/{fileId}/{chunkIndex}
 { "fileId": "<uuid>", "chunkIndex": 0, "totalChunks": 0,
   "data": "<base64 of nonce ‖ ciphertext ‖ tag under the item's content key>" }
-// VaultChunkRequest — on familysafe/{peerId}/vault/repair
+// VaultChunkRequest — on familysafe/{peerId}/vault/repair, sealed (below)
 { "requesterId": "...", "fileId": "<uuid>", "missing": [0, 1, 2], "timestamp": 0 }
 // VaultSlotPayload — never on the wire; this is what is sealed into a slot
 { "fileId": "<uuid>", "name": "...", "mimeType": "...", "sizeBytes": 0,
@@ -1510,8 +1541,10 @@ Rules an implementation must not break:
 - **Never store the code, the key, or a hash of either.** A code in the binary would be the F2
   broker-credential mistake again.
 - **Never offer an "enter code" prompt.** The prompt itself proves a vault exists. Android's
-  entry point is the file search box: typing filters the list, submitting (IME "Go", 6+
-  characters) opens a vault. Any string opens one, so submitting distinguishes nothing.
+  entry point is the file search box: typing filters the list, submitting (IME "Go", 16+
+  characters, the passphrase floor below) opens a vault. Shorter submissions only filter: no
+  vault can have a shorter code, and the threshold is the same for every vault, so it reveals
+  nothing. Any string of that length opens one, so submitting distinguishes nothing.
 
 An item appears in `REPLICAS` slots; when several copies of one `fileId` open, the **highest
 `revision` wins**. `state` is `ACTIVE` or `RECLAIMED` — deletion flips the state and keeps the
@@ -1583,6 +1616,24 @@ authenticates every chunk at the moment someone opens the vault; a corrupt chunk
 Serving a `VaultChunkRequest` likewise consults only the blob store. Holding the bytes is the
 entire qualification, and answering reveals nothing — every device holds every vault document,
 so answering does not imply being able to read it.
+
+**The request is sealed** (since 1.15.7) exactly like `files/repair`: an `EncryptedFileMessage`
+(`keyVersion` 3, `kid` as for files, `data` = AES-GCM under the files subkey of the group key,
+legacy key only in a family without one). In plaintext it told anyone on the broker which vault
+document a phone was fetching, and when. Android seals it with the same code as `files/repair`
+(`FileMessageCipher`). **Receive both** for now, by these rules (Android `VaultRepairRequests`):
+- An `EncryptedFileMessage` is answered only if it opens under a key you hold. One you can't open
+  is **dropped**, never re-read as plaintext.
+- A plaintext `VaultChunkRequest` is answered only while plaintext is still accepted, for phones
+  that haven't updated. That acceptance goes in a later release.
+- Either way, `requesterId` must be in the current roster.
+
+Until a phone updates, it can't read sealed requests, so it won't serve updated phones; updated
+phones still serve it.
+
+**Residual, accepted for now:** the replies still go to `vault/chunk/{fileId}/{index}` and follow
+the request closely, so the broker can still see *that* a given vault document is being fetched,
+though no longer by whom or which pieces. Hiding that needs opaque chunk topics, a larger change.
 
 A device that was offline when a document was added fetches it the next time someone opens the
 vault **on that device**. It cannot do better: without a code it does not know the blob is
@@ -2048,6 +2099,13 @@ inviter approving "Dana" would encrypt the family, file key included, to the out
 { "inviterEd25519PublicKey": "<hex>", "inviterX25519PublicKey": "<hex>",
   "encryptedGroupDefinition": "<Envelope JSON (§3) wrapping the GroupDefinition JSON>" }
 ```
+   **Since Android 1.15.8 (#92)**, the envelope's plaintext for a **v2** joiner is a sequenced
+   body (§3.1) wrapping the GroupDefinition JSON: v2 joins and sequencing both arrived in 1.15.5.
+   Bare, it was refused as a downgrade by a phone still holding a window for the inviter from an
+   earlier identity, and the joiner waited for ever on a retained approval. The **joiner** takes
+   either form, even from an inviter who sequences to it (inviters before this send bare): the
+   approval is already pinned to the scanned invite, signed by the inviter and sealed to the
+   joiner's keys, so a replay of it can't harm. iOS: `InviterDesk.approve`, `JoinFlow.evaluate`.
 5. Broadcast `MEMBER_ADDED` group sync to existing members + refresh request.
 
 Rejection: same topic, retained, distinct field names:

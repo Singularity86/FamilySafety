@@ -9,6 +9,148 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.15.8 (50) — Fixes from the first two-phone test
+
+Builds on 1.15.7 (48). Contains #86 (replay newcomer grace), #87 (manifest re-send), #88 (Files
+summary), #89 (location history scoped to the family) and #90 (reconnect on network change), all
+from bugs found in the 2026-10-27 two-phone test, and #92 (join approval), found in this
+release's own check. Build 49 went to internal testing only, without #92, and was never
+promoted. Not included: #67 (R8).
+
+Wire format: **no message format change, no `PROTOCOL_VERSION` bump.** Behaviour other phones
+see:
+- Holdings announcements are now also sent when empty.
+- Location history is announced, requested and served only for current family members.
+
+Phones on 1.15.7 work with both. iOS should match #86, #87 and #89 (spec updated).
+
+Database: unchanged (11). `ReplayGuard` keeps a first-sequenced time per sender (`f:` keys) and
+the identity its windows belong to (`owner`), in its existing preferences file.
+
+Fixed:
+- **Joining:** the new member's phone refused the inviter's first messages and showed the inviter
+  as "needs to update" (8 dropped in the test).
+- **A file shared as the connection dropped** never reached the other phones until the next share.
+- **"All files are on every device"** showed while a file was missing.
+- **Privacy:** a phone that had moved families sent the old family's location history to the new
+  one.
+- **Network switches** (wireless Android Auto, Wi-Fi to mobile data and back): the app now
+  reconnects at once instead of after the 120 s keep-alive and backoff. The first version hung on
+  `disconnectForcibly(0, 0)`; caught on the S9 before merge.
+- **Rejoining stuck on "Waiting for approval" (#92):** a phone that took on a new identity kept
+  the old one's replay windows and refused its own approval as a downgrade, for good, since the
+  approval is retained. Approvals are now sent sequenced, a joiner accepts a bare one from older
+  inviters, and windows are dropped when the identity changes.
+
+Checked: full unit suite (887) on main 767acfe. On the S9 and the owner's XCover (debug builds of
+this code): the stuck XCover joined once it had #92; chat both ways with no refusals; a file shared
+from the XCover arrived and verified on the S9; the network switch on the S9 (Wi-Fi off:
+reconnected on mobile data in about 1 s; Wi-Fi on: switched in 1.7 s). **Not yet run:** a real
+wireless Android Auto drive. Promoted to all users on the owner's instruction.
+
+### Play copy
+
+```
+Reliability and privacy fixes.
+• New family members get the first messages from the person who invited them
+• Rejoining a family no longer gets stuck waiting for approval
+• A file shared just as your signal drops still reaches the family
+• The Files screen only says a file is on every device when it really is
+• The app reconnects right away when your phone switches networks, like when Android Auto starts
+• Location history from a previous family is never shared with a new one
+```
+
+---
+
+## 1.15.7 (48) — Vault fixes, private vault requests, steadier under load
+
+Builds on 1.15.6 (47). Contains #64 (inbound queues), #82 (sealed vault chunk requests), #83
+(vault add and open fixes) and #84 (who is inside a place survives a relaunch). Also on main
+but not in the app: #69 and #73 (Play upload tooling), #78 (security log tests). Not included:
+#67 (R8 shrinking, checklist unfinished).
+
+Wire format: **one change, no `PROTOCOL_VERSION` bump.** `vault/repair` now carries an
+`EncryptedFileMessage` instead of a plaintext `VaultChunkRequest` (agreed with the Mac
+session, 2026-10-26; iOS ships the same in its vault release). Plaintext requests from
+phones on 1.15.6 are still answered; a phone on 1.15.6 can't read sealed ones, so it won't
+send vault pieces to updated phones until it updates.
+
+Database: unchanged (11). Places add a small preferences file, `geofence_inside`, excluded
+from backup and device transfer.
+
+Fixed:
+- **Adding to the vault did nothing.** The document picker stopped the screen, which closed
+  the vault before the file came back.
+- **Opening the vault bounced back about two times in three.** The screen left on its first
+  frame, before the code had become a key.
+- **A relaunch announced everyone already inside a place as arriving.**
+
+#64 handles incoming messages in bounded, ordered lanes per kind of traffic, so a flood (or a
+burst of file pieces) can't stall chat or exhaust the phone.
+
+Checked: full unit suite (861) on main 3dde402; the vault fixes on the Galaxy S9 (the owner
+added a document). **Not yet run between two phones:** chat and file transfer through #64's
+queues. Run them before promoting past internal testing.
+
+### Play copy
+
+```
+Fixes and privacy for the family vault.
+• Adding a document to the vault works
+• The vault opens on the first try
+• A phone's requests for vault documents are now encrypted
+• Reopening the app no longer announces everyone already at a place as just arriving
+• Smoother when lots of messages or file pieces arrive at once
+```
+
+---
+
+## 1.15.6 (47) — Local Wi-Fi security, presence for big families, security log
+
+Builds on 1.15.5 (46). Contains #49 (catch-up on a stale roster), #50 (4.1 authenticated LAN),
+#53 + #54 (4.2 presence under the group topic, with the retained-copy fix), #56 (sudden
+disconnect shows as offline), #58 + #59 + #60 (Phase 5 cleanup and tests), #62 (security log
+with Send report) and #63 (catch-up gives up on a stranger for 24 h). Not included: #64
+(inbound queues, needs a two-phone test) and #67 (R8 shrinking, checklist unfinished); each
+ships on its own later.
+
+Wire format: **changes. `PROTOCOL_VERSION` goes to 5**; phones on 4 and earlier keep working:
+- Presence goes to both the old and the group topic until every member who counts is on 5
+  (30-day rule); only then does a phone move to the group topic and two subscriptions.
+- Online presence gains an optional signed `sessionStart`; presence padding goes from 640 to
+  768 bytes. Older phones ignore both.
+- The LAN channel is now authenticated. Phones on 1.15.5 or earlier aren't found on the LAN, so
+  a mixed pair talks through the broker until both are updated.
+
+Database: unchanged (11).
+
+**Crash fix, found 2026-10-22 on 1.15.5:** the app aborted with "JNI ERROR: global reference
+table overflow (max=102400)" in JNA's `Native.registerMethod`, usually as it was opened (seen on
+the S9 as a hang at start-up). Every LocationService start (app open, heartbeat, watchdog) built
+a key store, which built a new libsodium binding, and each binding keeps JNI global references
+forever. 1.15.6 has one binding per process (`crypto/Sodium.kt`, from #58), so the table no longer
+grows.
+
+Checked on 2026-10-21: full unit suite on main; the debug build installed over 1.13.6-debug on
+the Galaxy S9 kept its family and identity, connected to the broker with 2 subscriptions, and the
+security log and Send report worked. **Not run on a device:** anything between two phones
+(chat, location, presence, sudden disconnect, LAN). The PC had too little free memory for an
+emulator; do a two-phone check before promoting past internal testing.
+
+### Play copy
+
+```
+Security and reliability update.
+• Fixes the app freezing or closing on start after running for a day or so
+• Phones on the same Wi-Fi now prove who they are before talking directly
+• Once everyone updates, big families see every member online, not just the first ten
+• If a phone dies suddenly, the family sees it go offline
+• New Settings → Security log: see what your phone refused, and send a report if you want
+• A phone that missed a new member catches up on its own
+```
+
+---
+
 ## 1.15.5 (46) — Authenticated joins, signed history, key rotation, replay protection
 
 Builds on 1.15.4 (45). Contains everything open on 2026-10-16: #27 (2.1 authenticated join),

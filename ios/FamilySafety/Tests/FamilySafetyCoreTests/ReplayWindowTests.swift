@@ -37,7 +37,7 @@ final class ReplayWindowTests: XCTestCase {
         XCTAssertEqual(w.check(sender: "s", body: body(1, ts: now - ReplayWindow.maxAgeMs - 1), nowMs: now), .tooOld)
         XCTAssertEqual(w.check(sender: "s", body: nil, nowMs: now), .accept, "plain bodies are fine before any sequenced one")
         _ = w.check(sender: "s", body: body(now * 1000), nowMs: now)
-        XCTAssertEqual(w.check(sender: "s", body: nil, nowMs: now), .unsequencedAfterSequenced)
+        XCTAssertEqual(w.check(sender: "s", body: nil, nowMs: now + ReplayWindow.sequencingGraceMs + 1), .unsequencedAfterSequenced)
     }
 
     func test_windowEvictsTheSmallestIntoTheFloor() {

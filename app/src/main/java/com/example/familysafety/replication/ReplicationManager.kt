@@ -414,8 +414,14 @@ class ReplicationManager @Inject constructor(
         senderMemberId: String
     ) {
         val targetMemberId = request.targetMemberId ?: return
-        val sender = groupStateManager.groupDefinition.value
-            ?.findMemberById(senderMemberId) ?: return
+        val group = groupStateManager.groupDefinition.value ?: return
+        val sender = group.findMemberById(senderMemberId) ?: return
+        // Only this family's history. A phone that moved families still holds the old one's,
+        // and served it to the new family on request (2026-10-27 two-phone test).
+        if (group.findMemberById(targetMemberId) == null) {
+            Timber.w("$TAG: ${senderMemberId.take(8)} asked for history of non-member ${targetMemberId.take(8)} — refusing")
+            return
+        }
 
         // Get locations we have after the requested timestamp
         val locations = locationHistoryRepository.getLocationsAfter(
@@ -643,8 +649,11 @@ class ReplicationManager @Inject constructor(
         try {
             // Build location data summary
             val dataSummary = locationHistoryRepository.getDataSummary()
+            // Current members only: history kept from an earlier family is not this family's.
             val locationSummary = dataSummary.mapNotNull { (memberId, summary) ->
-                if (summary.oldestTimestamp != null && summary.newestTimestamp != null) {
+                if (group.findMemberById(memberId) != null &&
+                    summary.oldestTimestamp != null && summary.newestTimestamp != null
+                ) {
                     MemberDataSummary(
                         memberId = memberId,
                         oldestTimestamp = summary.oldestTimestamp,
@@ -708,11 +717,13 @@ class ReplicationManager @Inject constructor(
             Timber.d("$TAG: Received data availability from $senderMemberId")
 
             val localMemberId = groupStateManager.localMember.value?.memberId ?: return
-            val sender = groupStateManager.groupDefinition.value
-                ?.findMemberById(senderMemberId) ?: return
+            val group = groupStateManager.groupDefinition.value ?: return
+            val sender = group.findMemberById(senderMemberId) ?: return
 
-            // Check if peer has data we don't have
+            // Check if peer has data we don't have. Only about members: we would drop a
+            // non-member's fixes anyway (no key to check them against), page after page.
             announcement.locationDataSummary.forEach { summary ->
+                if (group.findMemberById(summary.memberId) == null) return@forEach
                 val ourNewest = locationHistoryRepository.getNewestTimestamp(summary.memberId)
 
                 if ((ourNewest == null || summary.newestTimestamp > ourNewest) &&

@@ -23,6 +23,7 @@ struct FamilyView: View {
                         ForEach(sortedMembers, id: \.memberId) { member in
                             MemberRow(member: member, isMe: member.memberId == model.memberId,
                                       status: model.presence[member.memberId],
+                                      lastFix: model.locations[member.memberId],
                                       needsUpdate: model.needsUpdate.contains(member.memberId))
                                 .swipeActions {
                                     if isCreator && member.memberId != model.memberId {
@@ -71,6 +72,7 @@ struct MemberRow: View {
     let member: FamilyMember
     let isMe: Bool
     let status: PresenceStatus?
+    var lastFix: LocationUpdate? = nil
     var needsUpdate = false
 
     var body: some View {
@@ -80,7 +82,10 @@ struct MemberRow: View {
                 Text(isMe ? "\(member.displayName) (you)" : member.displayName)
                     .font(Typeface.title)
                     .foregroundStyle(Palette.personText(PersonPalette.forMember(memberId: member.memberId, colorHue: member.colorHue)))
-                Text(detail).font(Typeface.small).foregroundStyle(Palette.secondaryText)
+                Group {
+                    if let seen = lastSeen { RelativeTime(date: seen, prefix: "Last seen ") } else { detailText }
+                }
+                .font(Typeface.small).foregroundStyle(Palette.secondaryText)
             }
             Spacer()
         }
@@ -89,13 +94,21 @@ struct MemberRow: View {
         .listRowSeparatorTint(Palette.hairline)
     }
 
-    private var detail: String {
-        if isMe { return "This phone" }
-        if needsUpdate { return "Needs to update the app to stay in sync" }
-        guard let status else { return "Not heard from yet" }
-        if status.isOnline { return "Online" }
-        let date = Date(timeIntervalSince1970: Double(status.timestamp) / 1000)
-        return "Last seen " + date.formatted(.relative(presentation: .named))
+    /// The status line; "Last seen …" is drawn by `RelativeTime` so it keeps up (it used to freeze).
+    private var detailText: Text {
+        if isMe { return Text("This phone") }
+        if needsUpdate { return Text("Needs to update the app to stay in sync") }
+        guard let status else { return Text("Not heard from yet") }
+        return Text("Online")
+    }
+
+    /// When an offline member was last seen; nil when the plain text above applies. A last-will
+    /// is signed at connect, so after a sudden death its timestamp is when the session began; a
+    /// newer location fix is the better answer.
+    private var lastSeen: Date? {
+        guard !isMe, !needsUpdate, let status, !status.isOnline else { return nil }
+        let millis = max(status.timestamp, lastFix?.timestamp ?? 0)
+        return Date(timeIntervalSince1970: Double(millis) / 1000)
     }
 }
 
@@ -176,6 +189,7 @@ struct SettingsView: View {
     @State private var notice: String?
     @State private var name = ""
     @State private var leaving = false
+    @State private var testingAlert = false
 
     var body: some View {
         NavigationStack {
@@ -200,6 +214,67 @@ struct SettingsView: View {
                         LabeledContent("Member ID") { Text(model.memberId ?? "").font(Typeface.small).textSelection(.enabled) }
                     }
                     .font(Typeface.body).listRowBackground(Palette.surface)
+                    Section {
+                        Toggle("Share my location", isOn: Binding(get: { !model.sharingPaused },
+                                                                  set: { on in Task { await model.setSharingPaused(!on) } }))
+                            .tint(Palette.amber)
+                        if !model.sharingPaused {
+                            LabeledContent("While the app is closed") {
+                                if model.locationAuthorization == .authorizedAlways {
+                                    Text("On").font(Typeface.small)
+                                } else {
+                                    Button("Allow") { model.allowBackgroundLocation() }
+                                        .font(Typeface.bodyStrong).foregroundStyle(Palette.amber)
+                                }
+                            }
+                        }
+                        if model.locationAuthorization == .denied || model.locationAuthorization == .restricted {
+                            Text("Location is off for this app in iPhone Settings, so your family can't see where you are.")
+                                .font(Typeface.small).foregroundStyle(Palette.warningText)
+                        }
+                    } footer: {
+                        Text(model.sharingPaused
+                             ? "Paused: this phone sends no location, and won't start again by itself. You still see your family and can chat."
+                             : model.locationAuthorization == .authorizedAlways
+                                ? "Your family sees where you are, also while the app is closed: this phone sends a new position when you move about 150 m or more. It's encrypted on this phone; no server can read it."
+                                : "While the app is open, your family sees where you are. Allow it while closed so they still see you after you put the phone away. It's encrypted on this phone; no server can read it.")
+                            .font(Typeface.small)
+                    }
+                    .font(Typeface.body).listRowBackground(Palette.surface)
+                    if let alert = model.emergency.current(now: Int64(Date().timeIntervalSince1970 * 1000)) {
+                        Section {
+                            NavigationLink {
+                                CrashAlertStatusView(alertId: alert.id)
+                            } label: {
+                                LabeledContent("Crash alert") {
+                                    Text("Sent \(Date(timeIntervalSince1970: Double(alert.raisedAtMs) / 1000).formatted(date: .omitted, time: .shortened))")
+                                        .font(Typeface.small)
+                                }
+                            }
+                        } footer: {
+                            Text("It keeps being sent until each phone confirms it, for up to a day.").font(Typeface.small)
+                        }
+                        .font(Typeface.body).listRowBackground(Palette.surface)
+                    }
+                    if case .member(let group) = model.nodeState {
+                        Section {
+                            NavigationLink { PlacesView(group: group) } label: {
+                                LabeledContent("Places & alerts") {
+                                    Text(model.places.places.isEmpty ? "None" : "\(model.places.places.count)").font(Typeface.small)
+                                }
+                            }
+                        }
+                        .font(Typeface.body).listRowBackground(Palette.surface)
+                    }
+                    #if DEBUG
+                    Section {
+                        Button("Send a test crash alert") { testingAlert = true }.font(Typeface.body)
+                    } header: { Text("Crash alert (debug)").font(Typeface.label) } footer: {
+                        Text("Debug builds only. Sends a real crash alert to every family member, as crash detection would.")
+                            .font(Typeface.small)
+                    }
+                    .listRowBackground(Palette.surface)
+                    #endif
                     Section {
                         NavigationLink {
                             SecurityLogView()
@@ -226,6 +301,11 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $revealing) { RevealPhraseView(words: model.recoveryPhrase()) }
             .onAppear { name = model.profile?.displayName ?? "" }
+            .confirmationDialog("Send a crash alert to the whole family?", isPresented: $testingAlert, titleVisibility: .visible) {
+                Button("Send alert", role: .destructive) { Task { await model.raiseCrashAlert() } }
+            } message: {
+                Text("Everyone's phone will show that you may have been in an accident.")
+            }
             .confirmationDialog("Leave the family?", isPresented: $leaving, titleVisibility: .visible) {
                 Button("Leave", role: .destructive) { Task { await model.leaveFamily() } }
             } message: {

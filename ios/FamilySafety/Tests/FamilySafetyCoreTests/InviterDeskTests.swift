@@ -78,6 +78,13 @@ final class InviterDeskTests: XCTestCase {
         let raw2 = await w.outbox.last(on: Topics.joinApproval(joinerMemberId: joiner.memberId))
         let approval = try XCTUnwrap(raw2)
         XCTAssertEqual(JoinFlow.evaluate(payload: approval, identity: joiner, pending: pending), .approved(family))
+        // Sealed sequenced for a v2 joiner (Android #92).
+        let message = try JSONDecoder().decode(JoinApprovalMessage.self, from: approval)
+        let opened = try E2EECrypto(localMemberId: joiner.memberId, localEd25519SecretKey: joiner.ed25519SecretKey64,
+                                    localX25519SecretKey: joiner.x25519PrivateKey)
+            .decrypt(envelopeJSON: Data(message.encryptedGroupDefinition.utf8), senderMemberId: w.inviter.memberId,
+                     senderX25519PublicKey: w.inviter.x25519PublicKey, senderEd25519PublicKey: w.inviter.ed25519PublicKey)
+        XCTAssertNotNil(SequencedBody.parse(opened))
 
         // A redelivery after the decision is dropped (the used invite is pruned), and nobody else gets in through it.
         let got3 = await w.desk.handle(payload: pending.requestJSON)

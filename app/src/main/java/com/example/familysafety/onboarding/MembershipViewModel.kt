@@ -293,11 +293,17 @@ class MembershipViewModel @Inject constructor(
             return null
         }
 
+        // A bare approval is taken even from an inviter who sequences to us: inviters before
+        // 1.15.8 send it bare to anyone they haven't seen, and a phone rejoining under a new
+        // identity keeps its windows, so it refused the approval for good (2026-10-27 test).
+        // Safe to relax here: the approval is pinned to the scanned invite above, signed by the
+        // inviter, sealed to our own keys, and only read while we wait to join.
         val groupDefJson = try {
             e2eeManager.decryptMessage(
                 encryptedMessageJson = approval.encryptedGroupDefinition,
                 senderX25519PublicKey = approval.inviterX25519PublicKey.hexToBytes(),
-                senderEd25519PublicKey = approval.inviterEd25519PublicKey.hexToBytes()
+                senderEd25519PublicKey = approval.inviterEd25519PublicKey.hexToBytes(),
+                allowUnsequenced = true
             )
         } catch (e: Exception) {
             Timber.w(e, "Ignoring approval that failed decryption/signature verification")

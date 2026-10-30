@@ -145,11 +145,8 @@ fun FilesScreen(
             // Summary line into the status board. Surfaces the one number worth acting on —
             // files that exist on this phone and nowhere else — rather than making someone
             // open a screen to find out whether anything is wrong.
-            val needsAttention = board.count {
-                it.status == com.example.familysafety.files.FileStatus.STALLED ||
-                    it.status == com.example.familysafety.files.FileStatus.WAITING_FOR_PEER
-            }
-            val onlyHere = board.count { it.isKnownToBeOnlyHere }
+            val needsAttention = com.example.familysafety.files.FilesSummary.arriving(board)
+            val onlyHere = com.example.familysafety.files.FilesSummary.onlyHere(board)
             if (board.isNotEmpty()) {
                 Surface(
                     onClick = onOpenStatusBoard,
@@ -168,11 +165,7 @@ fun FilesScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = when {
-                                needsAttention > 0 -> "$needsAttention file${if (needsAttention == 1) "" else "s"} still arriving"
-                                onlyHere > 0 -> "$onlyHere file${if (onlyHere == 1) " is" else "s are"} only on this phone"
-                                else -> "All files are on every device"
-                            },
+                            text = com.example.familysafety.files.FilesSummary.line(board),
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier.weight(1f)
                         )

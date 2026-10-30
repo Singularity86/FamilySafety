@@ -180,4 +180,46 @@ class FileStatusRowTest {
     fun progressIsZeroRatherThanDividingByZeroBeforeMetadataArrives() {
         assertEquals(0f, row(entity(chunkCount = 0)).progressFraction, 0.0001f)
     }
+
+    // ── The summary line (two-phone test, 2026-10-27) ────────────────────────────
+
+    private val complete = entity(state = "COMPLETE", chunksReceived = 10)
+
+    @Test
+    fun summarySaysEveryDeviceOnlyWhenEveryMemberHasACopy() {
+        assertEquals(
+            "All files are on every device",
+            FilesSummary.line(listOf(row(complete, copiesElsewhere = 1, totalMembers = 2)))
+        )
+    }
+
+    @Test
+    fun aQueuedFileIsStillArrivingNotOnEveryDevice() {
+        // The S9: one file here, one listed but queued.
+        val board = listOf(row(complete, copiesElsewhere = 1, totalMembers = 2), row(entity(), totalMembers = 2))
+        assertEquals("1 file still arriving", FilesSummary.line(board))
+    }
+
+    @Test
+    fun noReportFromOtherDevicesIsNotEveryDevice() {
+        // The XCover: its own file, and the other phone hadn't reported in.
+        val board = listOf(row(complete, copiesElsewhere = 0, totalMembers = 2, availabilityKnown = false))
+        assertEquals("Waiting for other devices to report in", FilesSummary.line(board))
+        assertFalse(FilesSummary.onEveryDevice(board))
+    }
+
+    @Test
+    fun aFileSomeMembersLackIsNotEveryDevice() {
+        val board = listOf(row(complete, copiesElsewhere = 1, totalMembers = 3))
+        assertFalse(FilesSummary.onEveryDevice(board))
+        assertEquals("Waiting for other devices to report in", FilesSummary.line(board))
+    }
+
+    @Test
+    fun aFileKnownToBeOnlyHereSaysSo() {
+        assertEquals(
+            "1 file is only on this phone",
+            FilesSummary.line(listOf(row(complete, copiesElsewhere = 0, totalMembers = 2)))
+        )
+    }
 }

@@ -38,3 +38,8 @@ ios/FamilySafetyiOS/build/
 /ios/REMEDIATION_PLAN.md
 /app/CODE_REVIEW_*.md
 /ios/CODE_REVIEW_*.md
+
+# Play publishing: the service account key (keystore/ already covers it, this is a second lock)
+# and the release notes copied from RELEASE_NOTES.md at build time.
+play-service-account*.json
+app/src/main/play/release-notes/
