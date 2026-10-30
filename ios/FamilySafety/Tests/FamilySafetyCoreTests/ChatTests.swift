@@ -59,6 +59,25 @@ final class ChatTests: XCTestCase {
                         "unsigned live chat from an older build is taken, as on Android")
     }
 
+    func test_aForgedChatMessageRecordsExactlyOneForgedSignatureEntry() throws {
+        let ana = try id("ana"), dana = try id("dana")
+        let sent = ChatCodec.compose(content: "meet at 5", to: nil, groupId: groupId, identity: ana, now: 5)
+        // Same signature, altered text: the claimed author is Ana, a roster member.
+        let forged = try ChatCodec.plaintext(sent).replacingOccurrences(of: "meet at 5", with: "meet at 6")
+        let log = SecurityRecorder(slot: nil)
+        XCTAssertNil(ChatCodec.receive(forged, sender: member(ana), me: dana.memberId, groupId: groupId, security: log))
+        XCTAssertEqual(log.snapshot.events.map(\.kind), [.forgedSignature])
+        XCTAssertEqual(log.snapshot.events.first?.detail, "chat")
+        XCTAssertEqual(log.snapshot.events.first?.memberId, ana.memberId)
+        // Not logged: genuine, unsigned (an older build), or another family's group message.
+        XCTAssertNotNil(ChatCodec.receive(try ChatCodec.plaintext(sent), sender: member(ana), me: dana.memberId, groupId: groupId, security: log))
+        let unsigned = ChatMessagePayload(messageId: "u1", content: "old build", messageType: .text, timestamp: 1, conversationId: groupId)
+        XCTAssertNotNil(ChatCodec.receive(String(decoding: try JSONEncoder().encode(unsigned), as: UTF8.self),
+                                          sender: member(ana), me: dana.memberId, groupId: groupId, security: log))
+        XCTAssertNil(ChatCodec.receive(try ChatCodec.plaintext(sent), sender: member(ana), me: dana.memberId, groupId: "other", security: log))
+        XCTAssertEqual(log.snapshot.events.count, 1)
+    }
+
     func test_acceptsAndroidsJsonWithNulls() throws {
         let ana = try id("ana"), dana = try id("dana")
         let json = #"{"messageId":"a1","content":"from android","messageType":"TEXT","timestamp":7,"conversationId":null,"replyToMessageId":null,"authorSig":null}"#
