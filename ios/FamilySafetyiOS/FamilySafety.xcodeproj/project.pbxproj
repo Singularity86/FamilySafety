@@ -178,6 +178,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = A1000000000000000000F002 /* App.xcconfig */;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
@@ -195,7 +196,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = jibaro.spacepirate.love;
 				PRODUCT_NAME = JibaroFamilySafety;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -208,6 +209,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = A1000000000000000000F002 /* App.xcconfig */;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
@@ -225,7 +227,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = jibaro.spacepirate.love;
 				PRODUCT_NAME = JibaroFamilySafety;
 				SWIFT_EMIT_LOC_STRINGS = YES;

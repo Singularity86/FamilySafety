@@ -293,6 +293,11 @@ struct SettingsView: View {
                         Button("Leave family", role: .destructive) { leaving = true }.font(Typeface.body)
                     }
                     .listRowBackground(Palette.surface)
+                    Section {
+                        Link("Privacy policy", destination: AppLinks.privacyPolicy)
+                        LabeledContent("Version") { Text(Bundle.main.versionLine).font(Typeface.small) }
+                    } header: { Text("About").font(Typeface.label) }
+                    .font(Typeface.body).listRowBackground(Palette.surface)
                 }
                 .scrollContentBackground(.hidden)
                 .padding(.horizontal, -Spacing.m)

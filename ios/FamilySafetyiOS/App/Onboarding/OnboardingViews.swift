@@ -53,6 +53,9 @@ struct WelcomeView: View {
                 Spacer()
                 Button("Get started", action: onNew).buttonStyle(PrimaryButtonStyle())
                 Button("I have a recovery phrase", action: onRestore).buttonStyle(SecondaryButtonStyle())
+                Link("Privacy policy", destination: AppLinks.privacyPolicy)
+                    .font(Typeface.small).tint(Palette.secondaryText)
+                    .frame(maxWidth: .infinity)
             }
             .padding(.bottom, Spacing.l)
         }

@@ -493,10 +493,7 @@ public actor FamilyNode {
             switch await desk.handle(payload: payload) {
             case .prompted: await publishPrompts()
             case .dropped(let reason):
-                // A member's ID with someone else's keys is an impersonation attempt; the rest
-                // are failed checks (a spent, expired or forged invite).
-                security.record(reason == "member ID with different keys" ? .impersonatedJoin : .joinRequestRejected,
-                                memberId: nil, detail: reason)
+                security.record(InviterDesk.securityKind(forDropped: reason), memberId: nil, detail: reason)
             default: break
             }
             if let group = await store.current, case .member = state { setState(.member(group)) }
@@ -745,8 +742,9 @@ public actor FamilyNode {
     private func receiveChat(_ payload: Data) async {
         guard case .member(let group) = state, let (sender, body) = await engine.openFromPeer(payload),
               sender.memberId != identity.memberId else { return }
-        // A bad author signature, or a group message naming another family, is dropped (as on Android, not logged).
-        guard var message = ChatCodec.read(body, sender: sender, me: identity.memberId, groupId: group.groupId) else { return }
+        // Dropped: a group message naming another family, or a bad author signature (logged, as on Android).
+        guard var message = ChatCodec.receive(body, sender: sender, me: identity.memberId, groupId: group.groupId,
+                                              security: security) else { return }
         // Already held: confirm it again, so a sender whose receipt was lost stops retrying (F27).
         // Only DELIVERED: a re-send says nothing about reading.
         if chat.contains(message.messageId) {

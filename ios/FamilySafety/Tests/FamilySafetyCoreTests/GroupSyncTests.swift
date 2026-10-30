@@ -229,7 +229,7 @@ final class GroupSyncTests: XCTestCase {
 
     // MARK: - Engine, end to end
 
-    private func pair() async throws -> (alice: FamilySafeIdentity, bob: FamilySafeIdentity, base: GroupDefinition,
+    private func pair(bobSecurity: SecurityRecorder? = nil) async throws -> (alice: FamilySafeIdentity, bob: FamilySafeIdentity, base: GroupDefinition,
                                           aliceEngine: GroupSyncEngine, bobEngine: GroupSyncEngine,
                                           aliceStore: GroupStateStore, bobStore: GroupStateStore,
                                           aliceOut: CapturingOutbox, bobOut: CapturingOutbox, clock: ManualClock) {
@@ -242,7 +242,7 @@ final class GroupSyncTests: XCTestCase {
         let clock = ManualClock(1_800_000_000_000)
         return (alice, bob, base,
                 GroupSyncEngine(identity: alice, store: aliceStore, outbox: aliceOut, now: { clock.ms }),
-                GroupSyncEngine(identity: bob, store: bobStore, outbox: bobOut, now: { clock.ms }),
+                GroupSyncEngine(identity: bob, store: bobStore, outbox: bobOut, security: bobSecurity, now: { clock.ms }),
                 aliceStore, bobStore, aliceOut, bobOut, clock)
     }
 
@@ -417,6 +417,91 @@ final class GroupSyncTests: XCTestCase {
         XCTAssertEqual(event, .refused(.unsequencedAfterSequenced))
         let outdated = await p.bobEngine.outdatedMembers(v3)
         XCTAssertEqual(outdated, [p.alice.memberId])
+    }
+
+    // MARK: - Every security-log entry the engine records, recorded where it happens
+
+    private func kinds(_ r: SecurityRecorder) -> [SecurityEventKind] { r.snapshot.events.map(\.kind) }
+
+    func test_securityLog_downgradeAfterTheGraceIsRecorded() async throws {
+        let log = SecurityRecorder(slot: nil)
+        let p = try await pair(bobSecurity: log)
+        await p.aliceEngine.recordSighting(memberId: p.bob.memberId, protocolVersion: 4)
+        let v3 = p.base.with(groupName: "One", version: 3, previousStateHash: .some(p.base.computeStateHash()))
+        await p.aliceEngine.broadcast(v3, changeType: .nameChanged)
+        _ = await p.bobEngine.handleGroupSync(payload: await p.aliceOut.to(Topics.groupSyncInbox(memberId: p.bob.memberId))[0])
+        let legacyAlice = GroupSyncEngine(identity: p.alice, store: p.aliceStore, outbox: p.aliceOut, now: { p.clock.ms })
+        let v4 = v3.with(groupName: "Two", version: 4, previousStateHash: .some(v3.computeStateHash()))
+        await legacyAlice.broadcast(v4, changeType: .nameChanged)
+        let bare = await p.aliceOut.to(Topics.groupSyncInbox(memberId: p.bob.memberId))[1]
+        _ = await p.bobEngine.handleGroupSync(payload: bare)
+        XCTAssertFalse(kinds(log).contains(.downgrade), "inside the newcomer grace: accepted, not logged")
+        p.clock.ms += ReplayWindow.sequencingGraceMs + 1
+        _ = await p.bobEngine.handleGroupSync(payload: bare)
+        XCTAssertEqual(log.snapshot.events.last?.kind, .downgrade)
+        XCTAssertEqual(log.snapshot.events.last?.memberId, p.alice.memberId)
+    }
+
+    func test_securityLog_replayIsRecorded() async throws {
+        let log = SecurityRecorder(slot: nil)
+        let p = try await pair(bobSecurity: log)
+        await p.aliceEngine.recordSighting(memberId: p.bob.memberId, protocolVersion: 4)
+        let v3 = p.base.with(groupName: "One", version: 3, previousStateHash: .some(p.base.computeStateHash()))
+        await p.aliceEngine.broadcast(v3, changeType: .nameChanged)
+        let sealed = await p.aliceOut.to(Topics.groupSyncInbox(memberId: p.bob.memberId))[0]
+        _ = await p.bobEngine.handleGroupSync(payload: sealed)
+        _ = await p.bobEngine.handleGroupSync(payload: sealed)
+        XCTAssertTrue(kinds(log).isEmpty, "a second copy within 10 minutes is the network, not logged")
+        p.clock.ms += GroupSyncEngine.duplicateGraceMs + 1
+        _ = await p.bobEngine.handleGroupSync(payload: sealed)
+        XCTAssertEqual(kinds(log), [.replayRefused])
+    }
+
+    func test_securityLog_badRosterSignatureIsRecorded() async throws {
+        let log = SecurityRecorder(slot: nil)
+        let p = try await pair(bobSecurity: log)
+        let v3 = p.base.with(groupName: "Forged", version: 3, previousStateHash: .some(p.base.computeStateHash()))
+        let forged = GroupSyncMessage(groupId: "g-1", version: 3, groupDefinition: v3, updaterMemberId: p.alice.memberId,
+                                      changeType: .nameChanged, changedMemberId: nil, timestamp: p.clock.ms,
+                                      signature: String(repeating: "00", count: 64), quorumSignatures: [])
+        let json = String(decoding: try JSONEncoder().encode(forged), as: UTF8.self)
+        let bobMember = try XCTUnwrap(p.base.findMember(byId: p.bob.memberId))
+        let sealedOrNil = await p.aliceEngine.sealForPeer(json, to: bobMember)
+        let sealed = try XCTUnwrap(sealedOrNil)
+        let event = await p.bobEngine.handleGroupSync(payload: sealed)
+        XCTAssertEqual(event, .ignored("bad update signature"))
+        XCTAssertEqual(kinds(log), [.forgedSignature])
+        XCTAssertEqual(log.snapshot.events.first?.detail, "roster update")
+    }
+
+    func test_securityLog_aRosterUpdateBreakingTheRulesIsRecorded() async throws {
+        let log = SecurityRecorder(slot: nil)
+        let p = try await pair(bobSecurity: log)
+        // The creation time never changes (§7.3); Alice's update says it does.
+        let b = p.base
+        let changed = GroupDefinition(groupId: b.groupId, groupName: b.groupName, createdAtEpochMs: b.createdAtEpochMs + 1,
+                                      creatorMemberId: b.creatorMemberId, members: b.members, version: 3,
+                                      previousStateHash: b.computeStateHash(), fileEncryptionKey: b.fileEncryptionKey,
+                                      removedMemberIds: b.removedMemberIds, removalProofs: b.removalProofs)
+        await p.aliceEngine.broadcast(changed, changeType: .fullSync)
+        let event = await p.bobEngine.handleGroupSync(payload: await p.aliceOut.to(Topics.groupSyncInbox(memberId: p.bob.memberId))[0])
+        guard case .outcome(.rejected) = event else { return XCTFail("expected a rejection, got \(event)") }
+        XCTAssertEqual(kinds(log), [.rosterUpdateRejected])
+        XCTAssertEqual(log.snapshot.events.first?.memberId, p.alice.memberId)
+    }
+
+    func test_securityLog_anUnknownGroupKeyIsRecorded() async throws {
+        let log = SecurityRecorder(slot: nil)
+        let p = try await pair(bobSecurity: log)
+        await p.bobEngine.unknownGroupKeySeen(from: p.alice.memberId)
+        XCTAssertEqual(kinds(log), [.unknownGroupKey])
+    }
+
+    func test_securityLog_whichEntryAJoinRequestDropGets() {
+        XCTAssertEqual(InviterDesk.securityKind(forDropped: "member ID with different keys"), .impersonatedJoin)
+        for reason in ["unknown invite", "not a v2 request", "not for this family", "bad keys"] {
+            XCTAssertEqual(InviterDesk.securityKind(forDropped: reason), .joinRequestRejected, reason)
+        }
     }
 
     func test_engine_ledgerPersistsAcrossRestart() async throws {

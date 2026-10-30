@@ -143,3 +143,18 @@ enum DeviceOwner {
         }
     }
 }
+
+/// Links shown in the app. The privacy policy is the one Android links to (`PrivacyScreen.kt`);
+/// Apple requires it to be reachable from inside the app (App Review guideline 5.1.1).
+enum AppLinks {
+    static let privacyPolicy = URL(string: "https://singularity86.github.io/FamilySafety/privacy.html")!
+}
+
+extension Bundle {
+    /// "1.0 (1)": the version and build, as App Store Connect shows them.
+    var versionLine: String {
+        let v = infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let b = infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "\(v) (\(b))"
+    }
+}

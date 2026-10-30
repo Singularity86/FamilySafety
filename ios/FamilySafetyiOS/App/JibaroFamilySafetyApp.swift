@@ -64,6 +64,16 @@ struct RootView: View {
 
 struct FamilyRoot: View {
     @EnvironmentObject private var model: AppModel
+    @State private var tab = FamilyRoot.startTab
+
+    /// Debug builds only: FS_TEST_TAB=0…4 opens on that tab (for screenshots without taps).
+    private static var startTab: Int {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["FS_TEST_TAB"].flatMap(Int.init) ?? 0
+        #else
+        return 0
+        #endif
+    }
 
     var body: some View {
         switch model.nodeState {
@@ -72,14 +82,15 @@ struct FamilyRoot: View {
         case .joining(let familyName, let inviterName, let fingerprint):
             PendingJoinView(familyName: familyName, inviterName: inviterName, fingerprint: fingerprint)
         case .member(let group):
-            TabView {
-                FamilyMapView(group: group).tabItem { Label("Map", systemImage: "map") }
-                FamilyView(group: group).tabItem { Label("Family", systemImage: "person.3") }
-                FilesView(group: group).tabItem { Label("Files", systemImage: "folder") }
+            TabView(selection: $tab) {
+                FamilyMapView(group: group).tabItem { Label("Map", systemImage: "map") }.tag(0)
+                FamilyView(group: group).tabItem { Label("Family", systemImage: "person.3") }.tag(1)
+                FilesView(group: group).tabItem { Label("Files", systemImage: "folder") }.tag(2)
                 ChatListView(group: group)
                     .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
                     .badge(model.chat.unreadCount())
-                SettingsView().tabItem { Label("Settings", systemImage: "gearshape") }
+                    .tag(3)
+                SettingsView().tabItem { Label("Settings", systemImage: "gearshape") }.tag(4)
             }
             .tint(Palette.amber)
         case .rejected:

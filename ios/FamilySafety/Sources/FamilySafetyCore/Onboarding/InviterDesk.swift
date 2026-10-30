@@ -118,6 +118,12 @@ public actor InviterDesk {
         try close(request, inviteId: request.inviteId)
     }
 
+    /// The security-log entry for a dropped join request: a member's ID with someone else's keys
+    /// is an impersonation attempt; the rest are failed checks (a spent, expired or forged invite).
+    public static func securityKind(forDropped reason: String) -> SecurityEventKind {
+        reason == "member ID with different keys" ? .impersonatedJoin : .joinRequestRejected
+    }
+
     // MARK: - Internals
 
     private func approve(_ request: JoinRequest, inviteId: String?) async throws {

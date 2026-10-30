@@ -166,9 +166,36 @@ public enum ChatCodec {
     /// A message opened from `sender`'s envelope, or nil. A group message must name this family's
     /// group (§6.3, 1.15.0); a present author signature must verify (3.2).
     public static func read(_ body: String, sender: FamilyMember, me: String, groupId: String) -> ChatMessage? {
+        if case .message(let m) = open(body, sender: sender, me: me, groupId: groupId) { return m }
+        return nil
+    }
+
+    /// A live chat message from a roster member (`sender`, authenticated by the envelope). One whose
+    /// author signature fails is dropped and logged as `forgedSignature`, detail "chat", in the
+    /// claimed author's name, as Android does (agreed 2026-10-30). Not for back-filled history,
+    /// which can legitimately carry unsigned items and can't be pinned on a live sender.
+    public static func receive(_ body: String, sender: FamilyMember, me: String, groupId: String,
+                               security: SecurityRecorder?) -> ChatMessage? {
+        switch open(body, sender: sender, me: me, groupId: groupId) {
+        case .message(let m): return m
+        case .badAuthorSignature:
+            security?.record(.forgedSignature, memberId: sender.memberId, detail: "chat")
+            return nil
+        case .unreadable: return nil
+        }
+    }
+
+    public enum Opened: Equatable {
+        case message(ChatMessage)
+        case badAuthorSignature
+        /// Malformed, or a group message naming another family.
+        case unreadable
+    }
+
+    public static func open(_ body: String, sender: FamilyMember, me: String, groupId: String) -> Opened {
         guard let p = try? JSONDecoder().decode(ChatMessagePayload.self, from: Data(body.utf8)),
-              !p.messageId.isEmpty, p.messageId.count <= 128 else { return nil }
-        if let c = p.conversationId, c != groupId { return nil }
+              !p.messageId.isEmpty, p.messageId.count <= 128 else { return .unreadable }
+        if let c = p.conversationId, c != groupId { return .unreadable }
         let conversationId = p.conversationId ?? ChatBook.privateConversationId(me, sender.memberId)
         let message = ChatMessage(messageId: p.messageId, conversationId: conversationId, senderId: sender.memberId,
                                   recipientId: nil, content: p.content, messageType: p.messageType, timestamp: p.timestamp,
@@ -176,9 +203,9 @@ public enum ChatCodec {
                                   isOutgoing: false, status: .delivered, isRead: false)
         if p.authorSig != nil {
             guard AuthorSignatures.accept(authorSig: p.authorSig, authorEd25519Hex: sender.ed25519PublicKey,
-                                          message: message.signingString, acceptUnsigned: false) else { return nil }
+                                          message: message.signingString, acceptUnsigned: false) else { return .badAuthorSignature }
         }
-        return message
+        return .message(message)
     }
 
     public static func receipt(for messageId: String, status: DeliveryStatus, me: String, now: Int64) throws -> String {
