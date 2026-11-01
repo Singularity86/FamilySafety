@@ -91,7 +91,8 @@ fun FilesScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
-            if (uploadProgress == null) {
+            // With no files the empty state carries its own Add File button; two read as a bug.
+            if (uploadProgress == null && allFiles.isNotEmpty()) {
                 FloatingActionLabelButton(
                     label = "Add File",
                     icon = Icons.Default.Add,
@@ -195,7 +196,18 @@ fun FilesScreen(
                 )
             }
 
-            if (files.isEmpty()) {
+            if (files.isEmpty() && allFiles.isNotEmpty()) {
+                // A search that matches nothing is not an empty Files screen.
+                Text(
+                    "No files match",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(32.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            } else if (files.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
