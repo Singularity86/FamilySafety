@@ -180,7 +180,7 @@ class VaultRepository @Inject constructor(
         val groupId = groupStateManager.groupDefinition.value?.groupId
             ?: return Result.failure(IllegalStateException("No group"))
         if (session.items.size >= VaultSlots.MAX_ITEMS) {
-            return Result.failure(IllegalStateException("This vault is full"))
+            return Result.failure(IllegalStateException("Full — remove something first"))
         }
 
         val fileId = UUID.randomUUID().toString()
@@ -204,7 +204,7 @@ class VaultRepository @Inject constructor(
             if (ingest.sizeBytes > MAX_ITEM_BYTES) {
                 blobStore.deleteAll(fileId)
                 return Result.failure(
-                    IllegalStateException("Too large for the vault (limit ${MAX_ITEM_BYTES / 1024 / 1024} MB)")
+                    IllegalStateException("Too large (limit${MAX_ITEM_BYTES / 1024 / 1024} MB)")
                 )
             }
 
@@ -235,7 +235,7 @@ class VaultRepository @Inject constructor(
                 ?: run {
                     blobStore.deleteAll(fileId)
                     vaultBlobDao.delete(fileId)
-                    return Result.failure(IllegalStateException("The vault has no room left"))
+                    return Result.failure(IllegalStateException("No room left"))
                 }
 
             publishContainer(groupId, updated)
@@ -288,7 +288,7 @@ class VaultRepository @Inject constructor(
             )
         )
         val updated = writeItem(session.key, payload, existingSlots = item.slots)
-            ?: return Result.failure(IllegalStateException("Could not update the vault"))
+            ?: return Result.failure(IllegalStateException("Could not save that"))
         publishContainer(groupId, updated)
         return Result.success(reload(session.key, updated))
     }

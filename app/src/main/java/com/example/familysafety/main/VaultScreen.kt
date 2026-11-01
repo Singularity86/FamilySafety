@@ -167,9 +167,11 @@ fun VaultScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     // Says nothing about codes. This is what a fresh vault looks like and what
-                    // a mistyped code looks like, and they have to look the same.
+                    // a mistyped code looks like, and they have to look the same. It does say
+                    // where things go, because "keep it here" read as a locker on this phone.
                     Text(
-                        "Add something to keep it here.",
+                        "Anything added here is on every family phone, for whoever types the " +
+                            "same words.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -259,10 +261,12 @@ fun VaultScreen(
             title = { Text("Remove \"${item.name}\"?") },
             // Honest about what removal does. Anyone with the code can remove anything, and
             // the protection offered is that it can be undone — not that it is prevented.
+            // Nor is it erasure: this code never reuses a removed item's slots, so it stays
+            // on every phone and recoverable unless another code's write happens to land there.
             text = {
                 Text(
-                    "It stops showing here for everyone. You can put it back from " +
-                        "\"Removed\" until the space is reused."
+                    "It stops showing on every family phone. It isn't erased — anyone with " +
+                        "these words can put it back from \"Removed\"."
                 )
             },
             confirmButton = {
@@ -298,7 +302,8 @@ fun VaultScreen(
 private fun PassphraseFooter() {
     HorizontalDivider()
     Text(
-        "What you typed is the only thing protecting anything kept here. It is not stored on " +
+        "What you typed is the only thing protecting anything kept here, on every phone in " +
+            "the family. It is not stored on " +
             "any phone or any server, so it can never be reset or recovered — and anyone who " +
             "guesses it sees exactly what you see. Several unrelated words are far harder to " +
             "guess than one.",
