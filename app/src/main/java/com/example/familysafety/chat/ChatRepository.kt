@@ -6,6 +6,8 @@ import com.example.familysafety.group.FamilyMember
 import com.example.familysafety.group.GroupStateManager
 import com.example.familysafety.replication.AuthorSignatures
 import com.example.familysafety.replication.ReplicationManager
+import com.example.familysafety.security.SecurityEventKind
+import com.example.familysafety.security.SecurityRecorder
 import com.example.familysafety.storage.ChatMessageDao
 import com.example.familysafety.storage.ChatMessageEntity
 import com.example.familysafety.storage.ConversationSummary
@@ -626,6 +628,10 @@ class ChatRepository @Inject constructor(
                 ) == AuthorSignatures.Verdict.DROP
             ) {
                 Timber.w("$TAG: message ${payload.messageId} carries a bad author signature — dropped")
+                // Agreed with iOS (Handoff log, 2026-10-30): the sender is a roster member here,
+                // strangers having been logged as unknownSender before this. Back-filled
+                // history is not logged; it can legitimately be unsigned for now.
+                SecurityRecorder.record(SecurityEventKind.FORGED_SIGNATURE, senderMemberId, "chat")
                 return
             }
 

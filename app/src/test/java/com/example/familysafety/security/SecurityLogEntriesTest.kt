@@ -3,7 +3,10 @@ package com.example.familysafety.security
 import android.content.Context
 import android.content.SharedPreferences
 import com.example.familysafety.core.NetworkMonitor
+import com.example.familysafety.chat.ChatMessagePayload
+import com.example.familysafety.chat.ChatRepository
 import com.example.familysafety.crypto.E2EEManager
+import com.example.familysafety.storage.MessageType
 import com.example.familysafety.crypto.EncryptionException
 import com.example.familysafety.crypto.EnvelopeReplay
 import com.example.familysafety.crypto.RecipientKeys
@@ -147,6 +150,40 @@ class SecurityLogEntriesTest {
             .putLong("f:bob:$bobKey", now - EnvelopeReplay.SEQUENCING_GRACE_MS - 60_000).apply()
         assertThrows(ReplayedEnvelopeException::class.java) { guard.open("bob", bobKey, "plain") }
         assertOnlyEntry(SecurityEventKind.DOWNGRADE, "bob", null)
+    }
+
+    // ── Chat: ChatRepository ────────────────────────────────────────────────────
+
+    /** A chat from [from] whose decrypted payload carries [authorSig]. */
+    private suspend fun receiveChat(from: String, authorSig: String?) {
+        val gsm = mockk<GroupStateManager>(relaxed = true)
+        every { gsm.groupDefinition } returns MutableStateFlow(family)
+        every { gsm.localMember } returns MutableStateFlow(member("me"))
+        val e2ee = mockk<E2EEManager>(relaxed = true) // verifyAuthor answers false
+        every { e2ee.decryptMessage(any(), any(), any()) } returns json.encodeToString(
+            ChatMessagePayload(
+                messageId = "m1", content = "hi", messageType = MessageType.TEXT, timestamp = 1L,
+                conversationId = "group_123", authorSig = authorSig
+            )
+        )
+        ChatRepository(
+            mockk(relaxed = true), gsm, e2ee, mockk(relaxed = true), mockk(relaxed = true),
+            mockk(relaxed = true), mockk(relaxed = true)
+        ).handleIncomingMessage(envelopeFrom(from), from)
+    }
+
+    @Test
+    fun `a chat message whose author signature fails is a forged signature`() = runTest {
+        receiveChat(from = "bob", authorSig = "00")
+
+        assertOnlyEntry(SecurityEventKind.FORGED_SIGNATURE, "bob", "chat")
+    }
+
+    @Test
+    fun `an unsigned chat message from an older build is not called a forgery`() = runTest {
+        receiveChat(from = "bob", authorSig = null)
+
+        assertNoEntries()
     }
 
     // ── Group sync ──────────────────────────────────────────────────────────────
