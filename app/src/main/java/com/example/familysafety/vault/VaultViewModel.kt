@@ -87,7 +87,7 @@ class VaultViewModel @Inject constructor(
         viewModelScope.launch {
             _busy.value = true
             repository.add(current, uri, displayName, mimeType)
-                .onSuccess { _session.value = it; _message.value = "Added to the vault" }
+                .onSuccess { _session.value = it; _message.value = "Added" }
                 .onFailure { _message.value = it.message ?: "Could not add that" }
             _busy.value = false
             restartTimeout()
@@ -121,7 +121,8 @@ class VaultViewModel @Inject constructor(
             _busy.value = false
             restartTimeout()
             if (file == null) {
-                _message.value = "Not on this phone yet — fetching it"
+                // One request goes out per tap; nothing keeps asking, so say so.
+                _message.value = "Not on this phone yet — asked the other phones. Try again in a moment."
                 return@launch
             }
             try {
