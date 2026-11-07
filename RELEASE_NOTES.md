@@ -9,6 +9,40 @@ each entry fits; everything under it is for us.
 
 ---
 
+## 1.15.9 (51) — Clearer vault and Files wording, forged chat in the security log
+
+Builds on 1.15.8 (50). Contains #96 (forged chat logged), #97 (vault wording) and #98 (one Add
+File button). Also on main but not in the app: #94 and #95 (iOS). Not included: #67 (R8).
+
+Wire format: **no message format change, no `PROTOCOL_VERSION` bump.** Nothing other phones see
+changes. iOS matches #96 in #95; #97's strings are in the Handoff log for iOS to match.
+
+Database: unchanged (11).
+
+Fixed:
+- **Security log:** a live chat message whose author signature fails was dropped silently. It is
+  now logged as `forgedSignature`, detail `chat`, naming the sender (agreed with iOS). Unsigned
+  messages from older builds and back-filled history are not logged.
+- **Vault wording:** Remove said an item could be put back "until the space is reused", but a
+  code never reuses its own removed slots, and removal never erases. The screen now says the
+  vault is on every family phone, for whoever types the same words; snackbars no longer name the
+  vault; "fetching it" now says one request went to the other phones.
+- **Files:** with no files there were two Add File buttons. A search that matched nothing showed
+  "No files yet"; it now says "No files match".
+
+Checked: full unit suite (889) on main 533b434.
+
+### Play copy
+
+```
+Clearer wording and a sharper security log.
+• The vault now says plainly that what's in it is on every family phone, and that removing something hides it rather than erasing it
+• The Files screen shows a single Add File button when it's empty, and says "No files match" when a search finds nothing
+• A chat message with a forged signature now shows in the security log
+```
+
+---
+
 ## 1.15.8 (50) — Fixes from the first two-phone test
 
 Builds on 1.15.7 (48). Contains #86 (replay newcomer grace), #87 (manifest re-send), #88 (Files
