@@ -14,12 +14,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import android.os.Build
 import com.example.familysafety.BuildConfig
 import com.example.familysafety.core.SecurityEventRepository
 import com.example.familysafety.group.GroupDefinition
+import com.example.familysafety.location.BackgroundHealth
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.example.familysafety.sync.GroupSyncManager
 import com.example.familysafety.transport.MqttTransport
 import com.example.familysafety.ui.theme.statusColors
@@ -42,6 +50,27 @@ fun SecurityScreen(
     val keySyncRequestState by viewModel.keySyncRequestState.collectAsState()
     val memberRouteStatuses by viewModel.memberRouteStatuses.collectAsState()
     val myMemberId = viewModel.myMemberId
+
+    // Read from Android, not the ViewModel: both change outside the app (a settings toggle, a
+    // process death), so they are re-read whenever the screen comes back.
+    val context = LocalContext.current
+    var batteryMode by remember { mutableStateOf(BackgroundHealth.batteryMode(context)) }
+    var stops by remember { mutableStateOf(emptyList<BackgroundHealth.Stop>()) }
+    var resumes by remember { mutableIntStateOf(0) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                batteryMode = BackgroundHealth.batteryMode(context)
+                resumes++
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(resumes) {
+        stops = withContext(Dispatchers.IO) { BackgroundHealth.recentStops(context) }
+    }
 
     Scaffold(
         topBar = {
@@ -69,7 +98,8 @@ fun SecurityScreen(
                 deviceNetworkAvailable = deviceNetworkAvailable,
                 routeHealth = routeHealth,
                 decryptFailures = decryptFailures,
-                keySyncRequestState = keySyncRequestState
+                keySyncRequestState = keySyncRequestState,
+                backgroundRestricted = batteryMode == BackgroundHealth.BatteryMode.RESTRICTED
             )
             ThisDeviceCard(
                 memberId = myMemberId,
@@ -89,7 +119,9 @@ fun SecurityScreen(
                         deviceNetworkAvailable = deviceNetworkAvailable,
                         routeHealth = routeHealth,
                         memberRouteStatuses = memberRouteStatuses,
-                        decryptFailures = decryptFailures
+                        decryptFailures = decryptFailures,
+                        batteryMode = batteryMode,
+                        stops = stops
                     )
                 }
             )
@@ -99,6 +131,7 @@ fun SecurityScreen(
                 deviceNetworkAvailable = deviceNetworkAvailable,
                 routeHealth = routeHealth
             )
+            BackgroundCard(batteryMode = batteryMode, stops = stops)
             groupDef?.let {
                 GroupIntegrityCard(
                     groupDef = it,
@@ -123,14 +156,17 @@ private fun SecurityVerdictCard(
     deviceNetworkAvailable: Boolean,
     routeHealth: MainViewModel.RouteHealth,
     decryptFailures: Map<String, SecurityEventRepository.DecryptStats>,
-    keySyncRequestState: MainViewModel.KeySyncRequestState
+    keySyncRequestState: MainViewModel.KeySyncRequestState,
+    backgroundRestricted: Boolean
 ) {
     val activeKeyIssues = decryptFailures.values.any { it.hasActiveFailure }
     val waitingForSync = keySyncRequestState is MainViewModel.KeySyncRequestState.Sending ||
         keySyncRequestState is MainViewModel.KeySyncRequestState.Requested ||
         syncState is GroupSyncManager.SyncState.Syncing
     val hasRoute = routeHealth.localPeerCount > 0 || routeHealth.hasRelay
-    val needsAttention = activeKeyIssues ||
+    // Restricted is not a route problem today, but it is the family losing this phone the
+    // moment the app closes — "All clear" over it would be the wrong answer.
+    val needsAttention = activeKeyIssues || backgroundRestricted ||
         !deviceNetworkAvailable && !hasRoute ||
         syncState is GroupSyncManager.SyncState.Conflict ||
         syncState is GroupSyncManager.SyncState.Error ||
@@ -252,6 +288,59 @@ private fun NetworkStatusCard(
 }
 
 /**
+ * Whether Android lets the app keep running, and why it last stopped. The question behind
+ * "my phone dropped off the map" is almost always one of these two, and neither was visible.
+ */
+@Composable
+private fun BackgroundCard(
+    batteryMode: BackgroundHealth.BatteryMode,
+    stops: List<BackgroundHealth.Stop>
+) {
+    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Background", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(12.dp))
+
+            val (color, label) = when (batteryMode) {
+                BackgroundHealth.BatteryMode.UNRESTRICTED -> statusColors.successIndicator to "Unrestricted"
+                BackgroundHealth.BatteryMode.OPTIMIZED -> statusColors.warningIndicator to "Optimized"
+                BackgroundHealth.BatteryMode.RESTRICTED -> MaterialTheme.colorScheme.error to "Restricted"
+            }
+            StatusRow(color, "Battery use: $label")
+            if (batteryMode == BackgroundHealth.BatteryMode.RESTRICTED) {
+                Text(
+                    "Android won't let the app restart in the background, so your family " +
+                        "stops seeing this phone once the app closes. Settings shows the fix.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Text("Recent stops", style = MaterialTheme.typography.labelLarge)
+            Spacer(Modifier.height(6.dp))
+            when {
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.R -> Text(
+                    "This version of Android doesn't record why the app stopped.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                stops.isEmpty() -> Text(
+                    "None recorded.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                else -> stops.forEachIndexed { i, stop ->
+                    if (i > 0) Spacer(Modifier.height(4.dp))
+                    IntegrityRow(stop.reason, formatTimeAgo(stop.atMs))
+                }
+            }
+        }
+    }
+}
+
+/**
  * Identity of this device. Every other card describes *other* members, so without this
  * there was no way to learn your own member ID from inside the app — which made it
  * impossible to tell which member you are when reading broker traffic or comparing
@@ -350,7 +439,9 @@ private fun buildDiagnosticsReport(
     deviceNetworkAvailable: Boolean,
     routeHealth: MainViewModel.RouteHealth,
     memberRouteStatuses: Map<String, MainViewModel.MemberRouteStatus>,
-    decryptFailures: Map<String, SecurityEventRepository.DecryptStats>
+    decryptFailures: Map<String, SecurityEventRepository.DecryptStats>,
+    batteryMode: BackgroundHealth.BatteryMode,
+    stops: List<BackgroundHealth.Stop>
 ): String = buildString {
     appendLine("=== Jibaro Family Safety diagnostics ===")
     appendLine("App: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
@@ -380,6 +471,22 @@ private fun buildDiagnosticsReport(
         is GroupSyncManager.SyncState.Error    -> "error: ${s.message}"
         else                                    -> "idle"
     })
+    appendLine()
+
+    appendLine("[Background]")
+    appendLine("  Battery use: ${batteryMode.name.lowercase()}")
+    appendLine("  Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}")
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+        appendLine("  Stops: not recorded below Android 11")
+    } else if (stops.isEmpty()) {
+        appendLine("  Stops: none recorded")
+    }
+    // Android's own wording rides along here: it is the detail someone diagnosing a phone
+    // needs, and too raw to put on screen.
+    stops.forEach { stop ->
+        appendLine("  ${formatTimeAgo(stop.atMs)}: ${stop.reason}" +
+            (stop.systemDetail?.takeIf { it.isNotBlank() }?.let { " [$it]" } ?: ""))
+    }
     appendLine()
 
     appendLine("[Family list]")

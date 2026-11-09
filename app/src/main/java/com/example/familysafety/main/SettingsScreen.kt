@@ -145,11 +145,19 @@ fun SettingsScreen(
                 !batteryPowerManager.isIgnoringBatteryOptimizations(context.packageName)
         )
     }
+    // Restricted also drops the exemption, so it used to show as the ordinary banner, whose
+    // button does not lift it. It is the worse case — no background restart at all — and the
+    // way out is the app's own battery setting.
+    var isBackgroundRestricted by remember {
+        mutableStateOf(com.example.familysafety.location.BackgroundHealth.isBackgroundRestricted(context))
+    }
     val batteryLifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(batteryLifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 isBatteryOptimized = !batteryPowerManager.isIgnoringBatteryOptimizations(context.packageName)
+                isBackgroundRestricted =
+                    com.example.familysafety.location.BackgroundHealth.isBackgroundRestricted(context)
             }
         }
         batteryLifecycleOwner.lifecycle.addObserver(observer)
@@ -168,8 +176,60 @@ fun SettingsScreen(
             modifier = Modifier.padding(bottom = 16.dp)
         )
 
+        if (isBackgroundRestricted) {
+            OutlinedCard(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.BatteryAlert,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                        Text(
+                            text = "Battery use is Restricted",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Android won't let Jibaro Family Safety run in the background, so " +
+                            "your family stops seeing you once the app closes. Open the app's " +
+                            "settings, tap Battery, and choose Unrestricted.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        shape = ButtonShape,
+                        onClick = {
+                            context.startActivity(
+                                Intent(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                            )
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        )
+                    ) {
+                        Text("Open app settings")
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
         // Battery optimization warning — shown at top so it's immediately visible
-        if (isBatteryOptimized) {
+        if (isBatteryOptimized && !isBackgroundRestricted) {
             OutlinedCard(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
