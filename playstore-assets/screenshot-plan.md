@@ -42,6 +42,26 @@ Headline: "No account. No phone number. No email."
 Subcopy: "Your family's identity is a recovery phrase only you control"
 Capture: Welcome screen or the recovery-phrase display screen (blur/placeholder words if it's a real phrase).
 
+## Status (2026-11-09)
+
+Captures are in `screenshots-2026-10/` (1080×2400, "The Starwinds" family on emulators, 1.15.5
+debug build unless noted). Only `02-security-v2.png` is committed; the rest are local.
+
+| # | File | State |
+|---|---|---|
+| 1 | `01-map.png` | Ready |
+| 2 | `02-security-v2.png` | Retaken 2026-11-08 on 1.15.9 (51), no debug label. Status bar shows only the clock; "Family list: Idle" (grey) because no other member was online. Old `02-security.png` showed "1.15.5-debug". |
+| 3 | `03-family.png` | Ready |
+| 4 | `06-zones-map.png` | Ready (`06-zones-list.png` is the plainer alternative) |
+| 5 | `05-crash-alert.png` | Ready |
+| 6 | `04-chat.png` | Ready; clock says 5:31, not 9:41 |
+| 7 | — | **Not taken:** Welcome or recovery-phrase screen |
+
+Still to do before upload:
+- Convert every file except `02-security-v2.png` to 24-bit PNG (they carry an alpha channel).
+- Take #7.
+- Headline overlays (frameit) for all seven.
+
 ## Why this order
 Play surfaces screenshots #1–2 before anyone opens the listing, so they need to sell the core value (live location) and your rarest asset (verifiable encryption) before a scroller ever taps in. Zones/crash detection/chat are supporting proof you have real safety features, not just a map. The recovery-phrase screen closes the deal for privacy-conscious buyers.
 
