@@ -1,7 +1,7 @@
 # Jibaro Family Safety — Play Store Screenshot Plan
 
 ## Specs (Google Play, phone screenshots)
-- 2–8 images, JPEG or 24-bit PNG (no alpha)
+- 2–8 images (this plan uses 7), JPEG or 24-bit PNG (no alpha)
 - Each side: 320px–3840px; aspect ratio between 16:9 and 9:16 (portrait: use 1080×2340 or your device's native res)
 - **Screenshot #1 and #2 matter most** — they're what shows in search results before anyone taps into the listing
 
@@ -13,8 +13,9 @@ Subcopy: "Real-time location, end-to-end encrypted"
 Capture: map view with 2-3 member pins placed, `EncryptionChip`/`ConnectionBadge` visible in frame.
 
 **2. SecurityScreen.kt — the differentiator**
-Headline: "No cloud. No servers holding your data."
+Headline: "No server can read your family's data."
 Subcopy: "Every update is encrypted device-to-device — check the status yourself, anytime"
+(Not "no servers": a relay carries the encrypted messages, and this very screen says "Relay: Connected".)
 Capture: the "Needs attention" / all-clear verdict card + Network Status card, showing a live "secure" state. This screen is rare among competitors (Life360, Bark, etc. don't expose this) — it's your strongest trust signal because it's *provable*, not just a claim.
 
 **3. MembersScreen.kt — the daily-use screen**
@@ -24,7 +25,7 @@ Capture: member list with avatars, a couple of members "on the way" (DriveEstima
 
 **4. GeofenceListScreen.kt ("Zones")**
 Headline: "Get notified the moment they arrive or leave"
-Subcopy: "Set zones for home, school, or grandma's — no constant tracking required"
+Subcopy: "Set zones for home, school, or grandma's"
 Capture: Zones list with 2-3 named zones (Home, School).
 
 **5. CrashAlertActivity.kt**
@@ -41,13 +42,28 @@ Headline: "No account. No phone number. No email."
 Subcopy: "Your family's identity is a recovery phrase only you control"
 Capture: Welcome screen or the recovery-phrase display screen (blur/placeholder words if it's a real phrase).
 
-**8. Marketing slide (not a raw screengrab) — closes on the pricing decision**
-Headline: "Pay once. Own it forever."
-Subcopy: "$79 one-time — no subscriptions, ever" (adjust once you land on final price)
-This one's a designed graphic over a blurred map background, not a literal screen capture — standard practice for a closing "why us" slide.
+## Status (2026-11-09)
+
+Captures are in `screenshots-2026-10/` (1080×2400, "The Starwinds" family on emulators, 1.15.5
+debug build unless noted). Only `02-security-v2.png` is committed; the rest are local.
+
+| # | File | State |
+|---|---|---|
+| 1 | `01-map.png` | Ready |
+| 2 | `02-security-v2.png` | Retaken 2026-11-08 on 1.15.9 (51), no debug label. Status bar shows only the clock; "Family list: Idle" (grey) because no other member was online. Old `02-security.png` showed "1.15.5-debug". |
+| 3 | `03-family.png` | Ready |
+| 4 | `06-zones-map.png` | Ready (`06-zones-list.png` is the plainer alternative) |
+| 5 | `05-crash-alert.png` | Ready |
+| 6 | `04-chat.png` | Ready; clock says 5:31, not 9:41 |
+| 7 | — | **Not taken:** Welcome or recovery-phrase screen |
+
+Still to do before upload:
+- Convert every file except `02-security-v2.png` to 24-bit PNG (they carry an alpha channel).
+- Take #7.
+- Headline overlays (frameit) for all seven.
 
 ## Why this order
-Play surfaces screenshots #1–2 before anyone opens the listing, so they need to sell the core value (live location) and your rarest asset (verifiable encryption) before a scroller ever taps in. Zones/crash detection/chat are supporting proof you have real safety features, not just a map. The recovery-phrase screen and pricing slide close the deal for privacy-conscious buyers comparing you against subscription competitors.
+Play surfaces screenshots #1–2 before anyone opens the listing, so they need to sell the core value (live location) and your rarest asset (verifiable encryption) before a scroller ever taps in. Zones/crash detection/chat are supporting proof you have real safety features, not just a map. The recovery-phrase screen closes the deal for privacy-conscious buyers.
 
 ## Capturing them
 Per `PLAY_STORE_CHECKLIST.md`: once UI is final, `adb exec-out screencap -p > s1.png` per screen on a real device.
