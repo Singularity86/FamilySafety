@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import android.content.Intent
 import android.os.Build
 import com.example.familysafety.BuildConfig
 import com.example.familysafety.core.SecurityEventRepository
@@ -396,25 +397,50 @@ private fun ThisDeviceCard(
                     copied = false
                 }
             }
-            OutlinedButton(
-                shape = ButtonShape,
-                onClick = {
-                    clipboard.setText(AnnotatedString(buildDiagnostics()))
-                    copied = true
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(
-                    Icons.Default.ContentCopy,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(if (copied) "Copied to clipboard" else "Copy diagnostics")
+            val context = LocalContext.current
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    shape = ButtonShape,
+                    onClick = {
+                        clipboard.setText(AnnotatedString(buildDiagnostics()))
+                        copied = true
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        Icons.Default.ContentCopy,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (copied) "Copied" else "Copy")
+                }
+                // Through the share sheet, not the family chat: the report is most wanted when
+                // this phone cannot reach the family, and a text or an email still gets out.
+                Button(
+                    shape = ButtonShape,
+                    onClick = {
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_SUBJECT, "Jibaro Family Safety diagnostics")
+                            putExtra(Intent.EXTRA_TEXT, buildDiagnostics())
+                        }
+                        context.startActivity(Intent.createChooser(send, "Send diagnostics"))
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        Icons.Default.Share,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Send")
+                }
             }
             Text(
-                "Includes member IDs, names, routes and sync state for everyone in the " +
-                    "family. No locations or message contents.",
+                "Diagnostics include member IDs, names, routes and sync state for everyone in " +
+                    "the family, and why this app last stopped. No locations or message contents.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 6.dp)
