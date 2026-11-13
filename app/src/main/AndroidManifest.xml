@@ -105,19 +105,17 @@
         </receiver>
 
         <!--
-             BootRecoveryReceiver replaces the old BootReceiver and adds
-             LOCKED_BOOT_COMPLETED + MY_PACKAGE_REPLACED coverage.
-             directBootAware="true" allows Android to deliver LOCKED_BOOT_COMPLETED
-             before the user unlocks the device (direct boot mode).
+             BootRecoveryReceiver replaces the old BootReceiver and adds MY_PACKAGE_REPLACED
+             coverage. Deliberately not directBootAware: before the first unlock the app's
+             storage is unreadable, Application.onCreate crashed on it at every boot, and the
+             session it would restore isn't readable then anyway. BOOT_COMPLETED follows unlock.
         -->
         <receiver
             android:name=".location.BootRecoveryReceiver"
             android:enabled="true"
-            android:exported="true"
-            android:directBootAware="true">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>

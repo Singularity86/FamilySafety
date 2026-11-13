@@ -57,5 +57,7 @@ class SmallCorrectnessFixesTest {
         assertTrue(Intent.ACTION_MY_PACKAGE_REPLACED in BootRecoveryReceiver.HANDLED_ACTIONS)
         assertFalse("com.example.SOMETHING_ELSE" in BootRecoveryReceiver.HANDLED_ACTIONS)
         assertFalse(Intent.ACTION_MAIN in BootRecoveryReceiver.HANDLED_ACTIONS)
+        // Before first unlock the app's storage is unreadable; starting then crashed every boot.
+        assertFalse(Intent.ACTION_LOCKED_BOOT_COMPLETED in BootRecoveryReceiver.HANDLED_ACTIONS)
     }
 }
