@@ -1,8 +1,11 @@
 package com.example.familysafety.location
 
 import android.app.ApplicationExitInfo
+import android.app.usage.UsageStatsManager
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BackgroundHealthTest {
@@ -48,5 +51,17 @@ class BackgroundHealthTest {
     fun `a code this build does not know is unknown, not a guess`() {
         assertEquals("Unknown reason", BackgroundHealth.describe(ApplicationExitInfo.REASON_UNKNOWN))
         assertEquals("Unknown reason", BackgroundHealth.describe(999))
+    }
+
+    @Test
+    fun `standby buckets that defer background work are flagged`() {
+        assertFalse(BackgroundHealth.describeBucket(5).second)
+        assertFalse(BackgroundHealth.describeBucket(UsageStatsManager.STANDBY_BUCKET_ACTIVE).second)
+        assertFalse(BackgroundHealth.describeBucket(UsageStatsManager.STANDBY_BUCKET_WORKING_SET).second)
+        assertTrue(BackgroundHealth.describeBucket(UsageStatsManager.STANDBY_BUCKET_FREQUENT).second)
+        assertTrue(BackgroundHealth.describeBucket(UsageStatsManager.STANDBY_BUCKET_RARE).second)
+        assertTrue(BackgroundHealth.describeBucket(UsageStatsManager.STANDBY_BUCKET_RESTRICTED).second)
+        assertEquals("Exempt", BackgroundHealth.describeBucket(5).first)
+        assertEquals("Unknown (99)", BackgroundHealth.describeBucket(99).first)
     }
 }

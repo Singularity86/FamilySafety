@@ -56,6 +56,7 @@ fun SecurityScreen(
     // process death), so they are re-read whenever the screen comes back.
     val context = LocalContext.current
     var batteryMode by remember { mutableStateOf(BackgroundHealth.batteryMode(context)) }
+    var standbyBucket by remember { mutableStateOf(BackgroundHealth.standbyBucket(context)) }
     var stops by remember { mutableStateOf(emptyList<BackgroundHealth.Stop>()) }
     var resumes by remember { mutableIntStateOf(0) }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -63,6 +64,7 @@ fun SecurityScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 batteryMode = BackgroundHealth.batteryMode(context)
+                standbyBucket = BackgroundHealth.standbyBucket(context)
                 resumes++
             }
         }
@@ -122,6 +124,7 @@ fun SecurityScreen(
                         memberRouteStatuses = memberRouteStatuses,
                         decryptFailures = decryptFailures,
                         batteryMode = batteryMode,
+                        standbyBucket = standbyBucket,
                         stops = stops
                     )
                 }
@@ -132,7 +135,7 @@ fun SecurityScreen(
                 deviceNetworkAvailable = deviceNetworkAvailable,
                 routeHealth = routeHealth
             )
-            BackgroundCard(batteryMode = batteryMode, stops = stops)
+            BackgroundCard(batteryMode = batteryMode, standbyBucket = standbyBucket, stops = stops)
             groupDef?.let {
                 GroupIntegrityCard(
                     groupDef = it,
@@ -295,6 +298,7 @@ private fun NetworkStatusCard(
 @Composable
 private fun BackgroundCard(
     batteryMode: BackgroundHealth.BatteryMode,
+    standbyBucket: Int?,
     stops: List<BackgroundHealth.Stop>
 ) {
     OutlinedCard(modifier = Modifier.fillMaxWidth()) {
@@ -315,6 +319,15 @@ private fun BackgroundCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+            // The only "held back" signal below Android 11, where the stop history is missing.
+            standbyBucket?.let { bucket ->
+                val (bucketLabel, delayed) = BackgroundHealth.describeBucket(bucket)
+                Spacer(Modifier.height(6.dp))
+                StatusRow(
+                    if (delayed) statusColors.warningIndicator else statusColors.successIndicator,
+                    "Standby: $bucketLabel"
                 )
             }
 
@@ -467,6 +480,7 @@ private fun buildDiagnosticsReport(
     memberRouteStatuses: Map<String, MainViewModel.MemberRouteStatus>,
     decryptFailures: Map<String, SecurityEventRepository.DecryptStats>,
     batteryMode: BackgroundHealth.BatteryMode,
+    standbyBucket: Int?,
     stops: List<BackgroundHealth.Stop>
 ): String = buildString {
     appendLine("=== Jibaro Family Safety diagnostics ===")
@@ -501,6 +515,8 @@ private fun buildDiagnosticsReport(
 
     appendLine("[Background]")
     appendLine("  Battery use: ${batteryMode.name.lowercase()}")
+    appendLine("  Standby bucket: " +
+        (standbyBucket?.let { "${BackgroundHealth.describeBucket(it).first} [$it]" } ?: "not available below Android 9"))
     appendLine("  Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}")
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
         appendLine("  Stops: not recorded below Android 11")

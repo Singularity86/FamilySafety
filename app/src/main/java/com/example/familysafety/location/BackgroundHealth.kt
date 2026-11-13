@@ -2,6 +2,7 @@ package com.example.familysafety.location
 
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.os.Build
 import timber.log.Timber
@@ -50,6 +51,33 @@ object BackgroundHealth {
             context.getSystemService(ActivityManager::class.java).isBackgroundRestricted
         }.getOrDefault(false)
     }
+
+    /**
+     * Android's standby bucket for this app (Android 9+), or null where it does not exist. It is
+     * the one signal below Android 11 that says Android is holding the app back: the lower the
+     * bucket, the longer the watchdog alarms and jobs that restart sharing are deferred.
+     */
+    fun standbyBucket(context: Context): Int? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
+        return runCatching {
+            context.getSystemService(UsageStatsManager::class.java).appStandbyBucket
+        }.onFailure { Timber.w(it, "BackgroundHealth: could not read standby bucket") }
+            .getOrNull()
+    }
+
+    /** Plain words for a standby bucket, and whether it is one that delays background work. */
+    fun describeBucket(bucket: Int): Pair<String, Boolean> = when (bucket) {
+        // 5 is EXEMPTED, hidden from the SDK but what an exempted app reads back.
+        BUCKET_EXEMPTED -> "Exempt" to false
+        UsageStatsManager.STANDBY_BUCKET_ACTIVE -> "Active" to false
+        UsageStatsManager.STANDBY_BUCKET_WORKING_SET -> "Working set" to false
+        UsageStatsManager.STANDBY_BUCKET_FREQUENT -> "Frequent (background work delayed)" to true
+        UsageStatsManager.STANDBY_BUCKET_RARE -> "Rare (background work delayed for hours)" to true
+        UsageStatsManager.STANDBY_BUCKET_RESTRICTED -> "Restricted (background work about once a day)" to true
+        else -> "Unknown ($bucket)" to false
+    }
+
+    private const val BUCKET_EXEMPTED = 5
 
     /**
      * The most recent ends of the main process, newest first. Empty below Android 11, where
